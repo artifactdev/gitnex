@@ -1,11 +1,12 @@
 import { Loader2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import { selectCommit } from '../app/graphNav';
 import { useLend } from '../app/lent';
 import { useRepoContext } from '../app/repoContext';
 import { useOps } from '../app/ops';
 import { useRuntime } from '../app/runtime';
+import { useAppState } from '../app/state';
 import { resolveFirst, useIntegrating, type OperationView } from '../conflicts/inProgress';
 import { markAborting, restoreDraftAfterAbort } from '../conflicts/mergeDraft';
 import { useOperation } from '../conflicts/useOperation';
@@ -234,6 +235,8 @@ export function CommitBox({ inMerge: forced = false }: { inMerge?: boolean }) {
   const opText = useCommitBox((s) => s.op[key]);
   const committing = useCommitting(repoId, worktree);
   const staging = useStagingBusy(repoId, worktree);
+  const aiEnabled = useAppState((s) => s.profile.aiCommit?.enabled ?? false);
+  const [generating, setGenerating] = useState(false);
   const [staged, unstaged, conflicted] = useCounts();
   const unstagedFiles = useUnstagedFiles();
   // Disabling the fields for the commit drops their focus: put it back on the summary afterwards.
@@ -295,6 +298,34 @@ export function CommitBox({ inMerge: forced = false }: { inMerge?: boolean }) {
     const m = await services.messages.get(head);
     // §8.2: CRLF and a description's leading blank lines are normalised whenever text is loaded.
     useCommitBox.getState().startAmend(key, splitMessage(`${m.summary}\n${m.body}`), head);
+  };
+
+  /** Settings › AI: the sparkles button. Asks before replacing typed text. */
+  const generate = async () => {
+    if (generating || !worktree || !ctx) return;
+    if (staged === 0) {
+      useToast.getState().show('Stage some changes first');
+      return;
+    }
+    setGenerating(true);
+    try {
+      const out = await api.aiGenerateCommitMessage(ctx.repoId, worktree);
+      if (value.summary.trim() || value.description.trim()) {
+        const replace = await confirmAction({
+          title: 'Replace the commit message?',
+          body: 'The AI message replaces the text in the commit box.',
+          confirmLabel: 'Replace',
+          arm: 'Click again to replace the message',
+        });
+        if (!replace) return;
+      }
+      onChange({ summary: out.summary, description: out.description });
+      boxRef.current?.querySelector<HTMLInputElement>('.commit-summary')?.focus();
+    } catch (e) {
+      useToast.getState().show(errorMessage(e));
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const submit = async () => {
@@ -387,7 +418,15 @@ export function CommitBox({ inMerge: forced = false }: { inMerge?: boolean }) {
   return (
     <div ref={boxRef} className="commit-box" data-testid="commit-box">
       {operation && <OperationStatus op={operation} />}
-      <CommitFields value={value} onChange={onChange} onSubmit={() => void submit()} disabled={committing || operation?.primary === null} />
+      <CommitFields
+        value={value}
+        onChange={onChange}
+        onSubmit={() => void submit()}
+        disabled={committing || operation?.primary === null}
+        onGenerate={aiEnabled ? () => void generate() : undefined}
+        generating={generating}
+        generateReason={committing || integrating ? 'Wait for the current operation' : staged === 0 ? 'Stage some changes first' : undefined}
+      />
       <div className="commit-box-row">
         {/* UX L: at the "about to commit" stop, once a piece is committed (it can be amended). */}
         {(!operation || editMoved || (editStaged && madeCommits)) && (

@@ -15,6 +15,7 @@ tauri-build.workspace = true
 [dependencies]
 gitvolt-core.workspace = true
 gitvolt-forge.workspace = true
+gitvolt-ai.workspace = true
 tauri.workspace = true
 tauri-runtime-cef.workspace = true
 tauri-plugin-clipboard-manager.workspace = true

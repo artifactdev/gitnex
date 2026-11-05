@@ -1,0 +1,12 @@
+/* Settings › AI (pages/ai.tsx): the provider form and the detected local tools. */
+.ai-settings { display: flex; flex-direction: column; gap: 18px; }
+.ai-token-state { flex: none; font-size: 11px; color: var(--text-secondary); }
+.ai-detected { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; }
+.ai-detected-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-detected-head button { display: inline-flex; align-items: center; gap: 6px; }
+.ai-detected-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ai-detected-item { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; border: 1px solid var(--section-border); border-radius: 4px; background: var(--panel-bg1); }
+.ai-detected-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.ai-detected-name { color: var(--text-selected); }
+.ai-detected-meta { font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-detected-item button { flex: none; }

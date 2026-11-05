@@ -511,6 +511,11 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub git_email: Option<String>,
+    /// AI commit messages (Settings › AI): disabled until the user turns them on. The token is in
+    /// the token store, never here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ai_commit: Option<crate::ai::AiCommitSettings>,
     /// Host → forge type override (spec §14.4).
     pub host_overrides: BTreeMap<String, HostKind>,
     pub sidebar_width: u32,
@@ -555,6 +560,7 @@ impl Default for Profile {
             extra_gitconfig: None,
             git_name: None,
             git_email: None,
+            ai_commit: None,
             host_overrides: BTreeMap::new(),
             sidebar_width: 240,
             sidebar_narrow: false,

@@ -24,6 +24,12 @@
 }
 .commit-counter { flex: none; font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .commit-counter.warn { color: var(--orange); }
+/* The AI sparkles: a small accent tile beside the summary; a spinning ring while it asks. */
+.commit-ai { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--blue); border-radius: 5px; background: color-mix(in srgb, var(--purple) 18%, transparent); color: var(--text-selected); cursor: pointer; }
+.commit-ai:hover:not(:disabled) { background: color-mix(in srgb, var(--purple) 30%, transparent); }
+.commit-ai:disabled { opacity: 0.55; cursor: default; }
+.commit-ai:focus-visible { outline: 1px solid var(--focus-outline); outline-offset: 1px; }
+.commit-ai .spin { animation: commit-spin 1s linear infinite; }
 
 .commit-box-row { display: flex; align-items: center; gap: 8px; min-height: 20px; }
 .commit-amend { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); user-select: none; }

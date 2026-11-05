@@ -29,6 +29,12 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   Create are one click away in the header. Clone is a dialog with the URL, folder picker and
   integration search; Create makes a new local repository (name, folder, default branch) with
   `git init`, an optional README.md and an initial commit, so its branch exists from the start.
+- **AI commit messages.** Settings › AI turns on a sparkles button beside the commit summary. It
+  reads the staged diff and fills the summary and description. Choose an OpenAI-compatible
+  endpoint (optional token in the system keyring, models loaded from the endpoint) or a local
+  command-line tool; GitVolt detects common local servers and CLIs such as GitHub Copilot CLI,
+  Codex, Claude Code, Gemini, Ollama and `llm`. Off by default, and it asks before replacing a
+  message you typed.
 
 ## [1.5.0] - 2026-11-05
 

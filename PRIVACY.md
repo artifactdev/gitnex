@@ -1,9 +1,10 @@
 # Privacy
 
 GitVolt has no accounts, servers or cloud service of its own. It talks only to your git remotes,
-to the GitHub, GitLab and Forgejo accounts you add, to Gravatar and GitHub's avatar host, and to GitHub for its own updates. This page lists every network request
-the app makes, what each one sends, and how to turn it off. It also lists what GitVolt keeps on
-your computer and how to delete it.
+to the GitHub, GitLab and Forgejo accounts you add, to Gravatar and GitHub's avatar host, to the
+AI endpoint or local tool you configure for commit messages, and to GitHub for its own updates.
+This page lists every network request the app makes, what each one sends, and how to turn it off.
+It also lists what GitVolt keeps on your computer and how to delete it.
 
 ## Network requests
 
@@ -84,6 +85,23 @@ host once which forge it runs: `GET https://<host>/api/v1/version` (Forgejo, Git
 answered but not as one, `GET https://<host>/api/v4/version` (GitLab). It asks when you leave the
 Host field or click Create token or Add account, never while you type, so a half-typed name isn't
 asked. No token, no cookie, and no redirect is followed; only the host you entered is asked.
+
+### AI commit messages (optional)
+
+Setting: Settings › AI › **Generate commit messages with AI** (off by default).
+
+- **When:** only when you click the sparkles button beside the commit summary. Nothing is sent in
+  the background, at startup or while you type.
+- **Sends:** the staged diff (`git diff --cached`) and the last few commit subjects, to the
+  OpenAI-compatible endpoint you entered, or to the local command you configured. With a local
+  command, GitVolt starts that program in the repository and gives it the prompt as an argument;
+  it never goes through a shell.
+- **Token:** optional, kept in the system keyring (else an owner-only file) and sent only in the
+  `Authorization: Bearer` header to that endpoint. It is never in the settings file, a log line or
+  an error message.
+- **Local endpoints** (`http://localhost:11434/v1` for Ollama, `http://127.0.0.1:1234/v1` for LM
+  Studio, and the other common ports the Detect button checks) stay on this machine.
+- **Turn it off:** switch it off in Settings › AI; the button disappears from the commit box.
 
 ### Update check (GitHub Releases)
 

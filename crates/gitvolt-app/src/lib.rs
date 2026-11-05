@@ -120,7 +120,7 @@ fn build_api(cli: GitCli, launch: Option<String>, child_env: ChildEnvHook, quit:
         Some(chooser) => api.with_chooser(chooser),
         None => api,
     };
-    match paths::cache_base() {
+    let api = match paths::cache_base() {
         Some(cache) => api
             .with_open_cache(cache.join(gitvolt_core::paths::APP_DIR).join("open"))
             .with_avatars(Arc::new(Gravatar::new(cache.join(gitvolt_core::paths::APP_DIR).join("avatars"), DEFAULT_BASE_URL)) as Arc<dyn AvatarProvider>)
@@ -134,7 +134,13 @@ fn build_api(cli: GitCli, launch: Option<String>, child_env: ChildEnvHook, quit:
             Arc::new(gitvolt_forge::connector::Forge::new(gitvolt_forge::connector::ForgeConfig { overrides: Default::default(), only_overrides: false, avatar_dir: None })),
             Arc::new(gitvolt_forge::tokens::SystemTokenStore::system(paths::data_dir().join("forge-tokens"))),
         ),
-    }
+    };
+    // AI commit messages (Settings › AI): the OpenAI-compatible/local-CLI provider, and its
+    // endpoint token in the same system keyring (else the owner-only file) as the forge tokens.
+    api.with_ai(
+        Arc::new(gitvolt_ai::Ai::new()),
+        Arc::new(gitvolt_forge::tokens::SystemTokenStore::system(paths::data_dir().join("ai-tokens"))),
+    )
 }
 
 /// "Open in…"'s launcher: detached, argv only, with `child_env`'s environment (so an editor
