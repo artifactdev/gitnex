@@ -107,6 +107,19 @@ pub struct ForkPage {
     pub next: Option<u32>,
 }
 
+/// A repository a forge search found for one of the profile's accounts (the Clone screen): its
+/// `project` (with the clone URLs), and which account could see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ForgeRepoHit {
+    pub project: ForgeProject,
+    /// The account's id and the token user's login: two accounts on a host can see different
+    /// repositories.
+    pub account_id: String,
+    pub account_username: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

@@ -36,6 +36,7 @@ const WHAT: Record<NotInDemoMethod, string> = {
   addForgeAccount: 'forge accounts',
   removeForgeAccount: 'forge accounts',
   addToGitignore: 'editing .gitignore',
+  forgeSearchRepos: 'forge accounts',
   forgeTokenPage: 'forge accounts',
   detectForge: 'forge accounts',
   updateDownload: 'updates',

@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 
 pub const FORKS_PER_PAGE: u32 = 100;
 pub const FORK_PAGES: usize = 3;
+/// The Clone screen's repository search answers this many hits.
+pub const REPO_SEARCH_PER_PAGE: u32 = 20;
 
 // --- 4C T3 ---
 pub const USERS_PER_PAGE: u32 = 20;
@@ -1275,6 +1277,15 @@ impl ForgeProvider for GitLabProvider {
         })
     }
 
+    /// GitLab's project search: every project the token can see, most recently active first.
+    fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        Box::pin(async move {
+            let path = format!("/projects?search={}&per_page={REPO_SEARCH_PER_PAGE}&order_by=last_activity_at&sort=desc", encode_component(query.trim()));
+            let items: Vec<Value> = self.http.get(&path).await?.json(&self.host)?;
+            Ok(items.iter().filter_map(|p| json::project(&self.host, p)).collect())
+        })
+    }
+
     fn project_settings<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, ForgeProjectSettings> {
         Box::pin(async move {
             let r = self.http.get(&Self::project_url(&project.id.to_string())).await?;
@@ -1927,6 +1938,24 @@ mod tests {
         assert_eq!(u.emails, ["ada@example.com", "pub@example.com"]);
         let u = json::user(&json!({"id": 7, "username": "ada", "public_email": "", "commit_email": null})).unwrap();
         assert!(u.emails.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_project_search_reads_its_array_and_sends_the_query() {
+        use crate::test_server::{Canned, TestServer};
+        let s = TestServer::start(|_, head| {
+            if head.starts_with("get /api/v4/projects?search=") {
+                Canned::json(200, r#"[{"id": 77, "name": "widget", "path_with_namespace": "alice/widget", "namespace": {"full_path": "alice"}, "web_url": "https://g/alice/widget", "default_branch": "main", "http_url_to_repo": "https://g/alice/widget.git", "ssh_url_to_repo": "git@g:alice/widget.git"}]"#)
+            } else {
+                Canned::json(404, r#"{"message": "404 Not found"}"#)
+            }
+        });
+        let ep = crate::endpoints::HostEndpoints { api: format!("{}/api/v4", s.base), web: s.base.clone(), avatars: None };
+        let p = super::GitLabProvider::new("gitlab.example.com", &ep, gitvolt_core::redact::Secret::new("glpat-FAKE-test-token"), None);
+        let repos = p.search_repos("wid get").await.unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("alice/widget", "git@g:alice/widget.git"));
+        assert_eq!(s.heads.lock().unwrap()[0].lines().next().unwrap_or_default(), "get /api/v4/projects?search=wid%20get&per_page=20&order_by=last_activity_at&sort=desc http/1.1");
     }
 
     #[test]

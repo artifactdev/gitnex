@@ -23,6 +23,8 @@ pub const GITHUB_FULL: &str = "application/vnd.github.full+json";
 // --- end 5A T2 ---
 pub const FORKS_PER_PAGE: u32 = 100;
 pub const FORK_PAGES: usize = 3;
+/// The Clone screen's repository search answers this many hits.
+pub const REPO_SEARCH_PER_PAGE: u32 = 20;
 // --- GitHub commit-author avatars ---
 /// No commit-author lookup while fewer API requests than this are left this hour: avatars are
 /// the least of what the account's budget is for.
@@ -805,6 +807,15 @@ impl ForgeProvider for GitHubProvider {
             let r = self.http.get(&Self::repo_url(path)?).await?;
             let p = json::project(&self.host, &r.json(&self.host)?).ok_or_else(|| unreadable(&self.host, "repository"))?;
             Ok(Self::fresh(p, &r))
+        })
+    }
+
+    /// GitHub's repository search (its own, small budget): names, descriptions and owners.
+    fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        Box::pin(async move {
+            let path = format!("/search/repositories?q={}&per_page={REPO_SEARCH_PER_PAGE}&sort=updated&order=desc", encode_component(query.trim()));
+            let v: Value = self.http.get(&path).await?.json(&self.host)?;
+            Ok(v["items"].as_array().into_iter().flatten().filter_map(|p| json::project(&self.host, p)).collect())
         })
     }
 
@@ -2061,6 +2072,25 @@ mod tests {
         assert_eq!(u.emails, ["octo@example.com", "42+octo@users.noreply.github.com", "octo@users.noreply.github.com"]);
         let u = json::user(&json!({"id": 42, "login": "octo", "email": null})).unwrap();
         assert_eq!(u.emails, ["42+octo@users.noreply.github.com", "octo@users.noreply.github.com"]);
+    }
+
+    #[tokio::test]
+    async fn the_repository_search_reads_its_items_and_sends_the_query() {
+        use crate::test_server::{Canned, TestServer};
+        let s = TestServer::start(|_, head| {
+            if head.starts_with("get /search/repositories?") {
+                Canned::json(200, r#"{"items": [{"id": 7, "full_name": "octo-org/widget", "name": "widget", "owner": {"login": "octo-org"}, "html_url": "https://github.com/octo-org/widget", "clone_url": "https://github.com/octo-org/widget.git", "ssh_url": "git@github.com:octo-org/widget.git", "default_branch": "main"}]}"#)
+            } else {
+                Canned::json(404, r#"{"message": "Not Found"}"#)
+            }
+        });
+        let ep = crate::endpoints::HostEndpoints { api: s.base.clone(), web: s.base.clone(), avatars: None };
+        let p = super::GitHubProvider::new("github.com", &ep, gitvolt_core::redact::Secret::new("ghp_FAKE-test-token"), None);
+        let repos = p.search_repos("wid get").await.unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("octo-org/widget", "git@github.com:octo-org/widget.git"));
+        let asked = s.heads.lock().unwrap();
+        assert_eq!(asked[0].lines().next().unwrap_or_default(), "get /search/repositories?q=wid%20get&per_page=20&sort=updated&order=desc http/1.1", "the query is encoded");
     }
 
     #[test]

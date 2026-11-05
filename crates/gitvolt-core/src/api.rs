@@ -1282,6 +1282,9 @@ pub enum Request {
       ForgeCreateContext { repo: u32, remote: String, source_remote: String, branch: String, target: String },
       /// People in `remote`'s project who can review or be assigned, matching `query`: `ForgeUser[]`.
       ForgeSearchUsers { repo: u32, remote: String, query: String },
+      /// Repositories the active profile's forge accounts can see, matching `query`: `ForgeRepoHit[]`.
+      /// No repository is open: the Clone screen's search.
+      ForgeSearchRepos { query: String },
       /// `remote`'s project's labels matching `query`: `ForgeLabel[]`.
       ForgeLabels { repo: u32, remote: String, query: String },
       /// Creates the MR/PR in `remote`'s project: `CreateOutcome` (spec #4 §3.5). A forge write:
@@ -1355,6 +1358,7 @@ impl Request {
             // --- end 5A T1 ---
               // --- 4C T5: forge reads and forge writes; none touches the repository ---
               Request::ForgeCreateContext { .. } | Request::ForgeSearchUsers { .. } | Request::ForgeLabels { .. } | Request::ForgeCreateMr { .. } | Request::ForgeCompleteCreate { .. } => false,
+              Request::ForgeSearchRepos { .. } => false,
               // --- end 4C T5 ---
             // --- 4D T3 ---
             Request::ForgeStack { .. } | Request::ForgeSyncStack { .. } | Request::ForgeRetarget { .. } => false,
@@ -3198,6 +3202,7 @@ impl Api {
                   let list = self.forge_remotes_of(&*self.handle(repo)?);
                   to_json(hub.search_users(&self.store, &list, &remote, &query).await?)
               }
+              Request::ForgeSearchRepos { query } => to_json(self.forge_hub()?.search_repos(&self.store, &query).await?),
               Request::ForgeLabels { repo, remote, query } => {
                   let hub = self.forge_hub()?;
                   let list = self.forge_remotes_of(&*self.handle(repo)?);
@@ -5578,6 +5583,7 @@ mod tests {
             // --- 4C T5 ---
             json!({"method": "forgeCreateContext", "params": {"repo": id, "remote": "origin", "sourceRemote": "origin", "branch": "main", "target": "main"}}),
             json!({"method": "forgeSearchUsers", "params": {"repo": id, "remote": "origin", "query": ""}}),
+            json!({"method": "forgeSearchRepos", "params": {"query": "widget"}}),
             json!({"method": "forgeLabels", "params": {"repo": id, "remote": "origin", "query": ""}}),
             json!({"method": "forgeCreateMr", "params": {"repo": id, "remote": "origin", "req": {"source": {"project": "p", "branch": "main"}, "targetBranch": "main", "title": "t", "description": "", "draft": false, "reviewers": [], "assignees": [], "labels": [], "squash": null, "deleteSourceBranch": null}}}),
             json!({"method": "forgeCompleteCreate", "params": {"repo": id, "remote": "origin", "number": 1, "req": {"source": {"project": "p", "branch": "main"}, "targetBranch": "main", "title": "t", "description": "", "draft": false, "reviewers": [], "assignees": [], "labels": [], "squash": null, "deleteSourceBranch": null}, "parts": ["labels"]}}),
@@ -5889,7 +5895,7 @@ mod tests {
     /// Samples that fail by design here: the harness-less `Api` has no log folder, URL opener,
     /// openers or askpass, and the profile samples name no existing profile. Each refusal comes
     /// before any repository access.
-    const EXPECTED_FAILURES: &[&str] = &["openLogsFolder", "openUrl", "openIn", "switchProfile", "deleteProfile", "authAnswer", "authUseSsh", "saveProfile", "addForgeAccount", "removeForgeAccount", "forgeProjectSettings", "forgeForks", "forgeMrList", "forgeBranchMrs", "forgeMrDetail", "forgeRefresh", "forgeMrDiscussions", "forgeProjectByPath", "forgeReply", "forgeApprove", "forgeRequestChanges", "forgeMerge", "forgeEditMr", "forgeSetDraft", "forgeSetAutoMerge", "forgeCancelAutoMerge", "forgeUpdateBranch", "forgeReview", "forgePeopleLimits", "forgeSetSubscribed", "forgeReact", "forgeEditNote", "forgeDeleteNote", "forgeResolve", "forgeReviewDiff", "forgeReviewDrafts", "forgeAddDraft", "forgeEditDraft", "forgeDeleteDraft", "forgeSubmitReview", "forgeDiscardReview", "forgeCommentNow", "forgeCreateContext", "forgeSearchUsers", "forgeLabels", "forgeCreateMr", "forgeCompleteCreate", "forgeStack", "forgeSyncStack", "forgeRetarget", "forgeImage", "forgeVideo", "forgeOpenVideo", "updateCheck", "updateDownload", "updateInstall", "updateRestart", "relaunchApp"];
+    const EXPECTED_FAILURES: &[&str] = &["openLogsFolder", "openUrl", "openIn", "switchProfile", "deleteProfile", "authAnswer", "authUseSsh", "saveProfile", "addForgeAccount", "removeForgeAccount", "forgeProjectSettings", "forgeForks", "forgeMrList", "forgeBranchMrs", "forgeMrDetail", "forgeRefresh", "forgeMrDiscussions", "forgeProjectByPath", "forgeReply", "forgeApprove", "forgeRequestChanges", "forgeMerge", "forgeEditMr", "forgeSetDraft", "forgeSetAutoMerge", "forgeCancelAutoMerge", "forgeUpdateBranch", "forgeReview", "forgePeopleLimits", "forgeSetSubscribed", "forgeReact", "forgeEditNote", "forgeDeleteNote", "forgeResolve", "forgeReviewDiff", "forgeReviewDrafts", "forgeAddDraft", "forgeEditDraft", "forgeDeleteDraft", "forgeSubmitReview", "forgeDiscardReview", "forgeCommentNow", "forgeCreateContext", "forgeSearchUsers", "forgeSearchRepos", "forgeLabels", "forgeCreateMr", "forgeCompleteCreate", "forgeStack", "forgeSyncStack", "forgeRetarget", "forgeImage", "forgeVideo", "forgeOpenVideo", "updateCheck", "updateDownload", "updateInstall", "updateRestart", "relaunchApp"];
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_read_request_writes_to_the_repository() {
@@ -5948,7 +5954,9 @@ mod tests {
         use crate::forge::{ForgeKind, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         let tokens = MemTokens::new(TokenStorage::File);
-        let api = api().with_forge(FakeConnector::with(TOKEN, FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com")), tokens.clone());
+        let fake = FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com");
+        fake.projects.lock().unwrap().insert("group/widget".into(), crate::forge::fake::project("gitlab.example.com", "group/widget", None, 5));
+        let api = api().with_forge(FakeConnector::with(TOKEN, fake), tokens.clone());
         let req: Request = serde_json::from_value(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}})).unwrap();
         assert!(!format!("{req:?}").contains(TOKEN), "Request's Debug (the dispatch log) never shows a token");
         let added = api.dispatch(req).await.unwrap();
@@ -5957,6 +5965,10 @@ mod tests {
         let list = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeAccounts"})).unwrap()).await.unwrap();
         assert_eq!(list[0]["account"]["user"]["username"], "ada");
         assert_eq!(list[0]["status"]["kind"], "ok");
+        // The Clone screen's search, across the account's repositories.
+        let hits = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeSearchRepos", "params": {"query": "widget"}})).unwrap()).await.unwrap();
+        assert_eq!((hits[0]["project"]["path"].as_str(), hits[0]["accountUsername"].as_str()), (Some("group/widget"), Some("ada")));
+        assert_eq!(api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeSearchRepos", "params": {"query": "nothing"}})).unwrap()).await.unwrap(), serde_json::json!([]));
         let page = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeTokenPage", "params": {"host": "https://gitlab.example.com/", "kind": "gitlab"}})).unwrap()).await.unwrap();
         assert!(page.as_str().unwrap().starts_with("https://gitlab.example.com/-/user_settings/personal_access_tokens?"));
         // A host's forge: by its name, else as the connector asked it (the fake asks no host).

@@ -589,6 +589,48 @@ impl ForgeHub {
         None
     }
 
+    /// Repositories the profile's accounts can see whose name or path contains `query`, most
+    /// recently active first: the Clone screen's search across every configured integration.
+    /// Accounts are asked in order and one that fails doesn't hide the others; when none answered,
+    /// the first failure is the error.
+    pub async fn search_repos(&self, store: &Arc<SettingsStore>, query: &str) -> Result<Vec<crate::forge::ForgeRepoHit>, GbError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let profile = store.active_profile();
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut failures = Vec::new();
+        for account in profile.forge_accounts.iter().cloned() {
+            let key = Self::key_for(&profile.id, &account);
+            let (account, provider) = match self.provider_for_account(store, account).await {
+                Ok(found) => found,
+                Err(e) => {
+                    failures.push(e);
+                    continue;
+                }
+            };
+            let result = provider.search_repos(query).await;
+            self.record(&key, &result);
+            match result {
+                Ok(repos) => {
+                    for project in repos {
+                        if seen.insert((project.host.clone(), project.path.clone())) {
+                            out.push(crate::forge::ForgeRepoHit { project, account_id: account.id.clone(), account_username: account.user.username.clone() });
+                        }
+                    }
+                }
+                Err(e) => failures.push(e),
+            }
+        }
+        if let Some(e) = failures.into_iter().next().filter(|_| out.is_empty()) {
+            return Err(e);
+        }
+        out.sort_by_key(|h| std::cmp::Reverse(h.project.updated_at.unwrap_or(0)));
+        Ok(out)
+    }
+
     /// `remote`'s project's forks, newest activity first, each naming its parent.
     pub async fn forks(&self, store: &Arc<SettingsStore>, remotes: &[RemotePayload], remote: &str) -> Result<Vec<ForgeProject>, GbError> {
         let (key, provider, project) = self.project_for_remote(store, remotes, remote).await?;

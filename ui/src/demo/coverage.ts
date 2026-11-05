@@ -200,6 +200,7 @@ export const COVERAGE = {
   mergeBase: 'real',
   forgeCreateContext: 'real',
   forgeSearchUsers: 'real',
+  forgeSearchRepos: 'notInDemo',
   forgeLabels: 'real',
   forgeCreateMr: 'real',
   forgeCompleteCreate: 'real',

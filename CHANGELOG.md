@@ -20,6 +20,10 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   file in the selection and Shift-click extends it. The right-click menu then offers Stash N
   files… and Add N files to .gitignore. A single file gets Stash file… and Add to .gitignore;
   both writes are journaled, so Undo brings the changes or .gitignore back.
+- **Clone: a folder picker and repository search.** Choose… picks the parent folder, and GitVolt
+  clones into a new folder named after the repository inside it. Search repositories finds any
+  repository your configured GitHub, GitLab or Forgejo accounts can see, and clones it into that
+  folder in one click.
 
 ## [1.5.0] - 2026-11-05
 

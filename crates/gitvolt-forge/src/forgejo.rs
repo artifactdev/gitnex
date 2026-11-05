@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex};
 pub const FORGEJO_HEADERS: [(&str, &str); 1] = [("Accept", "application/json")];
 /// Forgejo's default `MAX_RESPONSE_ITEMS`: a larger `limit` is cut to it.
 pub const PER_PAGE: u32 = 50;
+/// The Clone screen's repository search answers this many hits.
+pub const REPO_SEARCH_PER_PAGE: u32 = 20;
 pub const OPEN_PAGES: usize = 5;
 pub const FORK_PAGES: usize = 3;
 pub const COMMENT_PAGES: usize = 5;
@@ -1073,6 +1075,15 @@ impl ForgeProvider for ForgejoProvider {
         })
     }
 
+    /// Forgejo's repository search (`/repos/search`, its `data` list).
+    fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        Box::pin(async move {
+            let path = format!("/repos/search?q={}&limit={REPO_SEARCH_PER_PAGE}", encode_component(query.trim()));
+            let v: Value = self.http.get(&path).await?.json(&self.host)?;
+            Ok(v["data"].as_array().into_iter().flatten().filter_map(|p| json::project(&self.host, p)).collect())
+        })
+    }
+
     fn project_settings<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, ForgeProjectSettings> {
         Box::pin(async move {
             let r = self.http.get(&GitHubProvider::repo_url(&project.path)?).await?;
@@ -1704,6 +1715,23 @@ mod tests {
             "clone_url": format!("{WEB}/ada/widget.git"), "ssh_url": "git@forgejo.example.org:ada/widget.git", "fork": false, "parent": null, "archived": false, "updated_at": T1,
             "allow_merge_commits": true, "allow_rebase": true, "allow_rebase_explicit": false, "allow_squash_merge": true, "allow_fast_forward_only_merge": true,
             "default_merge_style": "squash", "default_delete_branch_after_merge": true})
+    }
+
+    #[tokio::test]
+    async fn the_repository_search_reads_its_data_and_sends_the_query() {
+        let s = TestServer::start(|_, head| {
+            if head.starts_with("get /api/v1/repos/search?") {
+                Canned::json(200, &format!(r#"{{"ok": true, "data": [{}]}}"#, repo_json()))
+            } else {
+                Canned::json(404, r#"{"message": "Not Found"}"#)
+            }
+        });
+        let ep = crate::endpoints::HostEndpoints { api: format!("{}/api/v1", s.base), web: s.base.clone(), avatars: None };
+        let p = ForgejoProvider::new("forgejo.example.org", &ep, gitvolt_core::redact::Secret::new("FAKE-forgejo-test-token"), None);
+        let repos = p.search_repos("ada wid").await.unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("ada/widget", "git@forgejo.example.org:ada/widget.git"));
+        assert_eq!(lines(&s), ["get /repos/search?q=ada%20wid&limit=20"]);
     }
 
     fn pr_json(number: u64) -> Value {

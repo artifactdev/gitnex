@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   appInfo: vi.fn(async () => ({ appVersion: 'x', build: null, gitVersion: 'y', installKind: 'unpackaged', home: '/home/u' })),
   suggestReposFolder: vi.fn(),
   cancelOp: vi.fn(),
+  forgeSearchRepos: vi.fn(),
 }));
 vi.mock('../api/client', () => ({ api, errorMessage: (e: unknown) => String((e as { message?: string }).message ?? e) }));
 
@@ -64,6 +65,35 @@ describe('OpenRepoScreen', () => {
     fireEvent.change(dest, { target: { value: '/elsewhere/p' } });
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/other.git' } });
     expect(dest.value).toBe('/elsewhere/p');
+  });
+
+  it('Choose… picks the parent folder and clones into a new folder named after the repository', async () => {
+    api.pickFolder.mockResolvedValue('/chosen');
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
+    render(<OpenRepoScreen tab={tab} />);
+    fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/proj.git' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose destination folder' })); });
+    expect(api.pickFolder).toHaveBeenCalledWith('/home/u/repos');
+    const dest = screen.getByLabelText('Destination') as HTMLInputElement;
+    await waitFor(() => expect(dest.value).toBe('/chosen/proj'));
+    expect(screen.getByText(/A folder named “proj” is created/)).toBeTruthy();
+  });
+
+  it('searching the integrations clones a hit into a folder named after it', async () => {
+    api.forgeSearchRepos.mockResolvedValue([{
+      project: { kind: 'gitlab', id: 3, host: 'gitlab.example.com', path: 'alice/widget', name: 'widget', owner: 'alice', webUrl: 'https://gitlab.example.com/alice/widget', defaultBranch: 'main', cloneHttps: 'https://gitlab.example.com/alice/widget.git', cloneSsh: 'git@gitlab.example.com:alice/widget.git', forkOf: null, updatedAt: 1, archived: false },
+      accountId: '7', accountUsername: 'ada',
+    }]);
+    api.clone.mockResolvedValue({ id: 1, path: '/home/u/repos/widget', name: 'widget' });
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
+    render(<OpenRepoScreen tab={tab} />);
+    fireEvent.change(screen.getByLabelText('Search repositories'), { target: { value: 'widget' } });
+    const hit = await screen.findByRole('button', { name: 'Clone alice/widget' });
+    expect(api.forgeSearchRepos).toHaveBeenCalledWith('widget');
+    await act(async () => { fireEvent.click(hit); });
+    expect(api.clone).toHaveBeenCalledWith('git@gitlab.example.com:alice/widget.git', '/home/u/repos/widget');
+    expect((screen.getByLabelText('Repository URL') as HTMLInputElement).value).toBe('git@gitlab.example.com:alice/widget.git');
+    expect(rt.openPathInTab).toHaveBeenCalledWith('/home/u/repos/widget', 't1');
   });
 
   it('a failed clone shows its error inline and re-enables the form', async () => {
