@@ -9,8 +9,8 @@ const css = readFileSync(join(dir, 'sidebar.css'), 'utf8');
 const tokens = readFileSync(join(dir, '..', 'theme', 'tokens.css'), 'utf8');
 
 it('the checked-out row is green (a token), not the blue selection colour; the cursor outline stays blue', () => {
-  expect(tokens).toMatch(/--checked-out-row:\s*#37563e/);
-  expect(tokens).toMatch(/--checked-out:\s*#457c4a/);
+  expect(tokens).toMatch(/--checked-out-row:\s*#1a3a26/);
+  expect(tokens).toMatch(/--checked-out:\s*#238636/);
   const rule = css.match(/\.sb-item\.is-head\s*\{([^}]*)\}/)?.[1] ?? '';
   expect(rule).toMatch(/background:\s*var\(--checked-out-row\)/);
   expect(rule).not.toMatch(/--selected-row/);
@@ -19,7 +19,7 @@ it('the checked-out row is green (a token), not the blue selection colour; the c
 });
 
 it('K55: counts are bold light blue (a token); K56: the stack never scrolls itself', () => {
-  expect(tokens).toMatch(/--count-blue:\s*#6d9deb/);
+  expect(tokens).toMatch(/--count-blue:\s*#58a6ff/);
   expect(css).toMatch(/\.sb-count\s*\{[^}]*font-weight:\s*700;[^}]*var\(--count-blue\)/);
   expect(css).toMatch(/\.sn-count\s*\{[^}]*font-weight:\s*700;[^}]*var\(--count-blue\)/);
   expect(css).toMatch(/\.sb-stack\s*\{[^}]*overflow:\s*hidden/);

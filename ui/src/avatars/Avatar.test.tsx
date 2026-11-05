@@ -57,7 +57,7 @@ describe('Avatar and the theme', () => {
     const el = screen.getByTestId('avatar');
     const lane = GRAPH_COLORS.indexOf(rgbToHex(el.style.background));
     expect(lane).toBeGreaterThanOrEqual(0);
-    expect(rgbToHex(el.style.color)).toBe('#ffffff');
+    expect(rgbToHex(el.style.color)).toBe(resolveColors(THEMES['default-dark']).laneText[lane]);
     act(() => useTheme.getState().set(THEMES.nord));
     expect(rgbToHex(el.style.background)).toBe(THEMES.nord.graph[lane]);
     expect(rgbToHex(el.style.color)).toBe(resolveColors(THEMES.nord).laneText[lane]);

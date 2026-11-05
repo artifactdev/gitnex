@@ -1,75 +1,75 @@
 :root {
-  --app-bg0: #1c1e23;
-  --panel-bg0: #262930;
-  --panel-bg1: #30343c;
-  --toolbar-bg0: #2a2e36;
-  /* K32-K34: the action bar (repo/branch/Fetch/Push) is the brightest bar, #33373f; the open
-     file's name bar is #272a31; the File View/Diff View bar and the code area are #1c1e23
+  --app-bg0: #00020d;
+  --panel-bg0: #050c18;
+  --panel-bg1: #121e2e;
+  --toolbar-bg0: #010409;
+  /* K32-K34: the action bar (repo/branch/Fetch/Push) is the brightest bar, #21262d; the open
+     file's name bar is #161b22; the File View/Diff View bar and the code area are #00020d
      (= --app-bg0). Monaco's background is --app-bg0 too. */
-  --action-bar-bg: #33373f;
-  --tab-bar-bg: #1f2228;           /* K65: darker than the action bar; the selected tab is --action-bar-bg */
-  --file-bar-bg: #272a31;
+  --action-bar-bg: #21262d;
+  --tab-bar-bg: #010409;           /* K65: darker than the action bar; the selected tab is --action-bar-bg */
+  --file-bar-bg: #161b22;
   --text-selected: #ffffff;
-  --text-normal: rgba(255, 255, 255, 0.75);
-  --text-secondary: rgba(255, 255, 255, 0.6);
-  --text-disabled: rgba(255, 255, 255, 0.4);
+  --text-normal: #e6edf3;
+  --text-secondary: #8d96a0;
+  --text-disabled: #6e7681;
   /* The row-dim mechanism's two levels (graph/rowDim.ts): the 'filter' level (search/Ctrl+F) is
      below --text-disabled, so the already-dim author, date and SHA dim visibly too. The
      'branch' level (J22's branch-hover focus) is lighter, since it marks rows merely outside
      the focused branch, not filtered out. */
   --text-row-dimmed: rgba(255, 255, 255, 0.2);
   --text-row-dimmed-branch: rgba(255, 255, 255, 0.5);
-  --hover-row: rgba(77, 136, 255, 0.1);
-  --selected-row: rgba(77, 136, 255, 0.2);
-  --section-border: rgba(255, 255, 255, 0.08);
-  --stats-added: #347d39;
-  --stats-deleted: #c93c37;
-  --blue: #4d88ff;
+  --hover-row: rgba(47, 129, 247, 0.1);
+  --selected-row: rgba(47, 129, 247, 0.2);
+  --section-border: rgba(240, 246, 252, 0.1);
+  --stats-added: #2ea043;
+  --stats-deleted: #da3633;
+  --blue: #2f81f7;
   /* K62: sidebar row and strip icons, dimmer than the item text so they don't read as text. */
   --sidebar-icon: rgba(255, 255, 255, 0.45);
   --avatar-backdrop: #e6e7ea;
   /* K55: the sidebar section counts, in bold light blue. */
-  --count-blue: #6d9deb;
-  --green: #5cb85c;
+  --count-blue: #58a6ff;
+  --green: #3fb950;
   /* The checked-out branch / current worktree row in the sidebar, sampled from the reference
      sidebar: a muted green row tint and the green of its check box (K35). */
-  --checked-out-row: #37563e;
-  --checked-out: #457c4a;
+  --checked-out-row: #1a3a26;
+  --checked-out: #238636;
   /* ---- Plan 1D themes. These and every colour token in this file are the first-paint values:
      exactly THEMES['default-dark'] (theme/themes.ts; themes.test.ts enforces it). A theme switch
      overrides them as inline styles on <html> (theme/apply.ts). The ones below were literals in
      the component stylesheets, or are new with the theme set. ---- */
-  --red: #d9413d;
-  --orange: #de9b43;
+  --red: #f85149;
+  --orange: #db6d28;
   /* Forge marks (Settings › Accounts): the forges' own brand colours, the same in every theme. */
   --forge-gitlab: #e2432a;
   --forge-github: #6e5494;
   --forge-forgejo: #de6a29;
-  --yellow: #ecb91c;
-  --link: #40c5ec;
+  --yellow: #d29922;
+  --link: #58a6ff;
   /* The MR/PR view: merged and mentions. */
   --purple: #a371f7;
   /* A switch's track, on and off (ui/Switch.tsx). */
-  --switch-on: #4d88ff;
+  --switch-on: #2f81f7;
   --switch-off: rgba(255, 255, 255, 0.16);
-  --focus-outline: rgba(77, 136, 255, 0.6);
-  --conflict-ours: #15a0bf;
-  --conflict-theirs: #f2ca33;
-  --conflict-base: #c517b6;
+  --focus-outline: rgba(47, 129, 247, 0.6);
+  --conflict-ours: #58a6ff;
+  --conflict-theirs: #d29922;
+  --conflict-base: #bc8cff;
   /* The tick on a filled merge-tool checkbox: white or the darkest bg, whichever contrasts more (themes.ts tickOn). */
-  --conflict-ours-tick: #1c1e23;
-  --conflict-theirs-tick: #1c1e23;
+  --conflict-ours-tick: #00020d;
+  --conflict-theirs-tick: #00020d;
   /* The diff's colours, the editor's and the hex view's (themes.ts diffColors). */
-  --diff-inserted-text: rgba(92, 184, 92, 0.12);
-  --diff-removed-text: rgba(217, 65, 61, 0.2);
-  --diff-inserted-line: rgba(92, 184, 92, 0.1);
-  --diff-removed-line: rgba(217, 65, 61, 0.15);
+  --diff-inserted-text: rgba(63, 185, 80, 0.12);
+  --diff-removed-text: rgba(248, 81, 73, 0.2);
+  --diff-inserted-line: rgba(63, 185, 80, 0.1);
+  --diff-removed-line: rgba(248, 81, 73, 0.15);
   --diff-diagonal-fill: rgba(204, 204, 204, 0.2);
   /* The rendered Markdown diff's own, brighter marks (themes.ts diffColors). */
-  --md-diff-ins-text: rgba(92, 184, 92, 0.3);
-  --md-diff-del-text: rgba(217, 65, 61, 0.3);
-  --md-diff-ins-block: rgba(92, 184, 92, 0.16);
-  --md-diff-del-block: rgba(217, 65, 61, 0.16);
+  --md-diff-ins-text: rgba(63, 185, 80, 0.3);
+  --md-diff-del-text: rgba(248, 81, 73, 0.3);
+  --md-diff-ins-block: rgba(63, 185, 80, 0.16);
+  --md-diff-del-block: rgba(248, 81, 73, 0.16);
   /* Text on a saturated fill: the blue buttons, the bell's badge, the check box, avatar initials. */
   --text-on-accent: #ffffff;
   /* Quiet button fills (the context menu's variant chips, dialog buttons, a tab's close hover). */
@@ -81,27 +81,26 @@
   --shadow-tooltip: rgba(0, 0, 0, 0.4);
   --backdrop: rgba(0, 0, 0, 0.45);
   /* The WIP row's summary box (graph.css). */
-  --wip-input-bg: #16181c;
-  --wip-input-border: #282a2d;
-  --wip-input-placeholder: #6e6f71;
+  --wip-input-bg: #010409;
+  --wip-input-border: #30363d;
+  --wip-input-placeholder: #6e7681;
   /* J11: the image's frame. --section-border is all but invisible against the neutral viewport. */
   --image-frame-border: rgba(255, 255, 255, 0.22);
   /* The graph canvas (draw.ts): a commit node's fill and initials, the collapse zone's shade. */
-  --node-fill: #1c1e23;
+  --node-fill: #00020d;
   --node-text: #ffffff;
   --collapse-strip: rgba(0, 0, 0, 0.4);
-  /* Lane colours 0-9 (also the app icon's palette). The canvas reads them from
-     theme/store.ts, not from here. */
-  --graph-0: #15a0bf;
-  --graph-1: #0669f7;
-  --graph-2: #8e00c2;
-  --graph-3: #c517b6;
-  --graph-4: #d90171;
-  --graph-5: #cd0101;
-  --graph-6: #f25d2e;
-  --graph-7: #f2ca33;
-  --graph-8: #7bd938;
-  --graph-9: #2ece9d;
+  /* Lane colours 0-9. The canvas reads them from theme/store.ts, not from here. */
+  --graph-0: #58a6ff;
+  --graph-1: #26dce1;
+  --graph-2: #3fb950;
+  --graph-3: #db6d28;
+  --graph-4: #f85149;
+  --graph-5: #d29922;
+  --graph-6: #39c5cf;
+  --graph-7: #f778ba;
+  --graph-8: #a5d6ff;
+  --graph-9: #7ee787;
   /* ---- end plan 1D themes ---- */
   --font-ui: system-ui, "Segoe UI", Ubuntu, Cantarell, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
   --font-mono: ui-monospace, monospace;
@@ -173,14 +172,14 @@ body { background: var(--app-bg0); color: var(--text-normal); font: 13px/1.4 var
 /* ==== end lane V block ==== */
 /* ---- File-status colours (feedback lane D: F17/F19); the diff view reuses them through files/StatusIcon.tsx. ---- */
 :root {
-  --status-added: #5cb85c;
-  --status-modified: #de9b43;
-  --status-deleted: #d9413d;
-  --status-renamed: #4d88ff;
-  --status-conflicted: #b56ee6;
+  --status-added: #3fb950;
+  --status-modified: #db6d28;
+  --status-deleted: #f85149;
+  --status-renamed: #2f81f7;
+  --status-conflicted: #bc8cff;
   /* +/− line totals: brighter than --stats-added/--stats-deleted, WCAG AA (4.5:1) on --panel-bg0. */
-  --stats-added-bright: #5cb85c;
-  --stats-deleted-bright: #f0625d;
+  --stats-added-bright: #3fb950;
+  --stats-deleted-bright: #f85149;
 }
 /* ---- end lane D block ---- */
 
@@ -202,12 +201,12 @@ body { background: var(--app-bg0); color: var(--text-normal); font: 13px/1.4 var
 /* ---- The MR/PR view's filled buttons (forge/mrview; themes.ts derives each theme's): the blue
    and the orange, as deep as their text needs to read at 4.5:1. ---- */
 :root {
-  --button-primary: #4172d6;
-  --button-warn: #de9b43;
-  --button-warn-ink: #1c1e23;
+  --button-primary: #2a74de;
+  --button-warn: #b85c22;
+  --button-warn-ink: #ffffff;
   /* The top bar's review chip (forge/review/review.css): its tint, and its text and icon. */
-  --review-pending: #ecb91c;
-  --review-pending-bg: rgba(236, 185, 28, 0.14);
+  --review-pending: #d29922;
+  --review-pending-bg: rgba(210, 153, 34, 0.14);
 }
 
 /* Controls are not text: no selecting button labels, toggles, tabs, menu items or checkbox labels. */

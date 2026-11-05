@@ -1,11 +1,11 @@
 import { contrastRatio } from './contrast';
 /**
- * The ten built-in themes (spec §12.1): pure data. A theme sets every colour custom property in
+ * The built-in themes (spec §12.1): pure data. A theme sets every colour custom property in
  * COLOR_TOKENS on :root, plus the ten graph lanes (`--graph-0..9`); non-colour tokens (fonts,
- * motion, density metrics) stay in tokens.css and density.ts. `tokens.css` carries Default Dark
- * as the first-paint values, and themes.test.ts holds the two to each other.
+ * motion, density metrics) stay in tokens.css and density.ts. `tokens.css` carries the default
+ * dark theme (GitNex Dark) as the first-paint values, and themes.test.ts holds the two to each other.
  */
-export const THEME_IDS = ['default-dark', 'light', 'monokai', 'darcula', 'dracula', 'one-dark', 'solarized-dark', 'solarized-light', 'github-dark', 'nord'] as const;
+export const THEME_IDS = ['default-dark', 'light', 'monokai', 'darcula', 'dracula', 'one-dark', 'solarized-dark', 'solarized-light', 'github-dark', 'nord', 'bearded-arc-blueberry'] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 export const DEFAULT_THEME_ID: ThemeId = 'default-dark';
 export const isThemeId = (v: unknown): v is ThemeId => typeof v === 'string' && (THEME_IDS as readonly string[]).includes(v);
@@ -246,45 +246,34 @@ function theme(id: ThemeId, label: string, kind: 'dark' | 'light', editorTheme: 
   return { id, label, kind, editorTheme, colors: { ...core, ...derive(core, kind), ...overrides }, graph };
 }
 
+/** GitHub Dark's core (the `github-dark-default` palette), shared by the built-in GitHub Dark and
+ * GitNex's default dark theme, which is GitHub Dark with darker surfaces. */
+const GITHUB_DARK_CORE: CoreColors = {
+  'app-bg0': '#0d1117', 'panel-bg0': '#161b22', 'panel-bg1': '#21262d', 'toolbar-bg0': '#010409',
+  'action-bar-bg': '#21262d', 'tab-bar-bg': '#010409', 'file-bar-bg': '#161b22',
+  'text-selected': '#ffffff', 'text-normal': '#e6edf3', 'text-secondary': '#8d96a0', 'text-disabled': '#6e7681',
+  'text-on-accent': '#ffffff',
+  'stats-added': '#2ea043', 'stats-deleted': '#da3633',
+  red: '#f85149', orange: '#db6d28', yellow: '#d29922', green: '#3fb950', blue: '#2f81f7', link: '#58a6ff',
+  'count-blue': '#58a6ff', 'checked-out-row': '#1a3a26', 'checked-out': '#238636', 'selection-bg': '#264f78',
+  'conflict-ours': '#58a6ff', 'conflict-theirs': '#d29922', 'conflict-base': '#bc8cff',
+  'wip-input-bg': '#010409', 'wip-input-border': '#30363d', 'wip-input-placeholder': '#6e7681',
+};
+const GITHUB_DARK_GRAPH = ['#58a6ff', '#bc8cff', '#3fb950', '#db6d28', '#f85149', '#d29922', '#39c5cf', '#f778ba', '#a5d6ff', '#7ee787'];
+
+/** GitNex Dark, the default: GitHub Dark with GitNex's near-black grounds and a cyan second lane. */
+const GITNEX_DARK_CORE: CoreColors = {
+  ...GITHUB_DARK_CORE,
+  'app-bg0': '#00020d', 'panel-bg0': '#050c18', 'panel-bg1': '#121e2e',
+};
+const GITNEX_DARK_GRAPH = ['#58a6ff', '#26dce1', '#3fb950', '#db6d28', '#f85149', '#d29922', '#39c5cf', '#f778ba', '#a5d6ff', '#7ee787'];
+
 export const THEMES: Record<ThemeId, ThemeDef> = {
-  // Default Dark, with the user-sampled 1C values (K32-K65): exactly today's tokens.css, every
-  // token spelled out. The lanes are also the app icon's palette.
-  'default-dark': {
-    id: 'default-dark', label: 'Default Dark', kind: 'dark', editorTheme: 'dark-plus',
-    colors: {
-      'app-bg0': '#1c1e23', 'panel-bg0': '#262930', 'panel-bg1': '#30343c', 'toolbar-bg0': '#2a2e36',
-      'action-bar-bg': '#33373f', 'tab-bar-bg': '#1f2228', 'file-bar-bg': '#272a31',
-      'text-selected': '#ffffff', 'text-normal': 'rgba(255, 255, 255, 0.75)', 'text-secondary': 'rgba(255, 255, 255, 0.6)', 'text-disabled': 'rgba(255, 255, 255, 0.4)',
-      'text-on-accent': '#ffffff',
-      'stats-added': '#347d39', 'stats-deleted': '#c93c37',
-      red: '#d9413d', orange: '#de9b43', yellow: '#ecb91c', green: '#5cb85c', blue: '#4d88ff', link: '#40c5ec',
-      'count-blue': '#6d9deb', 'checked-out-row': '#37563e', 'checked-out': '#457c4a', 'selection-bg': '#264f78',
-      'conflict-ours': '#15a0bf', 'conflict-theirs': '#f2ca33', 'conflict-base': '#c517b6',
-      'wip-input-bg': '#16181c', 'wip-input-border': '#282a2d', 'wip-input-placeholder': '#6e6f71',
-      'hover-row': 'rgba(77, 136, 255, 0.1)', 'selected-row': 'rgba(77, 136, 255, 0.2)', 'section-border': 'rgba(255, 255, 255, 0.08)', 'focus-outline': 'rgba(77, 136, 255, 0.6)',
-      'text-row-dimmed': 'rgba(255, 255, 255, 0.2)', 'text-row-dimmed-branch': 'rgba(255, 255, 255, 0.5)', 'sidebar-icon': 'rgba(255, 255, 255, 0.45)', 'avatar-backdrop': '#e6e7ea',
-      'stats-added-bright': '#5cb85c', 'stats-deleted-bright': '#f0625d',
-      'status-added': '#5cb85c', 'status-modified': '#de9b43', 'status-deleted': '#d9413d', 'status-renamed': '#4d88ff', 'status-conflicted': '#b56ee6',
-      'scroll-thumb-bg': 'rgba(255, 255, 255, 0.15)', 'scroll-thumb-hover-bg': 'rgba(255, 255, 255, 0.25)',
-      'control-bg': 'rgba(255, 255, 255, 0.06)', 'control-hover-bg': 'rgba(255, 255, 255, 0.12)', 'image-frame-border': 'rgba(255, 255, 255, 0.22)',
-      'shadow-modal': 'rgba(0, 0, 0, 0.5)', 'shadow-popup': 'rgba(0, 0, 0, 0.45)', 'shadow-tooltip': 'rgba(0, 0, 0, 0.4)', backdrop: 'rgba(0, 0, 0, 0.45)',
-      'node-fill': '#1c1e23', 'node-text': '#ffffff', 'collapse-strip': 'rgba(0, 0, 0, 0.4)',
-      'conflict-ours-tick': '#1c1e23', 'conflict-theirs-tick': '#1c1e23',
-      'diff-inserted-text': 'rgba(92, 184, 92, 0.12)', 'diff-removed-text': 'rgba(217, 65, 61, 0.2)',
-      'diff-inserted-line': 'rgba(92, 184, 92, 0.1)', 'diff-removed-line': 'rgba(217, 65, 61, 0.15)',
-      'diff-diagonal-fill': 'rgba(204, 204, 204, 0.2)',
-      'md-diff-ins-text': 'rgba(92, 184, 92, 0.3)', 'md-diff-del-text': 'rgba(217, 65, 61, 0.3)',
-      'md-diff-ins-block': 'rgba(92, 184, 92, 0.16)', 'md-diff-del-block': 'rgba(217, 65, 61, 0.16)',
-      'forge-gitlab': '#e2432a', 'forge-github': '#6e5494', 'forge-forgejo': '#de6a29', purple: '#a371f7',
-      'switch-on': '#4d88ff', 'switch-off': 'rgba(255, 255, 255, 0.16)',
-      ...GROUP_COLORS.dark,
-      'button-primary': '#4172d6', 'button-warn': '#de9b43', 'button-warn-ink': '#1c1e23',
-      'review-pending': '#ecb91c', 'review-pending-bg': 'rgba(236, 185, 28, 0.14)',
-    },
-    graph: ['#15a0bf', '#0669f7', '#8e00c2', '#c517b6', '#d90171', '#cd0101', '#f25d2e', '#f2ca33', '#7bd938', '#2ece9d'],
-    // White initials on every lane, its yellow included (1C's look, kept as is).
-    laneText: '#ffffff',
-  },
+  // GitNex Dark, the default: GitHub Dark's palette on near-black grounds (the user's theme
+  // export of 2026-11-05), every token spelled out. GitHub Dark itself keeps the official values.
+  'default-dark': theme('default-dark', 'GitNex Dark', 'dark', 'github-dark-default', GITNEX_DARK_CORE, GITNEX_DARK_GRAPH, {
+    'section-border': 'rgba(240, 246, 252, 0.1)',
+  }),
   light: theme('light', 'Light', 'light', 'light-plus', {
     'app-bg0': '#ffffff', 'panel-bg0': '#f3f4f6', 'panel-bg1': '#ffffff', 'toolbar-bg0': '#e9ebef',
     'action-bar-bg': '#e6e8ec', 'tab-bar-bg': '#d9dce2', 'file-bar-bg': '#f3f4f6',
@@ -370,17 +359,7 @@ export const THEMES: Record<ThemeId, ThemeDef> = {
   }, ['#1f72ad', '#1f7f78', '#667500', '#8c6a00', '#b0410f', '#c4282a', '#b52d6f', '#5a5fb0', '#2f5f8a', '#2e8a7a'], {
     'stats-added-bright': '#5a6800', 'stats-deleted-bright': '#b8221f', 'status-added': '#6b7a00',
   }),
-  'github-dark': theme('github-dark', 'GitHub Dark', 'dark', 'github-dark-default', {
-    'app-bg0': '#0d1117', 'panel-bg0': '#161b22', 'panel-bg1': '#21262d', 'toolbar-bg0': '#010409',
-    'action-bar-bg': '#21262d', 'tab-bar-bg': '#010409', 'file-bar-bg': '#161b22',
-    'text-selected': '#ffffff', 'text-normal': '#e6edf3', 'text-secondary': '#8d96a0', 'text-disabled': '#6e7681',
-    'text-on-accent': '#ffffff',
-    'stats-added': '#2ea043', 'stats-deleted': '#da3633',
-    red: '#f85149', orange: '#db6d28', yellow: '#d29922', green: '#3fb950', blue: '#2f81f7', link: '#58a6ff',
-    'count-blue': '#58a6ff', 'checked-out-row': '#1a3a26', 'checked-out': '#238636', 'selection-bg': '#264f78',
-    'conflict-ours': '#58a6ff', 'conflict-theirs': '#d29922', 'conflict-base': '#bc8cff',
-    'wip-input-bg': '#010409', 'wip-input-border': '#30363d', 'wip-input-placeholder': '#6e7681',
-  }, ['#58a6ff', '#bc8cff', '#3fb950', '#db6d28', '#f85149', '#d29922', '#39c5cf', '#f778ba', '#a5d6ff', '#7ee787'], {
+  'github-dark': theme('github-dark', 'GitHub Dark', 'dark', 'github-dark-default', GITHUB_DARK_CORE, GITHUB_DARK_GRAPH, {
     'section-border': 'rgba(240, 246, 252, 0.1)',
   }),
   nord: theme('nord', 'Nord', 'dark', 'nord', {
@@ -395,5 +374,25 @@ export const THEMES: Record<ThemeId, ThemeDef> = {
     'wip-input-bg': '#272c36', 'wip-input-border': '#434c5e', 'wip-input-placeholder': '#6b7486',
   }, ['#88c0d0', '#81a1c1', '#5e81ac', '#8fbcbb', '#a3be8c', '#ebcb8b', '#d08770', '#bf616a', '#b48ead', '#eceff4'], {
     'stats-deleted-bright': '#e5a0a6', 'status-deleted': '#d8848c',
+  }),
+  // Bearded Theme's Arc Blueberry (BeardedBear/bearded-theme, GPL-3.0): its base #111422, its
+  // primary #8eb0e6, and its accent palette for the lanes.
+  'bearded-arc-blueberry': theme('bearded-arc-blueberry', 'Bearded Arc Blueberry', 'dark', 'bearded-arc-blueberry', {
+    'app-bg0': '#111422', 'panel-bg0': '#0d101b', 'panel-bg1': '#1a1e33', 'toolbar-bg0': '#0d101b',
+    'action-bar-bg': '#1a2037', 'tab-bar-bg': '#0d101b', 'file-bar-bg': '#151a2c',
+    'text-selected': '#e6e9f5', 'text-normal': '#bcc1dc', 'text-secondary': '#9aa2cb', 'text-disabled': '#3c4776',
+    'text-on-accent': '#111422',
+    'stats-added': '#3cec85', 'stats-deleted': '#e35535',
+    red: '#e35535', orange: '#ff955c', yellow: '#eacd61', green: '#3cec85', blue: '#8eb0e6', link: '#69c3ff',
+    'count-blue': '#69c3ff', 'checked-out-row': '#143b2a', 'checked-out': '#3cec85', 'selection-bg': '#303b53',
+    'conflict-ours': '#69c3ff', 'conflict-theirs': '#eacd61', 'conflict-base': '#b78aff',
+    'wip-input-bg': '#0d101b', 'wip-input-border': '#07080e', 'wip-input-placeholder': '#3c4776',
+  }, ['#69c3ff', '#3cec85', '#eacd61', '#ff955c', '#e35535', '#f38cec', '#b78aff', '#22ecdb', '#ff738a', '#a4ef58'], {
+    'section-border': '#07080e',
+    // Bearded's own file states: modified is the accent blue, renamed the purple, conflicts orange.
+    'status-modified': '#69c3ff',
+    'status-renamed': '#b78aff',
+    'status-conflicted': '#ff955c',
+    purple: '#b78aff',
   }),
 };

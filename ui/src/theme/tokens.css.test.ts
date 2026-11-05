@@ -48,15 +48,15 @@ describe('tokens.css bar colours (K32-K34)', () => {
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   };
   it("the three bar greys, brightest to darkest: action bar, file name bar, app background", () => {
-    expect(token('--action-bar-bg')).toBe('#33373f');
-    expect(token('--file-bar-bg')).toBe('#272a31');
-    expect(token('--app-bg0')).toBe('#1c1e23');
+    expect(token('--action-bar-bg')).toBe('#21262d');
+    expect(token('--file-bar-bg')).toBe('#161b22');
+    expect(token('--app-bg0')).toBe('#00020d');
     expect(lum(token('--action-bar-bg'))).toBeGreaterThan(lum(token('--file-bar-bg')));
     expect(lum(token('--file-bar-bg'))).toBeGreaterThan(lum(token('--app-bg0')));
     expect(token('--action-bar-bg')).not.toBe(token('--panel-bg0'));
   });
-  it('text at the normal alpha (75% white, about #c6c6c9) keeps WCAG AA on the action bar', () => {
-    expect((lum('#c6c6c9') + 0.05) / (lum(token('--action-bar-bg')) + 0.05)).toBeGreaterThan(4.5);
+  it('text-normal (#e6edf3) keeps WCAG AA on the action bar', () => {
+    expect((lum('#e6edf3') + 0.05) / (lum(token('--action-bar-bg')) + 0.05)).toBeGreaterThan(4.5);
   });
 });
 

@@ -21,7 +21,7 @@ describe('the highlight client', () => {
   it('starts the highlighter with every theme carrying its editor colours, and hands back Monaco token colours', async () => {
     const c = await highlightClient();
     const [{ themes }] = createHighlighterCore.mock.calls[0] as unknown as [{ themes: Array<{ name: string; colors: Record<string, string> }> }];
-    expect(themes[0].name).toBe('dark-plus');
+    expect(themes[0].name).toBe('github-dark-default');
     expect(themes[0].colors).toMatchObject(EDITOR_COLORS);
     expect(themes[0].colors['editor.background']).toBeDefined();
     // Monaco's numbering: six hex digits, a colour that differs only in alpha is the same one.

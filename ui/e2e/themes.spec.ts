@@ -21,12 +21,12 @@ const dialog = (page: Page) => page.getByRole('dialog', { name: 'Settings' });
 
 // Each `test.step` below was a test of its own, paying for a page load; they run in an order
 // where each starts from what it needs (a step that needs a plain URL loads it).
-test('themes: Default Dark by default; a lane edit makes a custom theme; ?theme=; the palette, saved and mirrored; the hamburger opens the picker', async ({ page }) => {
-  await test.step('Default Dark by default', async () => {
+test('themes: GitNex Dark by default; a lane edit makes a custom theme; ?theme=; the palette, saved and mirrored; the hamburger opens the picker', async ({ page }) => {
+  await test.step('GitNex Dark by default', async () => {
     await page.goto(openUrl(fixtures.basic));
     await expect(grid(page)).toBeVisible();
     expect(await theme(page)).toBe('default-dark');
-    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(28, 30, 35)');
+    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(0, 2, 13)');
   });
   await test.step('Theme: editing a colour makes "Nord (Custom)"; it survives a reload; Delete returns to Nord', async () => {
     const appBg = () => page.locator('html').evaluate((el) => el.style.getPropertyValue('--app-bg0'));
@@ -176,9 +176,9 @@ test('the open editor: a theme switch repaints it without re-creating it (R6); S
     await openDiff(page);
     const host = diffRegion(page).locator('.monaco-host').first();
     await host.evaluate((el) => { (el as HTMLElement).dataset.keep = '1'; });
-    await expect.poll(() => editorBg(page)).toBe(rgb(THEMES['default-dark'].colors['app-bg0'])); // today's #1c1e23
+    await expect.poll(() => editorBg(page)).toBe(rgb(THEMES['default-dark'].colors['app-bg0'])); // GitNex Dark's near-black ground
     const keyword = diffRegion(page).locator('.editor.modified .view-line span span').filter({ hasText: /^function$/ }).first();
-    await expect(keyword).toHaveCSS('color', 'rgb(86, 156, 214)'); // dark-plus
+    await expect(keyword).toHaveCSS('color', 'rgb(255, 123, 114)'); // github-dark-default keyword
     await page.keyboard.press('Control+P');
     await page.keyboard.type('>Theme: Darcula');
     await page.keyboard.press('Enter');

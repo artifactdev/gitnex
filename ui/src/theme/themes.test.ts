@@ -31,22 +31,22 @@ function rootDeclarations(): Record<string, string> {
 const luminance = (hex: string) => contrastRatio(hex, '#000000') * 0.05 - 0.05;
 
 describe('themes', () => {
-  it('has exactly the ten built-in themes of spec §12.1, in menu order', () => {
-    expect(THEME_IDS).toEqual(['default-dark', 'light', 'monokai', 'darcula', 'dracula', 'one-dark', 'solarized-dark', 'solarized-light', 'github-dark', 'nord']);
+  it('has exactly the built-in themes of spec §12.1, in menu order', () => {
+    expect(THEME_IDS).toEqual(['default-dark', 'light', 'monokai', 'darcula', 'dracula', 'one-dark', 'solarized-dark', 'solarized-light', 'github-dark', 'nord', 'bearded-arc-blueberry']);
     for (const id of THEME_IDS) expect(THEMES[id].id).toBe(id);
     expect(DEFAULT_THEME_ID).toBe('default-dark');
     expect(isThemeId('nord')).toBe(true);
     expect(isThemeId('solarized')).toBe(false);
   });
 
-  it('pairs each theme with the editor theme named in spec §12.1 (GitHub Dark: github-dark-default, R5)', () => {
+  it('pairs each theme with the editor theme named in spec §12.1 (GitNex Dark and GitHub Dark: github-dark-default)', () => {
     const pairs = Object.fromEntries(THEME_IDS.map((id) => [id, THEMES[id].editorTheme]));
     expect(pairs).toEqual({
-      'default-dark': 'dark-plus', light: 'light-plus', monokai: 'monokai', darcula: 'darcula', dracula: 'dracula',
+      'default-dark': 'github-dark-default', light: 'light-plus', monokai: 'monokai', darcula: 'darcula', dracula: 'dracula',
       'one-dark': 'one-dark-pro', 'solarized-dark': 'solarized-dark', 'solarized-light': 'solarized-light',
-      'github-dark': 'github-dark-default', nord: 'nord',
+      'github-dark': 'github-dark-default', nord: 'nord', 'bearded-arc-blueberry': 'bearded-arc-blueberry',
     });
-    for (const id of THEME_IDS) expect([...SHIKI_BUNDLED_THEMES, 'darcula']).toContain(THEMES[id].editorTheme);
+    for (const id of THEME_IDS) expect([...SHIKI_BUNDLED_THEMES, 'darcula', 'bearded-arc-blueberry']).toContain(THEMES[id].editorTheme);
   });
 
   it.each(THEME_IDS)('%s defines every color token and ten hex lane colors', (id) => {
@@ -108,7 +108,8 @@ describe('themes', () => {
 
   it.each(THEME_IDS)('%s accents carry their text and totals', (id) => {
     const c = THEMES[id].colors;
-    // Default Dark's own white on #4d88ff is 3.3:1, so 3:1 (WCAG's UI-component floor) is the bar.
+    // The accent blue is a filled control behind --text-on-accent, so 3:1 is the bar
+    // (WCAG's UI-component floor); derived buttons deepen it to 4.5:1 where they need to.
     expect(contrastRatio(c['text-on-accent'], c.blue), 'a primary button').toBeGreaterThanOrEqual(3);
     expect(contrastRatio(c['text-on-accent'], c['status-deleted']), "the bell's badge").toBeGreaterThanOrEqual(3);
     expect(contrastRatio(c['text-on-accent'], c['checked-out']), 'the check box').toBeGreaterThanOrEqual(3);
@@ -149,7 +150,7 @@ describe('themes', () => {
   });
 
   it.each(THEME_IDS)('%s lane colors stand out from the background', (id) => {
-    // Default Dark's own darkest lane (#8e00c2) is 2.33:1, so 2:1 is the floor.
+    // A lane is a line rather than text, so 2:1 is the floor on the graph's ground.
     for (const g of THEMES[id].graph) expect(contrastRatio(g, THEMES[id].colors['app-bg0'])).toBeGreaterThanOrEqual(2);
   });
 
@@ -158,48 +159,106 @@ describe('themes', () => {
     for (const k of ['status-added', 'status-modified', 'status-deleted', 'status-renamed', 'status-conflicted'] as const) {
       expect(contrastRatio(t.colors[k], t.colors['panel-bg0']), k).toBeGreaterThanOrEqual(3);
     }
-    // Default Dark keeps white initials on every lane, its 1.6:1 yellow included (1C).
-    if (id === 'default-dark') return;
     const r = resolveColors(t);
     r.graph.forEach((g, i) => expect(contrastRatio(r.laneText[i], g), `initials on lane ${i} ${g}`).toBeGreaterThanOrEqual(3));
   });
 
-  it("Default Dark is exactly 1C's dark theme, every token (tokens.css at 5b5fa4e, the user's K32-K65 samples)", () => {
+  it("GitNex Dark is exactly the exported default theme, every token (the user's 2026-11-05 theme)", () => {
     // One literal copy of the whole theme, so no edit to themes.ts or tokens.css can drift the
-    // hand-tuned look, and no token can go unpinned. The literals the CSS used to hard-code are here too.
+    // default look, and no token can go unpinned.
     expect(THEMES['default-dark']).toEqual({
-      id: 'default-dark', label: 'Default Dark', kind: 'dark', editorTheme: 'dark-plus', laneText: '#ffffff',
-      graph: ['#15a0bf', '#0669f7', '#8e00c2', '#c517b6', '#d90171', '#cd0101', '#f25d2e', '#f2ca33', '#7bd938', '#2ece9d'],
+      id: 'default-dark', label: 'GitNex Dark', kind: 'dark', editorTheme: 'github-dark-default',
+      graph: ['#58a6ff', '#26dce1', '#3fb950', '#db6d28', '#f85149', '#d29922', '#39c5cf', '#f778ba', '#a5d6ff', '#7ee787'],
       colors: {
-        'app-bg0': '#1c1e23', 'panel-bg0': '#262930', 'panel-bg1': '#30343c', 'toolbar-bg0': '#2a2e36',
-        'action-bar-bg': '#33373f', 'tab-bar-bg': '#1f2228', 'file-bar-bg': '#272a31',
-        'text-selected': '#ffffff', 'text-normal': 'rgba(255, 255, 255, 0.75)', 'text-secondary': 'rgba(255, 255, 255, 0.6)', 'text-disabled': 'rgba(255, 255, 255, 0.4)',
+        'app-bg0': '#00020d',
+        'panel-bg0': '#050c18',
+        'panel-bg1': '#121e2e',
+        'toolbar-bg0': '#010409',
+        'action-bar-bg': '#21262d',
+        'tab-bar-bg': '#010409',
+        'file-bar-bg': '#161b22',
+        'text-selected': '#ffffff',
+        'text-normal': '#e6edf3',
+        'text-secondary': '#8d96a0',
+        'text-disabled': '#6e7681',
         'text-on-accent': '#ffffff',
-        'stats-added': '#347d39', 'stats-deleted': '#c93c37',
-        red: '#d9413d', orange: '#de9b43', yellow: '#ecb91c', green: '#5cb85c', blue: '#4d88ff', link: '#40c5ec',
-        'count-blue': '#6d9deb', 'checked-out-row': '#37563e', 'checked-out': '#457c4a', 'selection-bg': '#264f78',
-        'conflict-ours': '#15a0bf', 'conflict-theirs': '#f2ca33', 'conflict-base': '#c517b6',
-        'wip-input-bg': '#16181c', 'wip-input-border': '#282a2d', 'wip-input-placeholder': '#6e6f71',
-        'hover-row': 'rgba(77, 136, 255, 0.1)', 'selected-row': 'rgba(77, 136, 255, 0.2)', 'section-border': 'rgba(255, 255, 255, 0.08)', 'focus-outline': 'rgba(77, 136, 255, 0.6)',
-        'text-row-dimmed': 'rgba(255, 255, 255, 0.2)', 'text-row-dimmed-branch': 'rgba(255, 255, 255, 0.5)', 'sidebar-icon': 'rgba(255, 255, 255, 0.45)', 'avatar-backdrop': '#e6e7ea',
-        'stats-added-bright': '#5cb85c', 'stats-deleted-bright': '#f0625d',
-        'status-added': '#5cb85c', 'status-modified': '#de9b43', 'status-deleted': '#d9413d', 'status-renamed': '#4d88ff', 'status-conflicted': '#b56ee6',
-        'scroll-thumb-bg': 'rgba(255, 255, 255, 0.15)', 'scroll-thumb-hover-bg': 'rgba(255, 255, 255, 0.25)',
-        'control-bg': 'rgba(255, 255, 255, 0.06)', 'control-hover-bg': 'rgba(255, 255, 255, 0.12)', 'image-frame-border': 'rgba(255, 255, 255, 0.22)',
-        'shadow-modal': 'rgba(0, 0, 0, 0.5)', 'shadow-popup': 'rgba(0, 0, 0, 0.45)', 'shadow-tooltip': 'rgba(0, 0, 0, 0.4)', backdrop: 'rgba(0, 0, 0, 0.45)',
-        'node-fill': '#1c1e23', 'node-text': '#ffffff', 'collapse-strip': 'rgba(0, 0, 0, 0.4)',
-        'conflict-ours-tick': '#1c1e23', 'conflict-theirs-tick': '#1c1e23',
-        'diff-inserted-text': 'rgba(92, 184, 92, 0.12)', 'diff-removed-text': 'rgba(217, 65, 61, 0.2)',
-        'diff-inserted-line': 'rgba(92, 184, 92, 0.1)', 'diff-removed-line': 'rgba(217, 65, 61, 0.15)',
+        'stats-added': '#2ea043',
+        'stats-deleted': '#da3633',
+        'red': '#f85149',
+        'orange': '#db6d28',
+        'yellow': '#d29922',
+        'green': '#3fb950',
+        'blue': '#2f81f7',
+        'link': '#58a6ff',
+        'count-blue': '#58a6ff',
+        'checked-out-row': '#1a3a26',
+        'checked-out': '#238636',
+        'selection-bg': '#264f78',
+        'conflict-ours': '#58a6ff',
+        'conflict-theirs': '#d29922',
+        'conflict-base': '#bc8cff',
+        'wip-input-bg': '#010409',
+        'wip-input-border': '#30363d',
+        'wip-input-placeholder': '#6e7681',
+        'hover-row': 'rgba(47, 129, 247, 0.1)',
+        'selected-row': 'rgba(47, 129, 247, 0.2)',
+        'section-border': 'rgba(240, 246, 252, 0.1)',
+        'focus-outline': 'rgba(47, 129, 247, 0.6)',
+        'text-row-dimmed': 'rgba(255, 255, 255, 0.2)',
+        'text-row-dimmed-branch': 'rgba(255, 255, 255, 0.5)',
+        'sidebar-icon': 'rgba(255, 255, 255, 0.45)',
+        'avatar-backdrop': '#e6e7ea',
+        'stats-added-bright': '#3fb950',
+        'stats-deleted-bright': '#f85149',
+        'status-added': '#3fb950',
+        'status-modified': '#db6d28',
+        'status-deleted': '#f85149',
+        'status-renamed': '#2f81f7',
+        'status-conflicted': '#bc8cff',
+        'scroll-thumb-bg': 'rgba(255, 255, 255, 0.15)',
+        'scroll-thumb-hover-bg': 'rgba(255, 255, 255, 0.25)',
+        'control-bg': 'rgba(255, 255, 255, 0.06)',
+        'control-hover-bg': 'rgba(255, 255, 255, 0.12)',
+        'image-frame-border': 'rgba(255, 255, 255, 0.22)',
+        'shadow-modal': 'rgba(0, 0, 0, 0.5)',
+        'shadow-popup': 'rgba(0, 0, 0, 0.45)',
+        'shadow-tooltip': 'rgba(0, 0, 0, 0.4)',
+        'backdrop': 'rgba(0, 0, 0, 0.45)',
+        'node-fill': '#00020d',
+        'node-text': '#ffffff',
+        'collapse-strip': 'rgba(0, 0, 0, 0.4)',
+        'conflict-ours-tick': '#00020d',
+        'conflict-theirs-tick': '#00020d',
+        'diff-inserted-text': 'rgba(63, 185, 80, 0.12)',
+        'diff-removed-text': 'rgba(248, 81, 73, 0.2)',
+        'diff-inserted-line': 'rgba(63, 185, 80, 0.1)',
+        'diff-removed-line': 'rgba(248, 81, 73, 0.15)',
         'diff-diagonal-fill': 'rgba(204, 204, 204, 0.2)',
-        'md-diff-ins-text': 'rgba(92, 184, 92, 0.3)', 'md-diff-del-text': 'rgba(217, 65, 61, 0.3)',
-        'md-diff-ins-block': 'rgba(92, 184, 92, 0.16)', 'md-diff-del-block': 'rgba(217, 65, 61, 0.16)',
-        'forge-gitlab': '#e2432a', 'forge-github': '#6e5494', 'forge-forgejo': '#de6a29', purple: '#a371f7',
-        'switch-on': '#4d88ff', 'switch-off': 'rgba(255, 255, 255, 0.16)',
-        'tg-ink': '#14161a', 'tg-blue': '#5b9cff', 'tg-purple': '#b48cff', 'tg-cyan': '#3fc8d8', 'tg-orange': '#ff9e4a',
-        'tg-yellow': '#f2c94c', 'tg-pink': '#ff7ab8', 'tg-green': '#5fd17f', 'tg-gray': '#a6aab1', 'tg-red': '#ff6b6b',
-        'button-primary': '#4172d6', 'button-warn': '#de9b43', 'button-warn-ink': '#1c1e23',
-        'review-pending': '#ecb91c', 'review-pending-bg': 'rgba(236, 185, 28, 0.14)',
+        'md-diff-ins-text': 'rgba(63, 185, 80, 0.3)',
+        'md-diff-del-text': 'rgba(248, 81, 73, 0.3)',
+        'md-diff-ins-block': 'rgba(63, 185, 80, 0.16)',
+        'md-diff-del-block': 'rgba(248, 81, 73, 0.16)',
+        'forge-gitlab': '#e2432a',
+        'forge-github': '#6e5494',
+        'forge-forgejo': '#de6a29',
+        'purple': '#a371f7',
+        'switch-on': '#2f81f7',
+        'switch-off': 'rgba(255, 255, 255, 0.16)',
+        'tg-ink': '#14161a',
+        'tg-blue': '#5b9cff',
+        'tg-purple': '#b48cff',
+        'tg-cyan': '#3fc8d8',
+        'tg-orange': '#ff9e4a',
+        'tg-yellow': '#f2c94c',
+        'tg-pink': '#ff7ab8',
+        'tg-green': '#5fd17f',
+        'tg-gray': '#a6aab1',
+        'tg-red': '#ff6b6b',
+        'button-primary': '#2a74de',
+        'button-warn': '#b85c22',
+        'button-warn-ink': '#ffffff',
+        'review-pending': '#d29922',
+        'review-pending-bg': 'rgba(210, 153, 34, 0.14)',
       },
     });
   });

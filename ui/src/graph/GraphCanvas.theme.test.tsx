@@ -26,7 +26,7 @@ describe('GraphCanvas theme changes', () => {
   it("redraws with the new theme's node fill and lanes", () => {
     render(<GraphCanvas rows={rows} width={100} height={50} left={0} metrics={METRICS} labeledRows={new Set()} />);
     const first = vi.mocked(drawGraph).mock.lastCall![1];
-    expect(first.nodeFill).toBe('#1c1e23');
+    expect(first.nodeFill).toBe('#00020d');
     expect(first.nodeText).toBe('#ffffff');
     expect(first.stripColor).toBe('rgba(0, 0, 0, 0.4)');
     expect(first.colors).toEqual(THEMES['default-dark'].graph);

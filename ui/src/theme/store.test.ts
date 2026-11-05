@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyTheme, readThemeMirror, resolveColors, THEME_STORAGE_KEY, writeThemeMirror } from './apply';
+import { contrastRatio } from './contrast';
 import { customThemeDef } from './custom';
 import { useTheme } from './store';
 import { COLOR_TOKENS, THEMES } from './themes';
@@ -62,8 +63,11 @@ describe('useTheme', () => {
     });
   });
 
-  it('picks avatar initials per lane by contrast; Default Dark keeps white on every lane', () => {
-    expect(resolveColors(THEMES['default-dark']).laneText).toEqual(Array(10).fill('#ffffff'));
+  it('picks avatar initials per lane by contrast', () => {
+    for (const def of [THEMES['default-dark'], THEMES.darcula]) {
+      const r = resolveColors(def);
+      r.graph.forEach((g, i) => expect(contrastRatio(r.laneText[i], g), `initials on lane ${i} ${g}`).toBeGreaterThanOrEqual(3));
+    }
     const graph = [...THEMES.darcula.graph];
     graph[4] = '#ffffff';
     graph[5] = '#000000';

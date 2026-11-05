@@ -20,23 +20,25 @@ describe('editor themes', () => {
     expect(src).not.toMatch(/from 'shiki\/themes'/);
   });
 
-  it('registers a theme for every ThemeDef, named as it names it, each with its own overlay', async () => {
+  it('registers one Shiki theme per base, named after it, with the first app theme using it', async () => {
+    const first = new Map<string, (typeof THEME_IDS)[number]>();
+    for (const id of THEME_IDS) if (!first.has(THEMES[id].editorTheme)) first.set(THEMES[id].editorTheme, id);
     const regs = await Promise.all(editorThemeRegistrations());
-    expect(regs.map((r) => r.name)).toEqual(THEME_IDS.map((id) => THEMES[id].editorTheme));
-    expect(new Set(regs.map((r) => r.name)).size).toBe(THEME_IDS.length);
-    regs.forEach((r, i) => {
-      const def = THEMES[THEME_IDS[i]];
+    expect(regs.map((r) => r.name)).toEqual([...first.keys()]);
+    expect(new Set(regs.map((r) => r.name)).size).toBe(first.size);
+    regs.forEach((r) => {
+      const def = THEMES[first.get(r.name!)!];
       expect(r.colors).toMatchObject(editorColors(def));
       expect(r.colors?.['editor.background']).toBe(def.colors['app-bg0'].toLowerCase());
     });
   });
 
-  it('derives the overlay from the theme tokens, and Default Dark keeps its tuned values', () => {
+  it('derives the overlay from the theme tokens, and GitNex Dark keeps its tuned values', () => {
     const d = editorColors(THEMES['default-dark']);
-    expect(d['editor.background']).toBe('#1c1e23');
+    expect(d['editor.background']).toBe('#00020d');
     expect(d['scrollbarSlider.background']).toBe('#ffffff26');
     expect(d['scrollbarSlider.hoverBackground']).toBe('#ffffff40');
-    expect(d['diffEditor.removedTextBackground']).toBe('#d9413d33');
+    expect(d['diffEditor.removedTextBackground']).toBe('#f8514933');
     expect(editorColors(THEMES.darcula)['editor.background']).toBe(THEMES.darcula.colors['app-bg0'].toLowerCase());
     expect(editorColors(THEMES.light)['editor.selectionBackground']).toBe(THEMES.light.colors['selection-bg'].toLowerCase());
   });
@@ -45,7 +47,7 @@ describe('editor themes', () => {
     act(() => useTheme.getState().set(THEMES['default-dark']));
     const setTheme = vi.fn();
     const unbind = bindEditorTheme(setTheme);
-    expect(setTheme).toHaveBeenLastCalledWith('dark-plus');
+    expect(setTheme).toHaveBeenLastCalledWith('github-dark-default');
     act(() => useTheme.getState().set(THEMES.darcula));
     expect(setTheme).toHaveBeenLastCalledWith('darcula');
     act(() => useTheme.getState().set({ ...THEMES.darcula, graph: ['#123456', ...THEMES.darcula.graph.slice(1)] }));

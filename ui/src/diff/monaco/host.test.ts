@@ -234,7 +234,7 @@ vi.mock('./setup', () => {
 const gate = vi.hoisted(() => ({ wait: null as Promise<void> | null }));
 vi.mock('../highlight/client', () => ({
   highlightClient: async () => ({
-    themes: [{ name: 'dark-plus', theme: { type: 'dark', colors: { 'editor.background': '#1e1e1e' }, settings: [] }, colors: [] }],
+    themes: [{ name: 'github-dark-default', theme: { type: 'dark', colors: { 'editor.background': '#1e1e1e' }, settings: [] }, colors: [] }],
     loadLanguage: async (lang: string) => {
       if (gate.wait) await gate.wait;
       return [lang];
@@ -294,9 +294,9 @@ describe('MonacoHost', () => {
     const { host, state } = await fresh();
     host.attachFile(document.createElement('div'));
     await host.showFile({ path: 'LICENSE', text: 'MIT\n', language: 'plaintext', wordWrap: false });
-    expect(state.defined.has('dark-plus')).toBe(true);
-    expect(state.themeAtCreate).toEqual(['dark-plus']);
-    expect(state.applied).toBe('dark-plus');
+    expect(state.defined.has('github-dark-default')).toBe(true);
+    expect(state.themeAtCreate).toEqual(['github-dark-default']);
+    expect(state.applied).toBe('github-dark-default');
   });
 
   it('creates the diff editor in the Shiki dark theme too, for plain text and highlighted files', async () => {
@@ -304,8 +304,8 @@ describe('MonacoHost', () => {
     host.attachDiff(document.createElement('div'));
     await host.showDiff(diffReq('notes.txt'));
     await host.showDiff(diffReq('a.php', 'php'));
-    expect(state.themeAtCreate).toEqual(['dark-plus']);
-    expect(state.applied).toBe('dark-plus');
+    expect(state.themeAtCreate).toEqual(['github-dark-default']);
+    expect(state.applied).toBe('github-dark-default');
   });
 
   it('routes right-clicks to the 1C handler with its own path per editor, and blocks the native menu', async () => {

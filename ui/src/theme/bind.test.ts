@@ -98,7 +98,7 @@ describe('bindThemeToSettings', () => {
     settle({ theme: mine.id, customThemes: [mine] });
     expect(mirror()).toEqual({ id: mine.id, kind: 'dark', bg: '#202020', custom: mine });
     settle({ theme: 'default-dark' });
-    expect(mirror()).toEqual({ id: 'default-dark', kind: 'dark', bg: '#1c1e23' });
+    expect(mirror()).toEqual({ id: 'default-dark', kind: 'dark', bg: '#00020d' });
   });
 
   it('on upgrade: the old lane overrides become the current custom theme, the same lanes as before, at first paint and after', () => {

@@ -28,18 +28,18 @@ describe('editor theme colours', () => {
   });
 
   it("diff colours: brick red at 20% for changed text, 15% for whole lines; green toned down (H8)", () => {
-    // Red: #D9413D at 20% for changed text, line backgrounds faded a further 25%. Green (H8): a
+    // Red: #f85149 at 20% for changed text, line backgrounds faded a further 25%. Green (H8): #3fb950, a
     // whole added block stacks Monaco's line-insert and its whole-line char-insert, so 10% + 12%
     // composite to ~21% for the added block, instead of 32%.
-    expect(EDITOR_COLORS['diffEditor.insertedTextBackground']).toBe('#5cb85c1f');
-    expect(EDITOR_COLORS['diffEditor.removedTextBackground']).toBe('#d9413d33');
-    expect(EDITOR_COLORS['diffEditor.insertedLineBackground']).toBe('#5cb85c1a');
-    expect(EDITOR_COLORS['diffEditor.removedLineBackground']).toBe('#d9413d26');
-    expect(EDITOR_COLORS['diffEditorGutter.insertedLineBackground']).toBe('#5cb85c1a');
-    expect(EDITOR_COLORS['diffEditorGutter.removedLineBackground']).toBe('#d9413d26');
+    expect(EDITOR_COLORS['diffEditor.insertedTextBackground']).toBe('#3fb9501f');
+    expect(EDITOR_COLORS['diffEditor.removedTextBackground']).toBe('#f8514933');
+    expect(EDITOR_COLORS['diffEditor.insertedLineBackground']).toBe('#3fb9501a');
+    expect(EDITOR_COLORS['diffEditor.removedLineBackground']).toBe('#f8514926');
+    expect(EDITOR_COLORS['diffEditorGutter.insertedLineBackground']).toBe('#3fb9501a');
+    expect(EDITOR_COLORS['diffEditorGutter.removedLineBackground']).toBe('#f8514926');
     // The overview ruler and minimap stay bright (the user likes them).
-    expect(EDITOR_COLORS['diffEditorOverview.insertedForeground']).toBe('#5cb85c99');
-    expect(EDITOR_COLORS['diffEditorOverview.removedForeground']).toBe('#d9413d99');
+    expect(EDITOR_COLORS['diffEditorOverview.insertedForeground']).toBe('#3fb95099');
+    expect(EDITOR_COLORS['diffEditorOverview.removedForeground']).toBe('#f8514999');
   });
 
   it("layers them over the Shiki theme's own colours, keeping the rest of the theme", () => {
@@ -47,7 +47,7 @@ describe('editor theme colours', () => {
     const t = withEditorColors(base);
     expect(t.name).toBe('dark-plus');
     expect(t.tokenColors).toBe(base.tokenColors);
-    expect(t.colors['editor.background']).toBe('#1c1e23');
+    expect(t.colors['editor.background']).toBe('#00020d');
     expect(t.colors['editor.inactiveSelectionBackground']).toBe('#264f78');
     expect(base.colors['editor.inactiveSelectionBackground']).toBe('#3A3D41');
   });

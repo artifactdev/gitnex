@@ -92,6 +92,10 @@ workflow sets it.
    `NOTICE` files with the bundled ones' upstream license texts. Those two packages are
    devDependencies pinned to the versions the installed Shiki was built from, and the build
    fails if the grammars don't match them.
+   - **Themes.** GitNex's own theme data (`themes.ts`, `tokens.css`) is MIT. The built-in Bearded
+     Arc Blueberry theme follows the palette of
+     [Bearded Theme](https://github.com/BeardedBear/bearded-theme) (GPL-3.0), used as a colour
+     scheme and credited in `ui/src/theme/bearded.ts`; its code isn't copied.
 
 `.deb` packaging takes the files from `target/licenses/` and `ui/dist/licenses/` (the `files`
 map in `crates/gitnex-app/tauri.conf.json`); `scripts/check-deb.sh`, `scripts/package-arch.sh`,

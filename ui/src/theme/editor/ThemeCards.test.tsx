@@ -58,7 +58,7 @@ describe('theme cards', () => {
 
   it('arrows move the focus, Space or Enter selects, a click selects', () => {
     render(<ThemeCards />);
-    const first = radio('Default Dark');
+    const first = radio('GitNex Dark');
     expect(first).toHaveAttribute('tabindex', '0');
     act(() => first.focus());
     fireEvent.keyDown(first, { key: 'ArrowRight' });
@@ -76,10 +76,10 @@ describe('theme cards', () => {
     expect(settings().theme).toBe('nord');
   });
 
-  it('shows an unknown saved theme as Default Dark', () => {
+  it('shows an unknown saved theme as GitNex Dark', () => {
     use({ theme: 'no-such-theme' });
     render(<ThemeCards />);
-    expect(radio('Default Dark')).toHaveAttribute('aria-checked', 'true');
+    expect(radio('GitNex Dark')).toHaveAttribute('aria-checked', 'true');
   });
 });
 
@@ -209,7 +209,7 @@ describe('the theme dropdown (search results)', () => {
     use({ theme: 'default-dark', customThemes: [mine] });
     render(<><span id="label-theme">Theme</span><ThemeSelect /><ContextMenu /></>);
     const button = screen.getByRole('button', { name: 'Theme' });
-    expect(button).toHaveTextContent('Default Dark');
+    expect(button).toHaveTextContent('GitNex Dark');
     expect(document.querySelector('select')).toBeNull();
     fireEvent.click(button);
     expect(screen.getAllByRole('menuitem').map((r) => r.textContent)).toEqual([...THEME_IDS.map((id) => THEMES[id].label), 'Mine']);

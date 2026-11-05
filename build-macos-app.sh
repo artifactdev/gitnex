@@ -84,7 +84,7 @@ echo "build-macos-app: building the $profile bundle (build directory: $build_dir
     CARGO_TARGET_DIR="$build_dir" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     cargo tauri build "${tauri_args[@]}" \
       --config "$bundle_config" \
-      "${runner_args[@]}")
+      ${runner_args[@]+"${runner_args[@]}"})
 
 built=$build_dir/$profile/bundle/macos/GitNex.app
 [ -d "$built" ] || fail "the build made no $built"

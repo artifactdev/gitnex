@@ -11,6 +11,10 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
   copies GitVolt's profiles, settings, undo history and token files to GitNex's folders and keyring
   service; the old folders stay as they are. The update repository stays `artifactdev/gitvolt`,
   and the internal crates and binary are `gitnex-*` / `gitnex`.
+- **GitNex Dark is the default dark theme.** GitHub Dark's palette on near-black grounds, with a
+  cyan second lane. The theme picker lists it as GitNex Dark; a saved `default-dark` keeps it.
+- **Bearded Arc Blueberry.** A new built-in dark theme using the Arc Blueberry palette of
+  [Bearded Theme](https://github.com/BeardedBear/bearded-theme).
 - **Several accounts on one forge.** Settings › Accounts can hold more than one GitHub,
   GitLab or Forgejo account per host (a private account and a work one, say), each with its own
   token, status and avatar. Add another account with the same host and a different user's token;
