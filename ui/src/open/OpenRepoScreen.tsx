@@ -1,4 +1,4 @@
-import { ArrowDownAZ, Clock, FolderOpen, FolderTree, GitBranch, List, Pin, PinOff, Plus, RefreshCw, TreePine, X } from 'lucide-react';
+import { ArrowDownAZ, Clock, Download, FolderOpen, FolderTree, GitBranch, List, Pin, PinOff, Plus, RefreshCw, TreePine, X } from 'lucide-react';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api, errorMessage } from '../api/client';
 import type { ScannedRepo } from '../api/gen/ScannedRepo';
@@ -6,11 +6,13 @@ import type { TabState } from '../api/gen/TabState';
 import { useAppInfo, useTilde } from '../app/appInfo';
 import { openPathInTab, useRuntime } from '../app/runtime';
 import { useAppState } from '../app/state';
+import { useModalKeys } from '../app/modalKeys';
 import { removeRecent, togglePinRecent } from '../app/tabs';
 import { relativeTime } from '../format/relative';
 import { HoverTooltip } from '../ui/HoverTooltip';
 import { ClearableInput } from '../ui/ClearableInput';
 import { CloneForm } from './CloneForm';
+import { CreateRepoDialog } from './CreateRepoDialog';
 import { folderLabels, folderOf } from './folderLabels';
 import { useOpenUi } from './openUi';
 import './open.css';
@@ -183,9 +185,16 @@ export function OpenRepoScreen({ tab }: { tab: TabState }) {
   const focusClone = useOpenUi((s) => s.focusClone === tab.id);
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const cloneRef = useModalKeys<HTMLDivElement>(cloneOpen, () => setCloneOpen(false));
   // The recent entry whose open just failed: the error offers to drop it.
   const [failedRecent, setFailedRecent] = useState<string | null>(null);
-  useEffect(() => { if (focusClone) useOpenUi.getState().consume(); }, [focusClone]);
+  useEffect(() => {
+    if (!focusClone) return;
+    setCloneOpen(true);
+    useOpenUi.getState().consume();
+  }, [focusClone]);
   // The home folder, for showing paths as ~/…
   useEffect(() => { void useAppInfo.getState().load().catch(() => undefined); }, []);
   const tilde = useTilde();
@@ -206,10 +215,29 @@ export function OpenRepoScreen({ tab }: { tab: TabState }) {
       setFailedRecent(useAppState.getState().profile.recent.some((r) => r.path === path) ? path : null);
     }
   };
+  const openFolder = async () => {
+    try {
+      const picked = await api.pickFolder(reposFolder);
+      if (picked) await open(picked);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
 
   return (
     <div className="open-screen">
       {!reposFolder && <ReposFolderBanner />}
+      <div className="open-head">
+        <div>
+          <h1>Repositories</h1>
+          <p className="dim">Open a folder, clone from a URL or your integrations, or create a new repository.</p>
+        </div>
+        <div className="open-actions">
+          <button type="button" className="open-btn primary" onClick={() => void openFolder()} aria-label="Open a repository"><FolderOpen size={14} aria-hidden /> Open</button>
+          <button type="button" className="open-btn" onClick={() => setCloneOpen(true)} aria-label="Clone a repository"><Download size={14} aria-hidden /> Clone</button>
+          <button type="button" className="open-btn" onClick={() => setCreateOpen(true)} aria-label="Create a repository"><Plus size={14} aria-hidden /> Create</button>
+        </div>
+      </div>
       {error && (
         <p className="open-error" role="alert">
           {error}
@@ -245,32 +273,22 @@ export function OpenRepoScreen({ tab }: { tab: TabState }) {
           )}
           </div>
         </section>
-        <div className="open-col">
-        <section className="open-section" aria-labelledby="open-folder">
-          <h2 id="open-folder">Open</h2>
-          <button
-            type="button"
-            className="open-btn primary"
-            onClick={async () => {
-              try {
-                const picked = await api.pickFolder(reposFolder);
-                if (picked) await open(picked);
-              } catch (e) {
-                setError(errorMessage(e));
-              }
-            }}
-          >
-            <FolderOpen size={14} /> Open directory…
-          </button>
-          <p className="dim">Any directory inside a repository opens that repository; a linked worktree opens as its own tab.</p>
-        </section>
-        <section className="open-section" aria-labelledby="open-clone">
-          <h2 id="open-clone">Clone</h2>
-          <CloneForm tabId={tab.id} autoFocus={focusClone} />
-        </section>
-        </div>
         <YourRepos folders={folders} onOpen={(p) => void open(p)} />
       </div>
+      {cloneOpen && (
+        <div className="modal-backdrop" onPointerDown={() => setCloneOpen(false)}>
+          <div ref={cloneRef} className="modal open-modal open-clone-modal" role="dialog" aria-modal="true" aria-labelledby="clone-repo-title" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="open-modal-head">
+              <h2 id="clone-repo-title">Clone a repository</h2>
+              <button type="button" className="open-icon-btn" aria-label="Close clone repository" onClick={() => setCloneOpen(false)}><X size={14} /></button>
+            </div>
+            <div className="open-modal-body">
+              <CloneForm tabId={tab.id} autoFocus onCloned={() => setCloneOpen(false)} />
+            </div>
+          </div>
+        </div>
+      )}
+      {createOpen && <CreateRepoDialog tabId={tab.id} startFolder={reposFolder ?? ''} onClose={() => setCreateOpen(false)} />}
     </div>
   );
 }

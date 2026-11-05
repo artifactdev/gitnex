@@ -5,6 +5,7 @@ const rt = vi.hoisted(() => ({ openPathInTab: vi.fn(async () => undefined) }));
 vi.mock('../app/runtime', async (orig) => ({ ...(await orig<typeof import('../app/runtime')>()), openPathInTab: rt.openPathInTab }));
 const api = vi.hoisted(() => ({
   clone: vi.fn(),
+  initRepo: vi.fn(),
   pickFolder: vi.fn(),
   scanFolders: vi.fn(),
   appInfo: vi.fn(async () => ({ appVersion: 'x', build: null, gitVersion: 'y', installKind: 'unpackaged', home: '/home/u' })),
@@ -20,6 +21,7 @@ import { OpenRepoScreen } from './OpenRepoScreen';
 
 const tab = { id: 't1', kind: 'open' as const, path: null, alias: null };
 const recent = (name: string, pinned: boolean, openedAt: number) => ({ path: `/r/${name}`, name, pinned, openedAt });
+const openClone = () => fireEvent.click(screen.getByRole('button', { name: 'Clone a repository' }));
 
 describe('OpenRepoScreen', () => {
   beforeEach(() => {
@@ -59,6 +61,7 @@ describe('OpenRepoScreen', () => {
   it('the clone destination starts at the default repos folder and follows the URL until edited', () => {
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos/' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     const dest = screen.getByLabelText('Destination') as HTMLInputElement;
     expect(dest.value).toBe('/home/u/repos/');
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/proj.git' } });
@@ -72,6 +75,7 @@ describe('OpenRepoScreen', () => {
     api.pickFolder.mockResolvedValue('/chosen');
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     const dest = screen.getByLabelText('Destination') as HTMLInputElement;
     expect(dest.value).toBe('/home/u/repos');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose destination folder' })); });
@@ -82,6 +86,7 @@ describe('OpenRepoScreen', () => {
     api.pickFolder.mockResolvedValue('/chosen');
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/proj.git' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose destination folder' })); });
     expect(api.pickFolder).toHaveBeenCalledWith('/home/u/repos');
@@ -98,12 +103,13 @@ describe('OpenRepoScreen', () => {
     api.clone.mockResolvedValue({ id: 1, path: '/home/u/repos/widget', name: 'widget' });
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     fireEvent.change(screen.getByLabelText('Search repositories'), { target: { value: 'widget' } });
     const hit = await screen.findByRole('button', { name: 'Clone alice/widget' });
     expect(api.forgeSearchRepos).toHaveBeenCalledWith('widget');
     await act(async () => { fireEvent.click(hit); });
     expect(api.clone).toHaveBeenCalledWith('git@gitlab.example.com:alice/widget.git', '/home/u/repos/widget');
-    expect((screen.getByLabelText('Repository URL') as HTMLInputElement).value).toBe('git@gitlab.example.com:alice/widget.git');
+    expect(screen.queryByLabelText('Repository URL')).toBeNull();
     expect(rt.openPathInTab).toHaveBeenCalledWith('/home/u/repos/widget', 't1');
   });
 
@@ -120,6 +126,7 @@ describe('OpenRepoScreen', () => {
     ]);
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     fireEvent.change(screen.getByLabelText('Search repositories'), { target: { value: 'repo' } });
     await screen.findByRole('button', { name: 'Clone octo-org/gadget' });
     expect(screen.getByRole('heading', { name: 'GitHub · octocat@github.com' })).toBeTruthy();
@@ -128,10 +135,46 @@ describe('OpenRepoScreen', () => {
     expect(screen.getByRole('button', { name: 'Clone alice/other' })).toBeTruthy();
   });
 
+  it('the Open action picks a folder and opens it', async () => {
+    api.pickFolder.mockResolvedValue('/picked');
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
+    render(<OpenRepoScreen tab={tab} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open a repository' })); });
+    expect(api.pickFolder).toHaveBeenCalledWith('/home/u/repos');
+    expect(rt.openPathInTab).toHaveBeenCalledWith('/picked', 't1');
+  });
+
+  it('Create makes a new local repository and opens it', async () => {
+    api.initRepo.mockResolvedValue({ id: 9, path: '/home/u/repos/new', name: 'new' });
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
+    render(<OpenRepoScreen tab={tab} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a repository' }));
+    expect(screen.getByRole('dialog', { name: 'Create a repository' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Repository name'), { target: { value: 'new' } });
+    expect(screen.getByText(/Full path:/).textContent).toContain('/home/u/repos/new');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create repository' })); });
+    expect(api.initRepo).toHaveBeenCalledWith('/home/u/repos/new', 'main', true);
+    expect(rt.openPathInTab).toHaveBeenCalledWith('/home/u/repos/new', 't1');
+    expect(screen.queryByRole('dialog', { name: 'Create a repository' })).toBeNull();
+  });
+
+  it('Create can skip the README, but the empty initial commit still creates the branch', async () => {
+    api.initRepo.mockResolvedValue({ id: 10, path: '/home/u/repos/empty', name: 'empty' });
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
+    render(<OpenRepoScreen tab={tab} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a repository' }));
+    fireEvent.change(screen.getByLabelText('Repository name'), { target: { value: 'empty' } });
+    fireEvent.click(screen.getByLabelText('Initialize with a README.md'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create repository' })); });
+    expect(api.initRepo).toHaveBeenCalledWith('/home/u/repos/empty', 'main', false);
+    expect(rt.openPathInTab).toHaveBeenCalledWith('/home/u/repos/empty', 't1');
+  });
+
   it('a failed clone shows its error inline and re-enables the form', async () => {
     api.clone.mockRejectedValue({ kind: 'Io', message: 'destination exists' });
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'file:///o.git' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clone' })); });
     expect((await screen.findByRole('alert')).textContent).toBe('destination exists');
@@ -143,6 +186,7 @@ describe('OpenRepoScreen', () => {
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos', tabs: [tab], activeTab: 't1' } });
     if (kind) api.clone.mockRejectedValue({ kind, message: 'raw' });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'file:///o.git' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clone' })); });
   };
@@ -155,6 +199,7 @@ describe('OpenRepoScreen', () => {
   it('an invalid URL or relative destination disables Clone and says why', () => {
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/r' } });
     render(<OpenRepoScreen tab={tab} />);
+    openClone();
     const clone = screen.getByRole('button', { name: 'Clone' }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'nonsense' } });
     expect(screen.getByRole('alert').textContent).toMatch(/Not a repository URL/);
@@ -188,7 +233,7 @@ describe('OpenRepoScreen', () => {
     render(<OpenRepoScreen tab={tab} />);
     expect((await screen.findByRole('alert')).textContent).toBe("Couldn't scan: permission denied");
     expect(screen.queryByText(/No repositories found/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Open directory/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open a repository' }));
     await waitFor(() => expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain('no portal'));
   });
 

@@ -133,7 +133,9 @@ checksums. After that, GitVolt updates itself (see [Updates](#updates)).
   group them; a group's chip collapses it, moves it, or saves and closes it to reopen later.
 - **Clone** into a folder you pick: GitVolt makes a folder named after the repository inside it.
   Or search your own repositories across all configured GitHub, GitLab and Forgejo accounts,
-  grouped by integration and account, and clone one straight there.
+  grouped by integration and account, and clone one straight there. The Open screen puts Your
+  repositories and Recent side by side, with Open, Clone and Create in its header; Create makes
+  a new local repository with `git init`, an optional README.md and an initial commit.
 - **Git LFS.** Diffs, File View and File History show an LFS file's real contents, never its
   pointer, with **Download** for one that isn't local yet. Pull, fetch, and track or stop
   tracking a file type from a file's menu.

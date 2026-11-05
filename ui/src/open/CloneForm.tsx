@@ -13,7 +13,7 @@ import { RepoSearch } from './RepoSearch';
 
 /** Spec §13: the URL, a destination that follows it until edited, progress, Cancel, inline errors.
  * The folder picker chooses the parent: the repository goes into a new folder named after it. */
-export function CloneForm({ tabId, autoFocus }: { tabId: string; autoFocus: boolean }) {
+export function CloneForm({ tabId, autoFocus, onCloned }: { tabId: string; autoFocus: boolean; onCloned?: () => void }) {
   const reposFolder = useAppState((s) => s.profile.reposFolder);
   const [url, setUrl] = useState('');
   const [dest, setDest] = useState('');
@@ -44,6 +44,7 @@ export function CloneForm({ tabId, autoFocus }: { tabId: string; autoFocus: bool
       // result then opens in a tab of its own instead of applying to a dead tab id.
       const here = useAppState.getState().profile.tabs.find((t) => t.id === tabId);
       await openPathInTab(repo.path, here?.kind === 'open' ? tabId : undefined);
+      onCloned?.();
     } catch (e) {
       const kind = (e as GbError | null)?.kind;
       setError(kind === 'AuthFailed' ? 'Authentication failed or was cancelled' : kind === 'Cancelled' ? 'Clone cancelled' : errorMessage(e));

@@ -304,6 +304,10 @@ export const api = {
   scanFolders: (roots: string[], refresh: boolean) => call<ScannedRepo[]>({ method: 'scanFolders', params: { roots, refresh } }),
   /** Clones `url` into the absolute `dest` (spec §13); the op's label is `dest`. */
   clone: (url: string, dest: string) => call<RepoSummary>({ method: 'clone', params: { url, dest } }),
+  /** `git init` a new repository at the absolute `path` (the folder must be new or empty) and
+   * open it; `branch` empty follows git's default. `readme`: write and commit a README.md;
+   * either way the first commit creates the branch. */
+  initRepo: (path: string, branch: string | null, readme: boolean) => call<RepoSummary>({ method: 'initRepo', params: { path, branch, readme } }),
   suggestReposFolder: () => call<string | null>({ method: 'suggestReposFolder' }),
   /** `git fetch --all` (spec §15), or one `remote` (a remote just added, spec #4). `background`: GitVolt's own timer, which never prompts. */
   fetch: (repo: number, background: boolean, remote?: string, mrHead?: MrHead) => call<FetchOutcome>({ method: 'fetch', params: remote === undefined ? { repo, background } : mrHead ? { repo, background, remote, mrHead } : { repo, background, remote } }),

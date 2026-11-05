@@ -8,7 +8,7 @@ use crate::details::{commit_details, read_commit, remotes};
 use crate::diff::{file_list, DiffSpec};
 use crate::error::{GbError, GbErrorKind};
 use crate::events::{AppEvent, EventBus};
-use crate::git::GitCli;
+use crate::git::{GitCli, GitInvocation};
 use crate::links::{validate_web_url, UrlOpener};
 use crate::log::CommandLog;
 use crate::openers::chooser::Chooser;
@@ -325,6 +325,11 @@ pub enum Request {
     SubmoduleRemove { repo: u32, worktree: String, path: String },
     /// Clones `url` into the absolute `dest` (spec §13) and opens it: `RepoSummary`.
     Clone { url: String, dest: String },
+    /// `git init` a new repository at the absolute `path` and opens it: `RepoSummary`. The
+    /// folder must not exist yet or be empty. `branch`: the initial branch (`None` or empty:
+    /// git's own default). `readme`: write and commit a `README.md`; without it the initial
+    /// commit is empty. Either way the first commit creates the branch.
+    InitRepo { path: String, branch: Option<String>, #[serde(default)] readme: bool },
     /// Every remote with its redacted URL, and the main worktree of a linked one: `RepoInfoPayload`.
     RepoInfo { repo: u32 },
     /// Branches, remotes, worktrees, stashes, tags and submodules (spec §6.4): `SidebarPayload`.
@@ -1372,7 +1377,7 @@ impl Request {
             // --- end 4A T7 ---
             Request::SubmoduleUpdate { .. } | Request::SubmoduleSync { .. } | Request::SubmoduleAdd { .. } | Request::SubmoduleRemove { .. } => true,
             Request::Submodules { .. } => false,
-            Request::Fetch { .. } | Request::DropCompareRefs { .. } | Request::Clone { .. } | Request::RemoveIndexLock { .. } => true,
+            Request::Fetch { .. } | Request::DropCompareRefs { .. } | Request::Clone { .. } | Request::InitRepo { .. } | Request::RemoveIndexLock { .. } => true,
             Request::WriteWorktreeFile { .. } | Request::CreateWorktreeFile { .. } | Request::ApplySuggestion { .. } => true,
             // 2B T1.
             Request::Stage { .. } | Request::Unstage { .. } | Request::StageAll { .. } | Request::UnstageAll { .. } => true,
@@ -2597,6 +2602,7 @@ impl Api {
                 to_json(())
             }
             Request::OpenRepo { path } => to_json(self.open_repo(&path).await?),
+            Request::InitRepo { path, branch, readme } => to_json(self.init_repo(&path, branch, readme).await?),
             Request::Graph { repo, limit, pin, rescan, active, view } => {
                 let h = self.handle(repo)?;
                 let mut opts = self.build_options(&h, limit, pin, active, view).await?;
@@ -3772,6 +3778,40 @@ impl Api {
         Ok(fresh)
     }
 
+    pub(crate) async fn init_repo(&self, path: &str, branch: Option<String>, readme: bool) -> Result<RepoSummary, GbError> {
+        let dir = PathBuf::from(path);
+        if !dir.is_absolute() {
+            return Err(GbError::new(GbErrorKind::InvalidInput, "The repository path must be absolute"));
+        }
+        if dir.join(".git").exists() {
+            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} is already a Git repository", dir.display())));
+        }
+        if dir.exists() && std::fs::read_dir(&dir)?.next().is_some() {
+            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} isn't empty: choose a new folder", dir.display())));
+        }
+        std::fs::create_dir_all(&dir)?;
+        let mut args = vec!["init".to_string(), "-q".to_string()];
+        if let Some(branch) = branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+            args.push("-b".to_string());
+            args.push(branch.to_string());
+        }
+        self.cli.run(GitInvocation::new(&dir, args)).await?;
+        // The first commit is what creates the branch: `git init -b main` alone leaves an unborn
+        // HEAD. The README is the usual first file; without it the commit is intentionally empty.
+        if readme {
+            let name = dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "repository".to_string());
+            std::fs::write(dir.join("README.md"), format!("# {name}\n"))?;
+            self.cli.run(GitInvocation::new(&dir, ["add", "--", "README.md"])).await?;
+        }
+        let mut commit = vec!["commit".to_string(), "-q".to_string()];
+        if !readme {
+            commit.push("--allow-empty".to_string());
+        }
+        commit.extend(["-m".to_string(), "Initial commit".to_string()]);
+        self.cli.run(GitInvocation::new(&dir, commit)).await?;
+        self.open_repo(&dir.display().to_string()).await
+    }
+
     pub(crate) async fn open_repo(&self, path: &str) -> Result<RepoSummary, GbError> {
         self.git_version().await?;
         let repo = gix::ThreadSafeRepository::discover_opts(path, Default::default(), discover_options())
@@ -4100,6 +4140,39 @@ mod tests {
         let graph = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
         assert_eq!(graph["rows"].as_array().unwrap().len(), 10);
         assert_eq!(graph["rows"][0]["kind"], "wip", "the open worktree's WIP is row 0");
+    }
+
+    #[tokio::test]
+    async fn init_repo_creates_an_empty_repository_and_refuses_a_non_empty_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let api = api();
+        let dir = data.path().join("new");
+        let dir_text = dir.display().to_string();
+        let init = |path: String, readme: bool| {
+            req(serde_json::json!({"method": "initRepo", "params": {"path": path, "branch": "main", "readme": readme}}))
+        };
+        let opened = api.dispatch(init(dir_text.clone(), true)).await.unwrap();
+        assert_eq!(opened["name"].as_str(), Some("new"));
+        let canonical = crate::platform::fs::canonicalize(&dir).unwrap();
+        let canonical_text = canonical.display().to_string();
+        assert_eq!(opened["path"].as_str(), Some(canonical_text.as_str()));
+        assert!(dir.join(".git").is_dir());
+        assert_eq!(std::fs::read_to_string(dir.join("README.md")).unwrap(), "# new\n");
+        assert!(dir.join(".git/refs/heads/main").is_file(), "the initial commit created the branch");
+        let again = api.dispatch(init(dir_text, true)).await.unwrap_err();
+        assert_eq!(again.kind, GbErrorKind::InvalidInput);
+        // Without the README the initial commit is empty, but the branch still exists.
+        let empty = data.path().join("empty");
+        api.dispatch(init(empty.display().to_string(), false)).await.unwrap();
+        assert!(!empty.join("README.md").exists());
+        assert!(empty.join(".git/refs/heads/main").is_file(), "an empty initial commit creates the branch too");
+        let full = data.path().join("full");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("x"), "x").unwrap();
+        let not_empty = api.dispatch(init(full.display().to_string(), true)).await.unwrap_err();
+        assert!(not_empty.message.contains("isn't empty"), "{}", not_empty.message);
+        let relative = api.dispatch(init("relative/new".into(), true)).await.unwrap_err();
+        assert_eq!(relative.kind, GbErrorKind::InvalidInput);
     }
 
     #[tokio::test]
@@ -5727,7 +5800,7 @@ mod tests {
     }
 
     /// The methods that write (`is_write`), which the never-write test leaves out.
-    const WRITE_METHODS: &[&str] = &["fetch", "dropCompareRefs", "clone", "testWrite", "undo", "redo", "undoEntry","applyKeptStash", "removeIndexLock", "stage", "unstage", "stageAll", "unstageAll", "stagingUndo", "stagingRedo", "writeWorktreeFile", "createWorktreeFile", "applySuggestion", "commit", "editHeadMessage", "settlePaused", "worktreeAdd", "worktreeRemove", "deleteBranch", "stagePatch", "createBranch", "renameBranch", "setUpstream", "push",
+    const WRITE_METHODS: &[&str] = &["fetch", "dropCompareRefs", "clone", "initRepo", "testWrite", "undo", "redo", "undoEntry","applyKeptStash", "removeIndexLock", "stage", "unstage", "stageAll", "unstageAll", "stagingUndo", "stagingRedo", "writeWorktreeFile", "createWorktreeFile", "applySuggestion", "commit", "editHeadMessage", "settlePaused", "worktreeAdd", "worktreeRemove", "deleteBranch", "stagePatch", "createBranch", "renameBranch", "setUpstream", "push",
         // 4A T7
         "addRemote", "removeRemote", "switchRemoteToSsh", "switchRemoteBack",
         "submoduleUpdate", "submoduleSync", "submoduleAdd", "submoduleRemove",
@@ -5793,6 +5866,7 @@ mod tests {
             json!({"method": "submoduleAdd", "params": {"repo": id, "worktree": wt, "url": "", "path": "vendor/x"}}),
             json!({"method": "submoduleRemove", "params": {"repo": id, "worktree": wt, "path": "nope"}}),
             json!({"method": "clone", "params": {"url": "https://example.com/x.git", "dest": "/nonexistent/x"}}),
+            json!({"method": "initRepo", "params": {"path": "/nonexistent/init", "branch": "main", "readme": true}}),
             json!({"method": "testWrite", "params": {"repo": id, "worktree": wt, "intent": {"op": "barrier", "label": "x"}}}),
             // Undo / redo (2A T10).
             json!({"method": "undo", "params": {"repo": id, "worktree": wt, "entry": 1}}),

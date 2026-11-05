@@ -21,6 +21,7 @@ const WHAT: Record<NotInDemoMethod, string> = {
   submoduleAdd: 'adding submodules',
   submoduleRemove: 'removing submodules',
   clone: 'cloning',
+  initRepo: 'creating a repository',
   pickFolder: 'folders on your disk',
   saveExport: 'saving files to your disk',
   testWrite: 'test writes',

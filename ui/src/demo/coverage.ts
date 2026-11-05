@@ -63,6 +63,7 @@ export const COVERAGE = {
   submoduleAdd: 'notInDemo',
   submoduleRemove: 'notInDemo',
   clone: 'notInDemo',
+  initRepo: 'notInDemo',
   repoInfo: 'real',
   sidebar: 'real',
   lastPush: 'real',

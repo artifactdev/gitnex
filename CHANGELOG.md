@@ -25,6 +25,10 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   repository inside it. Search repositories finds your own repositories across every configured
   GitHub, GitLab and Forgejo account, grouped by integration and account, and clones one into
   that folder in one click.
+- **A simpler Open screen.** Your repositories and Recent sit side by side, and Open, Clone and
+  Create are one click away in the header. Clone is a dialog with the URL, folder picker and
+  integration search; Create makes a new local repository (name, folder, default branch) with
+  `git init`, an optional README.md and an initial commit, so its branch exists from the start.
 
 ## [1.5.0] - 2026-11-05
 
