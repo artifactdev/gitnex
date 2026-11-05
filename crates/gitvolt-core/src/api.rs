@@ -1282,8 +1282,9 @@ pub enum Request {
       ForgeCreateContext { repo: u32, remote: String, source_remote: String, branch: String, target: String },
       /// People in `remote`'s project who can review or be assigned, matching `query`: `ForgeUser[]`.
       ForgeSearchUsers { repo: u32, remote: String, query: String },
-      /// Repositories the active profile's forge accounts can see, matching `query`: `ForgeRepoHit[]`.
-      /// No repository is open: the Clone screen's search.
+      /// Repositories the active profile's forge accounts own or can access, matching `query`:
+      /// `ForgeRepoHit[]`. Never a public repository the token can merely see. No repository is
+      /// open: the Clone screen's search.
       ForgeSearchRepos { query: String },
       /// `remote`'s project's labels matching `query`: `ForgeLabel[]`.
       ForgeLabels { repo: u32, remote: String, query: String },

@@ -1277,10 +1277,11 @@ impl ForgeProvider for GitLabProvider {
         })
     }
 
-    /// GitLab's project search: every project the token can see, most recently active first.
+    /// GitLab's project search among the projects the token is a member of (never merely public
+    /// projects), most recently active first.
     fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
         Box::pin(async move {
-            let path = format!("/projects?search={}&per_page={REPO_SEARCH_PER_PAGE}&order_by=last_activity_at&sort=desc", encode_component(query.trim()));
+            let path = format!("/projects?search={}&membership=true&per_page={REPO_SEARCH_PER_PAGE}&order_by=last_activity_at&sort=desc", encode_component(query.trim()));
             let items: Vec<Value> = self.http.get(&path).await?.json(&self.host)?;
             Ok(items.iter().filter_map(|p| json::project(&self.host, p)).collect())
         })
@@ -1952,10 +1953,10 @@ mod tests {
         });
         let ep = crate::endpoints::HostEndpoints { api: format!("{}/api/v4", s.base), web: s.base.clone(), avatars: None };
         let p = super::GitLabProvider::new("gitlab.example.com", &ep, gitvolt_core::redact::Secret::new("glpat-FAKE-test-token"), None);
-        let repos = p.search_repos("wid get").await.unwrap();
+        let repos = p.search_repos("widget").await.unwrap();
         assert_eq!(repos.len(), 1);
         assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("alice/widget", "git@g:alice/widget.git"));
-        assert_eq!(s.heads.lock().unwrap()[0].lines().next().unwrap_or_default(), "get /api/v4/projects?search=wid%20get&per_page=20&order_by=last_activity_at&sort=desc http/1.1");
+        assert_eq!(s.heads.lock().unwrap()[0].lines().next().unwrap_or_default(), "get /api/v4/projects?search=widget&membership=true&per_page=20&order_by=last_activity_at&sort=desc http/1.1");
     }
 
     #[test]

@@ -29,7 +29,7 @@ export function CloneForm({ tabId, autoFocus }: { tabId: string; autoFocus: bool
     if (destEdited) return;
     const name = repoNameFromUrl(url);
     const base = parent ?? reposFolder;
-    setDest(base && name ? joinPath(base, name) : '');
+    setDest(base ? (name ? joinPath(base, name) : base) : '');
   }, [url, reposFolder, parent, destEdited]);
   // The clone's op is labelled with its destination (`opStarted.label`).
   const op = useOps((s) => (busy ? Object.values(s.ops).find((o) => o.kind === 'clone' && o.label === dest.trim()) : undefined));

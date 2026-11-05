@@ -25,6 +25,9 @@
 .clone-search-box input { flex: 1; min-width: 0; }
 .clone-search-state { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 11px; color: var(--text-secondary); }
 .clone-hits { margin-top: 6px; max-height: 210px; overflow: auto; }
+.clone-search-group + .clone-search-group { margin-top: 10px; }
+.clone-search-group-title { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.clone-hit-list { margin-top: 0; }
 .open-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .open-recent-item { display: flex; align-items: center; }
 .open-row { all: unset; box-sizing: border-box; display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; width: 100%; padding: 5px 8px; border-radius: 4px; cursor: pointer; }

@@ -56,15 +56,26 @@ describe('OpenRepoScreen', () => {
     expect(names()).toEqual(['old']);
   });
 
-  it('the clone destination follows the URL until it is edited', () => {
+  it('the clone destination starts at the default repos folder and follows the URL until edited', () => {
     useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos/' } });
     render(<OpenRepoScreen tab={tab} />);
     const dest = screen.getByLabelText('Destination') as HTMLInputElement;
+    expect(dest.value).toBe('/home/u/repos/');
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/proj.git' } });
     expect(dest.value).toBe('/home/u/repos/proj');
     fireEvent.change(dest, { target: { value: '/elsewhere/p' } });
     fireEvent.change(screen.getByLabelText('Repository URL'), { target: { value: 'git@h:g/other.git' } });
     expect(dest.value).toBe('/elsewhere/p');
+  });
+
+  it('prefills the destination with the picked folder before a URL is entered', async () => {
+    api.pickFolder.mockResolvedValue('/chosen');
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
+    render(<OpenRepoScreen tab={tab} />);
+    const dest = screen.getByLabelText('Destination') as HTMLInputElement;
+    expect(dest.value).toBe('/home/u/repos');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Choose destination folder' })); });
+    await waitFor(() => expect(dest.value).toBe('/chosen'));
   });
 
   it('Choose… picks the parent folder and clones into a new folder named after the repository', async () => {
@@ -94,6 +105,27 @@ describe('OpenRepoScreen', () => {
     expect(api.clone).toHaveBeenCalledWith('git@gitlab.example.com:alice/widget.git', '/home/u/repos/widget');
     expect((screen.getByLabelText('Repository URL') as HTMLInputElement).value).toBe('git@gitlab.example.com:alice/widget.git');
     expect(rt.openPathInTab).toHaveBeenCalledWith('/home/u/repos/widget', 't1');
+  });
+
+  it('groups search results by integration and account', async () => {
+    const project = (kind: string, host: string, path: string) => ({
+      kind, id: path.length, host, path, name: path.split('/').pop(), owner: path.split('/')[0],
+      webUrl: `https://${host}/${path}`, defaultBranch: 'main', cloneHttps: `https://${host}/${path}.git`,
+      cloneSsh: `git@${host}:${path}.git`, forkOf: null, updatedAt: 1, archived: false,
+    });
+    api.forgeSearchRepos.mockResolvedValue([
+      { project: project('gitlab', 'gitlab.example.com', 'alice/widget'), accountId: '7', accountUsername: 'ada' },
+      { project: project('github', 'github.com', 'octo-org/gadget'), accountId: '9', accountUsername: 'octocat' },
+      { project: project('gitlab', 'gitlab.example.com', 'alice/other'), accountId: '7', accountUsername: 'ada' },
+    ]);
+    useAppState.setState({ profile: { ...EMPTY_PROFILE, id: 'p', reposFolder: '/home/u/repos' } });
+    render(<OpenRepoScreen tab={tab} />);
+    fireEvent.change(screen.getByLabelText('Search repositories'), { target: { value: 'repo' } });
+    await screen.findByRole('button', { name: 'Clone octo-org/gadget' });
+    expect(screen.getByRole('heading', { name: 'GitHub · octocat@github.com' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'GitLab · ada@gitlab.example.com' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Clone alice/widget' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clone alice/other' })).toBeTruthy();
   });
 
   it('a failed clone shows its error inline and re-enables the form', async () => {

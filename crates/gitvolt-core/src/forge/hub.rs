@@ -589,8 +589,8 @@ impl ForgeHub {
         None
     }
 
-    /// Repositories the profile's accounts can see whose name or path contains `query`, most
-    /// recently active first: the Clone screen's search across every configured integration.
+    /// Repositories the profile's accounts own or can access whose name or path contains `query`,
+    /// most recently active first: the Clone screen's search across every configured integration.
     /// Accounts are asked in order and one that fails doesn't hide the others; when none answered,
     /// the first failure is the error.
     pub async fn search_repos(&self, store: &Arc<SettingsStore>, query: &str) -> Result<Vec<crate::forge::ForgeRepoHit>, GbError> {
