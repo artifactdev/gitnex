@@ -152,6 +152,7 @@ import type { CreateOutcome } from './gen/CreateOutcome';
 import type { CreatePart } from './gen/CreatePart';
 import type { ForgeLabel } from './gen/ForgeLabel';
 import type { ForgeUser } from './gen/ForgeUser';
+import type { ForgeRepoHit } from './gen/ForgeRepoHit';
 import type { PartFailure } from './gen/PartFailure';
 // --- end 4C T5 ---
 // --- 4D T3 ---
@@ -648,6 +649,8 @@ export const api = {
   forgeCreateContext: (repo: number, remote: string, sourceRemote: string, branch: string, target: string) =>
     call<CreateContext>({ method: 'forgeCreateContext', params: { repo, remote, sourceRemote, branch, target } }),
   forgeSearchUsers: (repo: number, remote: string, query: string) => call<ForgeUser[]>({ method: 'forgeSearchUsers', params: { repo, remote, query } }),
+  /** Repositories the profile's forge accounts can see, matching `query` (the Clone screen). */
+  forgeSearchRepos: (query: string) => call<ForgeRepoHit[]>({ method: 'forgeSearchRepos', params: { query } }),
   forgeLabels: (repo: number, remote: string, query: string) => call<ForgeLabel[]>({ method: 'forgeLabels', params: { repo, remote, query } }),
   forgeCreateMr: (repo: number, remote: string, req: CreateMr) => call<CreateOutcome>({ method: 'forgeCreateMr', params: { repo, remote, req } }),
   forgeCompleteCreate: (repo: number, remote: string, number: number, req: CreateMr, parts: CreatePart[]) =>

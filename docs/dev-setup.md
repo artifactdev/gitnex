@@ -606,6 +606,14 @@ The app builds and runs on macOS (Apple Silicon checked, macOS 12 or later), but
 a bare `target/debug/GitVolt` can't start. Needs Xcode's command line tools, CMake, Ninja, Node
 and the pinned Tauri CLI (`cargo install tauri-cli --version =3.0.0-alpha.5 --locked`).
 
+- **A local app:** `./build-macos-app.sh` (from the repository root) builds `GitVolt.app` in a
+  temporary target directory (compiling into a network volume can corrupt build artifacts),
+  ad-hoc signs it, sets its minimum macOS version to 12.0 and copies it to
+  `target/release/bundle/macos/`. `--install` also replaces `/Applications/GitVolt.app`
+  (`GITVOLT_APP_DIR` picks another folder); a running GitVolt keeps the old build until it is
+  quit and reopened. `--debug` builds the debug profile, `--keep` keeps the temporary directory.
+  It clears `MACOSX_DEPLOYMENT_TARGET` for the build: this toolchain makes corrupt proc-macro
+  dylibs with it set.
 - **The bundle:** `cd crates/gitvolt-app && cargo tauri build --debug --bundles app` (or without
   `--debug`) makes `target/<profile>/bundle/macos/GitVolt.app`, with the UI embedded. The Tauri
   CLI does the whole layout (`tauri.macos.conf.json` adds to `tauri.conf.json`):

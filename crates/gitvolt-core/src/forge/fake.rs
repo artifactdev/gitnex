@@ -308,6 +308,14 @@ impl ForgeProvider for FakeProvider {
           self.call(format!("users {query}"));
           Box::pin(async move { Ok(self.people.iter().filter(|u| u.username.contains(query)).cloned().collect()) })
       }
+      fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+          self.call(format!("repos {query}"));
+          Box::pin(async move {
+              self.check()?;
+              let q = query.trim().to_lowercase();
+              Ok(self.projects.lock().unwrap().values().filter(|p| p.path.to_lowercase().contains(&q) || p.name.to_lowercase().contains(&q)).cloned().collect())
+          })
+      }
       fn labels<'a>(&'a self, _project: &'a ForgeProject, query: &'a str) -> ForgeFuture<'a, Vec<ForgeLabel>> {
           self.call(format!("labels {query}"));
           Box::pin(async move { Ok(self.label_list.iter().filter(|l| l.name.contains(query)).cloned().collect()) })

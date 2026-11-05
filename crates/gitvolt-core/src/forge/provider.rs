@@ -163,6 +163,12 @@ pub trait ForgeProvider: Send + Sync {
     // Projects (4A).
     /// The project at `path` (`project_from_remote`, spec #4 §3.3).
     fn project<'a>(&'a self, path: &'a str) -> ForgeFuture<'a, Fresh<ForgeProject>>;
+    /// Repositories this account owns or can access whose name or path contains `query`, most
+    /// recently active first (the Clone screen's search). Never a public repository the token can
+    /// merely see. By default the forge can't search.
+    fn search_repos<'a>(&'a self, _query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        unsupported("Searching repositories")
+    }
     fn project_settings<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, ForgeProjectSettings>;
     /// The project's forks, newest activity first.
     fn forks<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, Vec<ForgeProject>>;

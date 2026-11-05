@@ -23,6 +23,10 @@ pub const GITHUB_FULL: &str = "application/vnd.github.full+json";
 // --- end 5A T2 ---
 pub const FORKS_PER_PAGE: u32 = 100;
 pub const FORK_PAGES: usize = 3;
+/// The Clone screen's repository search answers this many hits.
+pub const REPO_SEARCH_PER_PAGE: u32 = 20;
+/// How many `/user/repos` pages the search reads before filtering (100 each).
+pub const REPO_SEARCH_PAGES: usize = 3;
 // --- GitHub commit-author avatars ---
 /// No commit-author lookup while fewer API requests than this are left this hour: avatars are
 /// the least of what the account's budget is for.
@@ -805,6 +809,25 @@ impl ForgeProvider for GitHubProvider {
             let r = self.http.get(&Self::repo_url(path)?).await?;
             let p = json::project(&self.host, &r.json(&self.host)?).ok_or_else(|| unreadable(&self.host, "repository"))?;
             Ok(Self::fresh(p, &r))
+        })
+    }
+
+    /// The account's own repositories, newest activity first. `/user/repos` lists what this token
+    /// can see (owned, collaborator and organization member repositories) and never the public
+    /// repositories it only happened to match; the query filters that list locally.
+    fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        Box::pin(async move {
+            let path = "/user/repos?per_page=100&sort=updated&direction=desc&affiliation=owner,collaborator,organization_member&visibility=all";
+            let pages = self.http.get_pages(path, REPO_SEARCH_PAGES).await?;
+            let q = query.trim().to_lowercase();
+            let mut repos: Vec<ForgeProject> = pages
+                .iter()
+                .filter_map(|p| json::project(&self.host, p))
+                .filter(|p| p.path.to_lowercase().contains(&q) || p.name.to_lowercase().contains(&q))
+                .collect();
+            repos.sort_by_key(|p| std::cmp::Reverse(p.updated_at.unwrap_or(0)));
+            repos.truncate(REPO_SEARCH_PER_PAGE as usize);
+            Ok(repos)
         })
     }
 
@@ -2061,6 +2084,25 @@ mod tests {
         assert_eq!(u.emails, ["octo@example.com", "42+octo@users.noreply.github.com", "octo@users.noreply.github.com"]);
         let u = json::user(&json!({"id": 42, "login": "octo", "email": null})).unwrap();
         assert_eq!(u.emails, ["42+octo@users.noreply.github.com", "octo@users.noreply.github.com"]);
+    }
+
+    #[tokio::test]
+    async fn the_repository_search_lists_the_users_repos_and_filters_the_query() {
+        use crate::test_server::{Canned, TestServer};
+        let s = TestServer::start(|_, head| {
+            if head.starts_with("get /user/repos?") {
+                Canned::json(200, r#"[{"id": 7, "full_name": "octo-org/widget", "name": "widget", "owner": {"login": "octo-org"}, "html_url": "https://github.com/octo-org/widget", "clone_url": "https://github.com/octo-org/widget.git", "ssh_url": "git@github.com:octo-org/widget.git", "default_branch": "main"}, {"id": 8, "full_name": "octo-org/other", "name": "other", "owner": {"login": "octo-org"}, "clone_url": "https://github.com/octo-org/other.git", "ssh_url": "git@github.com:octo-org/other.git"}]"#)
+            } else {
+                Canned::json(404, r#"{"message": "Not Found"}"#)
+            }
+        });
+        let ep = crate::endpoints::HostEndpoints { api: s.base.clone(), web: s.base.clone(), avatars: None };
+        let p = super::GitHubProvider::new("github.com", &ep, gitvolt_core::redact::Secret::new("ghp_FAKE-test-token"), None);
+        let repos = p.search_repos("widget").await.unwrap();
+        assert_eq!(repos.len(), 1, "only the user's own matching repository");
+        assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("octo-org/widget", "git@github.com:octo-org/widget.git"));
+        let asked = s.heads.lock().unwrap();
+        assert_eq!(asked[0].lines().next().unwrap_or_default(), "get /user/repos?per_page=100&sort=updated&direction=desc&affiliation=owner,collaborator,organization_member&visibility=all http/1.1", "the user's own repositories");
     }
 
     #[test]

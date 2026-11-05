@@ -264,7 +264,13 @@ impl ForgeCache {
                 }
             }
         } else {
-            let _ = std::fs::remove_dir_all(account_dir);
+            let _ = std::fs::remove_dir_all(&account_dir);
+            // The host's last account: its directory goes too, leaving nothing behind.
+            if let Some(host) = account_dir.parent()
+                && std::fs::read_dir(host).is_ok_and(|mut entries| entries.next().is_none())
+            {
+                let _ = std::fs::remove_dir(host);
+            }
         }
     }
 

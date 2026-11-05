@@ -131,6 +131,9 @@ checksums. After that, GitVolt updates itself (see [Updates](#updates)).
 
 - **Tabs and tab groups.** A tab for each repository or worktree. Drop a tab onto another to
   group them; a group's chip collapses it, moves it, or saves and closes it to reopen later.
+- **Clone** into a folder you pick: GitVolt makes a folder named after the repository inside it.
+  Or search your own repositories across all configured GitHub, GitLab and Forgejo accounts,
+  grouped by integration and account, and clone one straight there.
 - **Git LFS.** Diffs, File View and File History show an LFS file's real contents, never its
   pointer, with **Download** for one that isn't local yet. Pull, fetch, and track or stop
   tracking a file type from a file's menu.

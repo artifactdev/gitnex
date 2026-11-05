@@ -28,6 +28,10 @@ use std::sync::{Arc, Mutex};
 pub const FORGEJO_HEADERS: [(&str, &str); 1] = [("Accept", "application/json")];
 /// Forgejo's default `MAX_RESPONSE_ITEMS`: a larger `limit` is cut to it.
 pub const PER_PAGE: u32 = 50;
+/// The Clone screen's repository search answers this many hits.
+pub const REPO_SEARCH_PER_PAGE: u32 = 20;
+/// How many `/user/repos` pages the search reads before filtering (50 each).
+pub const REPO_SEARCH_PAGES: u32 = 5;
 pub const OPEN_PAGES: usize = 5;
 pub const FORK_PAGES: usize = 3;
 pub const COMMENT_PAGES: usize = 5;
@@ -1073,6 +1077,31 @@ impl ForgeProvider for ForgejoProvider {
         })
     }
 
+    /// The account's own repositories, newest activity first. `/user/repos` lists the repositories
+    /// this token owns or has access to, so a public repository it merely matched is never found;
+    /// the query filters that list locally (a few pages, stopping early).
+    fn search_repos<'a>(&'a self, query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
+        Box::pin(async move {
+            let q = query.trim().to_lowercase();
+            let mut repos = Vec::new();
+            for page in 1..=REPO_SEARCH_PAGES {
+                let items: Vec<Value> = self.http.get(&format!("/user/repos?limit=50&page={page}")).await?.json(&self.host)?;
+                let full = items.len() >= 50;
+                repos.extend(items.iter().filter_map(|p| json::project(&self.host, p)));
+                if !full {
+                    break;
+                }
+            }
+            let mut repos: Vec<ForgeProject> = repos
+                .into_iter()
+                .filter(|p| p.path.to_lowercase().contains(&q) || p.name.to_lowercase().contains(&q))
+                .collect();
+            repos.sort_by_key(|p| std::cmp::Reverse(p.updated_at.unwrap_or(0)));
+            repos.truncate(REPO_SEARCH_PER_PAGE as usize);
+            Ok(repos)
+        })
+    }
+
     fn project_settings<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, ForgeProjectSettings> {
         Box::pin(async move {
             let r = self.http.get(&GitHubProvider::repo_url(&project.path)?).await?;
@@ -1704,6 +1733,25 @@ mod tests {
             "clone_url": format!("{WEB}/ada/widget.git"), "ssh_url": "git@forgejo.example.org:ada/widget.git", "fork": false, "parent": null, "archived": false, "updated_at": T1,
             "allow_merge_commits": true, "allow_rebase": true, "allow_rebase_explicit": false, "allow_squash_merge": true, "allow_fast_forward_only_merge": true,
             "default_merge_style": "squash", "default_delete_branch_after_merge": true})
+    }
+
+    #[tokio::test]
+    async fn the_repository_search_lists_the_users_repos_and_filters_the_query() {
+        let other = json!({"id": 10, "name": "other", "full_name": "ada/other", "owner": user(1, "ada"), "clone_url": format!("{WEB}/ada/other.git"),
+            "ssh_url": "git@forgejo.example.org:ada/other.git", "fork": false, "archived": false, "updated_at": T2});
+        let s = TestServer::start(move |_, head| {
+            if head.starts_with("get /api/v1/user/repos?") {
+                Canned::json(200, &format!("[{},{}]", repo_json(), other))
+            } else {
+                Canned::json(404, r#"{"message": "Not Found"}"#)
+            }
+        });
+        let ep = crate::endpoints::HostEndpoints { api: format!("{}/api/v1", s.base), web: s.base.clone(), avatars: None };
+        let p = ForgejoProvider::new("forgejo.example.org", &ep, gitvolt_core::redact::Secret::new("FAKE-forgejo-test-token"), None);
+        let repos = p.search_repos("widget").await.unwrap();
+        assert_eq!(repos.len(), 1, "only the user's own matching repository");
+        assert_eq!((repos[0].path.as_str(), repos[0].clone_ssh.as_str()), ("ada/widget", "git@forgejo.example.org:ada/widget.git"));
+        assert_eq!(lines(&s), ["get /user/repos?limit=50&page=1"]);
     }
 
     fn pr_json(number: u64) -> Value {
