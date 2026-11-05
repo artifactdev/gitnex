@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/client', () => ({
-  api: { gitIdentity: vi.fn(async () => ({ identity: null, signing: null })), saveSettings: vi.fn(async () => null), saveProfile: vi.fn(async () => null), forgeAccounts: vi.fn(async () => []), listOpeners: vi.fn(async () => []), fontFamilies: vi.fn(async () => [{ name: 'Orbit Mono', monospace: true }, { name: 'Zeta Sans', monospace: false }]), openLogsFolder: vi.fn(async () => null) },
+  api: { gitIdentity: vi.fn(async () => ({ identity: null, signing: null })), saveSettings: vi.fn(async () => null), saveProfile: vi.fn(async () => null), forgeAccounts: vi.fn(async () => []), listOpeners: vi.fn(async () => []), fontFamilies: vi.fn(async () => [{ name: 'Orbit Mono', monospace: true }, { name: 'Zeta Sans', monospace: false }]), openLogsFolder: vi.fn(async () => null), aiTokenStatus: vi.fn(async () => false), aiDetect: vi.fn(async () => []), aiModels: vi.fn(async () => []), aiSetToken: vi.fn(async () => null), aiClearToken: vi.fn(async () => null) },
   errorMessage: String,
 }));
 

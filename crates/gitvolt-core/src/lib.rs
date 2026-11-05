@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod askpass;
+pub mod ai;
 pub mod avatar;
 pub mod blob;
 pub mod commit;

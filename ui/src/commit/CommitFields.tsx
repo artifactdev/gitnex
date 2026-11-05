@@ -1,3 +1,4 @@
+import { Loader2, Sparkles } from 'lucide-react';
 import { useRef, type KeyboardEvent } from 'react';
 import { flushDrafts, WIP_DRAFT_COUNTER_FROM, WIP_DRAFT_WARN_FROM, type WipDraft } from './draft';
 import './commit.css';
@@ -16,7 +17,7 @@ const isSubmit = (e: KeyboardEvent) => e.key === 'Enter' && (e.ctrlKey || e.meta
  * app's Ctrl chords still come first (key router), and the app-wide Commit (Ctrl+Enter,
  * `commit/keyActions.ts`) yields to these fields.
  */
-export function CommitFields({ value, onChange, onSubmit, onEscape, disabled = false, autoFocus = false }: { value: WipDraft; onChange: (d: WipDraft) => void; onSubmit: () => void; onEscape?: () => void; disabled?: boolean; autoFocus?: boolean }) {
+export function CommitFields({ value, onChange, onSubmit, onEscape, disabled = false, autoFocus = false, onGenerate, generating = false, generateReason }: { value: WipDraft; onChange: (d: WipDraft) => void; onSubmit: () => void; onEscape?: () => void; disabled?: boolean; autoFocus?: boolean; onGenerate?: () => void; generating?: boolean; generateReason?: string }) {
   const summary = useRef<HTMLInputElement>(null);
   const description = useRef<HTMLTextAreaElement>(null);
   const escape = (e: KeyboardEvent<HTMLElement>) => {
@@ -70,6 +71,19 @@ export function CommitFields({ value, onChange, onSubmit, onEscape, disabled = f
           onKeyDown={onSummaryKey}
           onBlur={flushDrafts}
         />
+        {onGenerate && (
+          <button
+            type="button"
+            className="commit-ai"
+            aria-label="Generate commit message"
+            title={generateReason ?? 'Generate a commit message from the staged changes with AI'}
+            aria-busy={generating || undefined}
+            disabled={disabled || generating || !!generateReason}
+            onClick={onGenerate}
+          >
+            {generating ? <Loader2 size={14} className="spin" aria-hidden /> : <Sparkles size={14} aria-hidden />}
+          </button>
+        )}
         {n > WIP_DRAFT_COUNTER_FROM && <span className={`commit-counter${n > WIP_DRAFT_WARN_FROM ? ' warn' : ''}`} data-testid="commit-counter">{n}</span>}
       </div>
       <textarea

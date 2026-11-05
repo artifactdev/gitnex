@@ -144,6 +144,9 @@ checksums. After that, GitVolt updates itself (see [Updates](#updates)).
   tab.
 - **Profiles.** Each has its own tabs, forge accounts, commit name and email (with its Gravatar in
   the switcher), and an optional extra git config file.
+- **AI commit messages.** With Settings › AI on, the sparkles beside the commit summary writes one
+  from the staged changes, using an OpenAI-compatible endpoint (optional token and model list) or
+  a detected local CLI such as `copilot`, `codex`, `claude`, `ollama` or `llm`.
 - **Themes,** many built in, dark and light, with per-lane graph colours, density presets and
   app zoom.
 
@@ -250,7 +253,7 @@ checksums. After that, GitVolt updates itself (see [Updates](#updates)).
 | Git LFS | ✅ | ✅ Real files in diffs and history, download, pull, track by extension |
 | Git Flow | ✅ | ✅ Start and finish features, releases and hotfixes; undoable |
 | Integrated terminal | ✅ | ❌ Not planned |
-| AI commit messages and summaries | ✅ | ❌ Not planned |
+| AI commit messages and summaries | ✅ | ✅ OpenAI-compatible endpoint or a local CLI, from the staged diff |
 | Issue trackers (Jira, Trello, …) | ✅ | ❌ Not planned |
 | Cloud workspaces and team features | ✅ | ❌ Not planned |
 | No account needed | ❌ Sign-in required | ✅ |

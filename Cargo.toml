@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gitvolt-graph", "crates/gitvolt-graph-wasm", "crates/gitvolt-core", "crates/gitvolt-forge", "crates/gitvolt-app", "crates/gitvolt-harness"]
+members = ["crates/gitvolt-graph", "crates/gitvolt-graph-wasm", "crates/gitvolt-core", "crates/gitvolt-forge", "crates/gitvolt-ai", "crates/gitvolt-app", "crates/gitvolt-harness"]
 
 [workspace.package]
 version = "1.5.0"
@@ -11,6 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 gitvolt-core = { path = "crates/gitvolt-core" }
 gitvolt-forge = { path = "crates/gitvolt-forge" }
+gitvolt-ai = { path = "crates/gitvolt-ai" }
 gitvolt-graph = { path = "crates/gitvolt-graph" }
 gix = "0.90"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "process", "time", "sync", "fs", "net", "io-util"] }

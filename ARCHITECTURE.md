@@ -25,7 +25,7 @@ React UI that draws it, and Tauri 3 on its Chromium (CEF) runtime holding the tw
 
 ## Crates and the UI
 
-The Cargo workspace has six crates under `crates/`; the UI is a separate npm project in `ui/`.
+The Cargo workspace has seven crates under `crates/`; the UI is a separate npm project in `ui/`.
 
 **`gitvolt-core`** owns everything a git client does, with no Tauri dependency. Its entry point is
 `Api` (`src/api.rs`): one `Request` enum of every method the UI can call, and one `dispatch`
@@ -41,15 +41,20 @@ accounts, the cache). Core never speaks HTTP; it defines traits that the other c
 (`tokens.rs`), avatar and Markdown-image fetching, and Gravatar (`gravatar.rs`). It depends on core,
 never the other way round.
 
+**`gitvolt-ai`** implements the AI commit-message contract: OpenAI-compatible `/v1/models` and
+`/v1/chat/completions` over `ureq`, local command-line tools as argv (no shell), and detection of
+common local servers and CLIs. Core keeps the settings and the prompt; the endpoint token is in
+the same keyring/file store as the forge tokens, and only leaves in the `Authorization` header.
+
 **`gitvolt-app`** is the desktop binary (`gitvolt`). Its code is a library (`src/lib.rs`, whose
 `run` is the binary's `main` and, on Windows, the DLL entry point CEF's sandbox bootstrap calls). It
 builds the `Api` with the real
-implementations (system openers, the folder-picker portal, Gravatar, the forge connector and the
-keyring token store), starts the CEF runtime with a required sandbox, registers its Tauri
-commands (`api`, and `window_manager` for the title bar), forwards the event bus to the webview,
-and handles startup and shutdown (askpass mode, the single-instance guard, letting a running write
-finish before exit). `desktop.rs` sets the window's desktop identity and the environment children
-get back; `window_state.rs` restores the window's size and position.
+implementations (system openers, the folder-picker portal, Gravatar, the forge connector, the AI
+provider and the keyring token store), starts the CEF runtime with a required sandbox, registers
+its Tauri commands (`api`, and `window_manager` for the title bar), forwards the event bus to the
+webview, and handles startup and shutdown (askpass mode, the single-instance guard, letting a
+running write finish before exit). `desktop.rs` sets the window's desktop identity and the
+environment children get back; `window_state.rs` restores the window's size and position.
 
 **Window chrome.** On Linux, in a Wayland session, the window is built without the system's
 decorations, and the UI draws its own 30 px title bar above the tab bar (`ui/src/chrome/`): ☰, the

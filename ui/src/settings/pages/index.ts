@@ -12,6 +12,7 @@ import './fetch';
 import './keyboard';
 import './advanced';
 import './gitIdentity';
+import './ai';
 import './editorFolders';
 import './accounts';
 import './hosts';

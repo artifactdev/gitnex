@@ -60,4 +60,14 @@ describe('the commit fields (spec #2 §8.1)', () => {
     expect(screen.getByTestId('commit-counter')).toHaveClass('warn');
     expect(summary().value).toHaveLength(90);
   });
+
+  it('the AI button asks for a message, and is disabled when it has a reason', () => {
+    const onGenerate = vi.fn();
+    const value = { summary: 'Fix x', description: '' };
+    const { rerender } = render(<CommitFields value={value} onChange={() => {}} onSubmit={() => {}} onGenerate={onGenerate} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate commit message' }));
+    expect(onGenerate).toHaveBeenCalledOnce();
+    rerender(<CommitFields value={value} onChange={() => {}} onSubmit={() => {}} onGenerate={onGenerate} generateReason="Stage some changes first" />);
+    expect(screen.getByRole('button', { name: 'Generate commit message' })).toBeDisabled();
+  });
 });

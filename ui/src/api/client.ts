@@ -54,6 +54,8 @@ import type { RebaseAction } from './gen/RebaseAction';
 import type { PickOutcome } from './gen/PickOutcome';
 import type { CommitIdentity } from './gen/CommitIdentity';
 import type { GitIdentityInfo } from './gen/GitIdentityInfo';
+import type { AiDetected } from './gen/AiDetected';
+import type { AiCommitMessage } from './gen/AiCommitMessage';
 import type { UndoOutcome } from './gen/UndoOutcome';
 import type { CommitOutcome } from './gen/CommitOutcome';
 import type { Expect } from './gen/Expect';
@@ -480,6 +482,14 @@ export const api = {
   /** Who a commit in `worktree` is made as (git's resolution); `null`: git has no identity. */
   gitIdentity: (repo: number | null, worktree: string | null) => call<GitIdentityInfo>({ method: 'gitIdentity', params: { repo, worktree } }),
   commitIdentity: (repo: number, worktree: string) => call<CommitIdentity | null>({ method: 'commitIdentity', params: { repo, worktree } }),
+  // --- AI commit messages (Settings › AI) ---
+  aiDetect: () => call<AiDetected[]>({ method: 'aiDetect' }),
+  aiTokenStatus: () => call<boolean>({ method: 'aiTokenStatus' }),
+  aiSetToken: (token: string) => call<null>({ method: 'aiSetToken', params: { token } }),
+  aiClearToken: () => call<null>({ method: 'aiClearToken' }),
+  aiModels: (endpoint: string) => call<string[]>({ method: 'aiModels', params: { endpoint } }),
+  aiGenerateCommitMessage: (repo: number, worktree: string) => call<AiCommitMessage>({ method: 'aiGenerateCommitMessage', params: { repo, worktree } }),
+  // --- end AI commit messages ---
   mergeAbort: (repo: number, worktree: string) => call<WriteResult<IntegrateOutcome>>({ method: 'mergeAbort', params: { repo, worktree } }),
   /** A paused merge or rebase ended outside GitVolt: close its journal entry. */
   settlePaused: (repo: number, worktree: string) => call<WriteResult<null>>({ method: 'settlePaused', params: { repo, worktree } }),

@@ -12,6 +12,11 @@ const api = vi.hoisted(() => ({
     { id: 'vscode', name: 'Visual Studio Code', kind: 'editor' },
     { id: 'files', name: 'Files', kind: 'fileManager' },
   ]),
+  aiTokenStatus: vi.fn(async () => false),
+  aiDetect: vi.fn(async () => []),
+  aiModels: vi.fn(async () => []),
+  aiSetToken: vi.fn(async () => null),
+  aiClearToken: vi.fn(async () => null),
   validateEditorTemplate: vi.fn(async (t: string) => {
     if (t.startsWith('sh -c')) throw new Error("a shell or interpreter's code argument can't contain {file}, {line} or {repo}");
     return null;

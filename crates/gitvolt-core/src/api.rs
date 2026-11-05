@@ -17,6 +17,7 @@ use crate::openers::folder_picker::FolderPicker;
 use crate::ops::{OpId, OpRegistry};
 use crate::openers::{template_opener, DetectEnv, Launcher, Opener, OpenerKind, OpenerPayload, CHOOSER_ID, CUSTOM_ID, DEFAULT_APP_ID};
 use crate::payload::{BlobSource, RepoSummary};
+use crate::redact::Secret;
 use crate::scan::ScannedRepo;
 use crate::settings::{AppSettings, EditorChoice, PinSetting, Profile, SettingsStore};
 use crate::signature::signature_status;
@@ -243,6 +244,21 @@ pub enum Request {
     SwitchProfile { id: String },
     /// Deletes an inactive profile: the remaining `ProfileMeta[]`.
     DeleteProfile { id: String },
+    /// Local AI providers and CLIs found on this machine: `AiDetected[]`.
+    AiDetect,
+    /// Whether this profile has a token for its AI endpoint: `bool`.
+    AiTokenStatus,
+    /// Stores or replaces the AI endpoint token: `null`.
+    AiSetToken {
+        #[ts(type = "string")]
+        token: crate::redact::Secret,
+    },
+    /// Forgets the AI endpoint token: `null`.
+    AiClearToken,
+    /// The models an OpenAI-compatible `endpoint` lists, using the stored token: `string[]`.
+    AiModels { endpoint: String },
+    /// Generates a commit message from the worktree's staged changes: `AiCommitMessage`.
+    AiGenerateCommitMessage { repo: u32, worktree: String },
     /// The user's answer to a credential prompt (`authWaiting`); `null` cancels it. Returns `null`.
     AuthAnswer {
         #[ts(type = "number")]
@@ -1511,6 +1527,12 @@ impl Request {
             | Request::CreateProfile { .. }
             | Request::SwitchProfile { .. }
             | Request::DeleteProfile { .. }
+            | Request::AiDetect
+            | Request::AiTokenStatus
+            | Request::AiSetToken { .. }
+            | Request::AiClearToken
+            | Request::AiModels { .. }
+            | Request::AiGenerateCommitMessage { .. }
             | Request::AuthAnswer { .. }
             | Request::AuthUseSsh { .. }
             | Request::CancelOp { .. }
@@ -1638,6 +1660,10 @@ pub struct Api {
     /// empty and the other forge requests refuse.
     pub(crate) forge: Option<Arc<crate::forge::hub::ForgeHub>>,
     // --- end 4A T5 ---
+    /// AI commit messages: the injected HTTP/CLI provider and where its token lives. `None`
+    /// (tests, most builds): the AI requests refuse, and detection is empty.
+    pub(crate) ai: Option<Arc<dyn crate::ai::AiProvider>>,
+    pub(crate) ai_tokens: Option<Arc<dyn crate::forge::TokenStore>>,
     pub(crate) url_opener: Option<UrlOpener>,
     pub(crate) openers: Option<Arc<OpenerSource>>,
     /// "Other…" (H32): the system's Open With chooser; listed only when set.
@@ -1859,6 +1885,38 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, Gb
     tokio::task::spawn_blocking(f).await.map_err(|e| GbError::other(format!("task failed: {e}")))?
 }
 
+/// The raw text from an AI provider as the commit box's two fields: strips a code fence and a
+/// leading "Commit message:", takes the first line as the summary.
+fn parse_ai_message(raw: &str) -> Result<crate::ai::AiCommitMessage, GbError> {
+    let raw = raw.trim();
+    let text = if raw.starts_with("```") {
+        raw.lines().skip(1).filter(|l| !l.trim_start().starts_with("```")).collect::<Vec<_>>().join("\n")
+    } else {
+        raw.to_string()
+    };
+    let text = text.trim();
+    let text = text.strip_prefix("Commit message:").unwrap_or(text).trim();
+    let mut lines = text.lines();
+    let summary = lines.next().unwrap_or_default().trim().to_string();
+    if summary.is_empty() {
+        return Err(GbError::new(GbErrorKind::InvalidInput, "The AI returned an empty commit message"));
+    }
+    let description = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    Ok(crate::ai::AiCommitMessage { summary, description })
+}
+
+/// `text` cut at `max` bytes without splitting a character.
+fn truncate_text(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 impl Api {
     pub fn new(cli: GitCli, launch_repo: Option<String>) -> Self {
         // A test or a harness that forgets `with_data_dir` never touches the user's data dir. No
@@ -1877,6 +1935,8 @@ impl Api {
             signatures: Mutex::new(crate::signature::SignatureCache::new(SIGNATURE_CACHE_MAX)),
             avatars: None,
             forge: None,
+            ai: None,
+            ai_tokens: None,
             url_opener: None,
             openers: None,
             chooser: None,
@@ -2419,6 +2479,14 @@ impl Api {
         self
     }
 
+    /// The AI commit-message provider and the token store its endpoint token uses (the app's
+    /// system keyring, else the owner-only file). Without them the AI requests refuse.
+    pub fn with_ai(mut self, provider: Arc<dyn crate::ai::AiProvider>, tokens: Arc<dyn crate::forge::TokenStore>) -> Self {
+        self.ai = Some(provider);
+        self.ai_tokens = Some(tokens);
+        self
+    }
+
     /// Harness reset: forgets cached providers, statuses and projects.
     pub fn forge_reset(&self) {
         if let Some(h) = &self.forge {
@@ -2923,13 +2991,31 @@ impl Api {
             Request::DeleteProfile { id } => {
                 // --- 4A T5: its tokens go with it ---
                 let gone = self.store.profile(&id);
+                let ai_key = crate::forge::AccountKey { profile: id.clone(), host: "ai".into(), id: "commit".into() };
+                let ai_tokens = self.ai_tokens.clone();
                 let left = self.store.delete_profile(&id)?;
                 if let (Some(hub), Some(p)) = (&self.forge, gone) {
                     hub.forget_profile(&p).await;
                 }
+                // An AI endpoint token is this profile's too.
+                if let Some(tokens) = ai_tokens {
+                    let _ = blocking(move || tokens.delete(&ai_key)).await;
+                }
                 // --- end 4A T5 ---
                 to_json(left)
             }
+            Request::AiDetect => to_json(self.ai_detect().await?),
+            Request::AiTokenStatus => to_json(self.ai_token_status().await?),
+            Request::AiSetToken { token } => {
+                self.ai_set_token(token).await?;
+                to_json(())
+            }
+            Request::AiClearToken => {
+                self.ai_clear_token().await?;
+                to_json(())
+            }
+            Request::AiModels { endpoint } => to_json(self.ai_models(endpoint).await?),
+            Request::AiGenerateCommitMessage { repo, worktree } => to_json(self.ai_commit_message(repo, &worktree).await?),
             Request::AuthAnswer { prompt, answer } => {
                 let server = self.askpass.get().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "askpass is not running"))?;
                 server.answer(prompt, answer)?;
@@ -3778,6 +3864,95 @@ impl Api {
         Ok(fresh)
     }
 
+    // --- AI commit messages (Settings › AI) ---
+    fn ai_key(&self) -> crate::forge::AccountKey {
+        let profile = self.store.active_profile();
+        crate::forge::AccountKey { profile: profile.id, host: "ai".into(), id: "commit".into() }
+    }
+
+    fn ai_settings(&self) -> crate::ai::AiCommitSettings {
+        self.store.active_profile().ai_commit.unwrap_or_default()
+    }
+
+    async fn ai_token(&self) -> Result<Option<Secret>, GbError> {
+        let Some(tokens) = self.ai_tokens.clone() else { return Ok(None) };
+        let key = self.ai_key();
+        blocking(move || tokens.get(&key, crate::forge::TokenStorage::File)).await
+    }
+
+    async fn ai_detect(&self) -> Result<Vec<crate::ai::AiDetected>, GbError> {
+        let Some(ai) = self.ai.clone() else { return Ok(Vec::new()) };
+        blocking(move || Ok(ai.detect())).await
+    }
+
+    async fn ai_token_status(&self) -> Result<bool, GbError> {
+        let Some(tokens) = self.ai_tokens.clone() else { return Ok(false) };
+        let key = self.ai_key();
+        blocking(move || tokens.get(&key, crate::forge::TokenStorage::File).map(|t| t.is_some())).await
+    }
+
+    async fn ai_set_token(&self, token: Secret) -> Result<(), GbError> {
+        let tokens = self.ai_tokens.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let key = self.ai_key();
+        let token = token.trimmed();
+        if token.is_empty() {
+            return blocking(move || tokens.delete(&key)).await;
+        }
+        blocking(move || tokens.put(&key, &token).map(|_| ())).await
+    }
+
+    async fn ai_clear_token(&self) -> Result<(), GbError> {
+        let Some(tokens) = self.ai_tokens.clone() else { return Ok(()) };
+        let key = self.ai_key();
+        blocking(move || tokens.delete(&key)).await
+    }
+
+    async fn ai_models(&self, endpoint: String) -> Result<Vec<String>, GbError> {
+        let ai = self.ai.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let endpoint = endpoint.trim().to_string();
+        if endpoint.is_empty() {
+            return Err(GbError::new(GbErrorKind::InvalidInput, "Enter an API endpoint first"));
+        }
+        let token = self.ai_token().await?;
+        blocking(move || ai.models(&endpoint, token.as_ref())).await
+    }
+
+    async fn ai_commit_message(&self, repo: u32, worktree: &str) -> Result<crate::ai::AiCommitMessage, GbError> {
+        let settings = self.ai_settings();
+        if !settings.enabled {
+            return Err(GbError::new(GbErrorKind::InvalidInput, "AI commit messages are off: turn them on in Settings › AI"));
+        }
+        let ai = self.ai.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let h = self.handle(repo)?;
+        let root = self.worktree_dir(&h, worktree).await?;
+        let diff = self.cli.run(GitInvocation::new(&root, ["diff", "--cached", "--no-color", "--no-ext-diff", "--unified=3"])).await?;
+        let diff = String::from_utf8_lossy(&diff.stdout).trim().to_string();
+        if diff.is_empty() {
+            return Err(GbError::new(GbErrorKind::InvalidInput, "Stage some changes first: the message describes them"));
+        }
+        let recent = self
+            .cli
+            .run(GitInvocation::new(&root, ["log", "-5", "--format=%B%n---"]))
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let mut prompt = String::from(
+            "You write Git commit messages. Return only the message, with no code fences or commentary.\n\
+             Use an imperative subject line of at most 72 characters, then a blank line and a short body when it helps explain what and why.\n",
+        );
+        if !recent.is_empty() {
+            prompt.push_str("\nMatch the style of these recent messages:\n");
+            prompt.push_str(truncate_text(&recent, 4_000));
+            prompt.push('\n');
+        }
+        prompt.push_str("\nStaged changes:\n");
+        prompt.push_str(truncate_text(&diff, 24_000));
+        let token = self.ai_token().await?;
+        let raw = blocking(move || ai.generate(&crate::ai::AiRequest { settings: &settings, token: token.as_ref(), prompt: &prompt, worktree: &root })).await?;
+        parse_ai_message(&raw)
+    }
+    // --- end AI commit messages ---
+
     pub(crate) async fn init_repo(&self, path: &str, branch: Option<String>, readme: bool) -> Result<RepoSummary, GbError> {
         let dir = PathBuf::from(path);
         if !dir.is_absolute() {
@@ -4000,6 +4175,75 @@ mod tests {
 
     fn req(json: serde_json::Value) -> Request {
         serde_json::from_value(json).unwrap()
+    }
+
+    struct FakeAi {
+        prompts: Mutex<Vec<String>>,
+        saw_token: Mutex<bool>,
+    }
+
+    impl crate::ai::AiProvider for FakeAi {
+        fn detect(&self) -> Vec<crate::ai::AiDetected> {
+            vec![crate::ai::AiDetected {
+                id: "cli:fake".into(),
+                name: "Fake AI".into(),
+                provider: crate::ai::AiProviderKind::Cli,
+                endpoint: String::new(),
+                command: "fake {prompt}".into(),
+                models: vec!["fake-1".into()],
+            }]
+        }
+        fn models(&self, _endpoint: &str, _token: Option<&crate::redact::Secret>) -> Result<Vec<String>, GbError> {
+            Ok(vec!["fake-1".into(), "fake-2".into()])
+        }
+        fn generate(&self, request: &crate::ai::AiRequest<'_>) -> Result<String, GbError> {
+            *self.saw_token.lock().unwrap() = request.token.is_some();
+            self.prompts.lock().unwrap().push(request.prompt.to_string());
+            Ok("Add a staged file\n\nIt is needed for the test.".into())
+        }
+    }
+
+    #[test]
+    fn ai_messages_strip_fences_and_prefixes() {
+        let m = parse_ai_message("```text\nAdd it\n\nWhy.\n```").unwrap();
+        assert_eq!((m.summary.as_str(), m.description.as_str()), ("Add it", "Why."));
+        let m = parse_ai_message("Commit message:\nFix x").unwrap();
+        assert_eq!((m.summary.as_str(), m.description.as_str()), ("Fix x", ""));
+        assert_eq!(parse_ai_message("   \n").unwrap_err().kind, GbErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn ai_commit_messages_use_the_configured_provider_and_stored_token() {
+        use crate::ai::{AiCommitSettings, AiProviderKind};
+        use crate::forge::fake::MemTokens;
+        let r = TestRepo::new();
+        fixtures::basic(&r);
+        r.write("file_1.txt", "changed\n");
+        r.git(&["add", "file_1.txt"]);
+        let tokens = MemTokens::new(crate::forge::TokenStorage::File);
+        let fake = Arc::new(FakeAi { prompts: Mutex::default(), saw_token: Mutex::default() });
+        let api = api().with_ai(fake.clone(), tokens.clone());
+        let st = api.dispatch(req(serde_json::json!({"method": "loadState"}))).await.unwrap();
+        let mut profile: crate::settings::Profile = serde_json::from_value(st["profile"].clone()).unwrap();
+        profile.ai_commit = Some(AiCommitSettings { enabled: true, provider: AiProviderKind::OpenAi, endpoint: "https://ai.example/v1".into(), model: "fake-1".into(), command: String::new() });
+        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": profile}}))).await.unwrap();
+        assert_eq!(api.dispatch(req(serde_json::json!({"method": "aiDetect"}))).await.unwrap(), serde_json::json!([{"id":"cli:fake","name":"Fake AI","provider":"cli","endpoint":"","command":"fake {prompt}","models":["fake-1"]}]));
+        assert!(!api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
+        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-test-secret"}}))).await.unwrap();
+        assert!(api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
+        assert_eq!(api.dispatch(req(serde_json::json!({"method": "aiModels", "params": {"endpoint": "https://ai.example/v1"}}))).await.unwrap(), serde_json::json!(["fake-1", "fake-2"]));
+        let id = open(&api, &r).await;
+        let wt = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let message = api.dispatch(req(serde_json::json!({"method": "aiGenerateCommitMessage", "params": {"repo": id, "worktree": wt}}))).await.unwrap();
+        assert_eq!(message, serde_json::json!({"summary": "Add a staged file", "description": "It is needed for the test."}));
+        {
+            let prompts = fake.prompts.lock().unwrap();
+            assert!(prompts[0].contains("changed"), "the staged diff is in the prompt: {}", prompts[0]);
+        }
+        assert!(*fake.saw_token.lock().unwrap(), "the stored token reached the provider");
+        api.dispatch(req(serde_json::json!({"method": "aiClearToken"}))).await.unwrap();
+        assert!(!api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
+        assert!(tokens.map.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -4280,9 +4524,11 @@ mod tests {
         let api = api();
         let token = format!("glpat-test-{}", "x".repeat(24));
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": token}}))).await.unwrap_err();
+        let ai_token = format!("sk-test-{}", "y".repeat(24));
+        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": ai_token}}))).await.unwrap_err();
         api.dispatch(req(serde_json::json!({"method": "commit", "params": {"repo": 99, "worktree": "/w", "summary": "secret summary", "description": "secret body"}}))).await.unwrap_err();
         let text = serde_json::to_string(&api.request_log().entries()).unwrap();
-        assert!(!text.contains(&token) && !text.contains("secret summary") && !text.contains("secret body"), "{text}");
+        assert!(!text.contains(&token) && !text.contains(&ai_token) && !text.contains("secret summary") && !text.contains("secret body"), "{text}");
         assert!(text.contains("gitlab.example.com") && text.contains("worktree=/w"), "{text}");
     }
 
@@ -5698,6 +5944,12 @@ mod tests {
             json!({"method": "requestLog"}),
             json!({"method": "launchRepo"}),
             json!({"method": "takeOpenRequests"}),
+            json!({"method": "aiDetect"}),
+            json!({"method": "aiTokenStatus"}),
+            json!({"method": "aiSetToken", "params": {"token": "sk-FAKE-never-used"}}),
+            json!({"method": "aiClearToken"}),
+            json!({"method": "aiModels", "params": {"endpoint": "https://api.example.com/v1"}}),
+            json!({"method": "aiGenerateCommitMessage", "params": {"repo": id, "worktree": wt}}),
             json!({"method": "commitMessage", "params": {"repo": id, "id": head}}),
             json!({"method": "commitDetails", "params": {"repo": id, "id": head}}),
             json!({"method": "remotes", "params": {"repo": id}}),
@@ -5970,7 +6222,7 @@ mod tests {
     /// Samples that fail by design here: the harness-less `Api` has no log folder, URL opener,
     /// openers or askpass, and the profile samples name no existing profile. Each refusal comes
     /// before any repository access.
-    const EXPECTED_FAILURES: &[&str] = &["openLogsFolder", "openUrl", "openIn", "switchProfile", "deleteProfile", "authAnswer", "authUseSsh", "saveProfile", "addForgeAccount", "removeForgeAccount", "forgeProjectSettings", "forgeForks", "forgeMrList", "forgeBranchMrs", "forgeMrDetail", "forgeRefresh", "forgeMrDiscussions", "forgeProjectByPath", "forgeReply", "forgeApprove", "forgeRequestChanges", "forgeMerge", "forgeEditMr", "forgeSetDraft", "forgeSetAutoMerge", "forgeCancelAutoMerge", "forgeUpdateBranch", "forgeReview", "forgePeopleLimits", "forgeSetSubscribed", "forgeReact", "forgeEditNote", "forgeDeleteNote", "forgeResolve", "forgeReviewDiff", "forgeReviewDrafts", "forgeAddDraft", "forgeEditDraft", "forgeDeleteDraft", "forgeSubmitReview", "forgeDiscardReview", "forgeCommentNow", "forgeCreateContext", "forgeSearchUsers", "forgeSearchRepos", "forgeLabels", "forgeCreateMr", "forgeCompleteCreate", "forgeStack", "forgeSyncStack", "forgeRetarget", "forgeImage", "forgeVideo", "forgeOpenVideo", "updateCheck", "updateDownload", "updateInstall", "updateRestart", "relaunchApp"];
+    const EXPECTED_FAILURES: &[&str] = &["openLogsFolder", "openUrl", "openIn", "switchProfile", "deleteProfile", "authAnswer", "authUseSsh", "saveProfile", "addForgeAccount", "removeForgeAccount", "aiSetToken", "aiModels", "aiGenerateCommitMessage", "forgeProjectSettings", "forgeForks", "forgeMrList", "forgeBranchMrs", "forgeMrDetail", "forgeRefresh", "forgeMrDiscussions", "forgeProjectByPath", "forgeReply", "forgeApprove", "forgeRequestChanges", "forgeMerge", "forgeEditMr", "forgeSetDraft", "forgeSetAutoMerge", "forgeCancelAutoMerge", "forgeUpdateBranch", "forgeReview", "forgePeopleLimits", "forgeSetSubscribed", "forgeReact", "forgeEditNote", "forgeDeleteNote", "forgeResolve", "forgeReviewDiff", "forgeReviewDrafts", "forgeAddDraft", "forgeEditDraft", "forgeDeleteDraft", "forgeSubmitReview", "forgeDiscardReview", "forgeCommentNow", "forgeCreateContext", "forgeSearchUsers", "forgeSearchRepos", "forgeLabels", "forgeCreateMr", "forgeCompleteCreate", "forgeStack", "forgeSyncStack", "forgeRetarget", "forgeImage", "forgeVideo", "forgeOpenVideo", "updateCheck", "updateDownload", "updateInstall", "updateRestart", "relaunchApp"];
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_read_request_writes_to_the_repository() {
@@ -6063,13 +6315,17 @@ mod tests {
         use crate::forge::{ForgeKind, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         let tokens = MemTokens::new(TokenStorage::Keyring);
-        let api = api().with_forge(FakeConnector::with(TOKEN, FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com")), tokens.clone());
+        let api = api()
+            .with_forge(FakeConnector::with(TOKEN, FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com")), tokens.clone())
+            .with_ai(Arc::new(FakeAi { prompts: Mutex::default(), saw_token: Mutex::default() }), tokens.clone());
         let work = api.dispatch(req(serde_json::json!({"method": "createProfile", "params": {"name": "Work", "color": "#336699"}}))).await.unwrap();
         let id = work["id"].as_str().unwrap().to_string();
         api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": id}}))).await.unwrap();
         let added = api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let account = added["account"]["id"].as_str().unwrap();
         assert_eq!(tokens.token_for(&id, "gitlab.example.com", account).as_deref(), Some(TOKEN));
+        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-ai-test"}}))).await.unwrap();
+        assert_eq!(tokens.token_for(&id, "ai", "commit").as_deref(), Some("sk-ai-test"));
         api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}))).await.unwrap();
         api.dispatch(req(serde_json::json!({"method": "deleteProfile", "params": {"id": id}}))).await.unwrap();
         assert!(tokens.map.lock().unwrap().is_empty(), "no orphaned token");
