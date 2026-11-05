@@ -123,9 +123,10 @@ async fn names(cli: &GitCli, root: &Path, args: &[&str]) -> Result<Vec<String>, 
 // --- 2C repo-safety ---
 /// Safety review C1: a whole-worktree `stash push -u` (the Stash button, the redo of one) is
 /// refused where HEAD's file would be written over a repository (`precheck::stash_push_in_the_way`).
-pub(crate) async fn refuse_stash_push_in_the_way(pre: &Pre<'_>, what: &str) -> Result<(), GbError> {
+pub(crate) async fn refuse_stash_push_in_the_way(pre: &Pre<'_>, what: &str, paths: &[String]) -> Result<(), GbError> {
     let tracked = precheck::dirty(&pre.api.cli, pre.root).await?.tracked;
-    match Box::pin(precheck::stash_push_in_the_way(&pre.api.cli, pre.root, &tracked, None)).await?.first() {
+    let pathspec = (!paths.is_empty()).then_some(paths);
+    match Box::pin(precheck::stash_push_in_the_way(&pre.api.cli, pre.root, &tracked, pathspec)).await?.first() {
         Some(p) => Err(precheck::repository_in_the_way(p, what)),
         None => Ok(()),
     }
@@ -168,21 +169,29 @@ pub enum StashPushOutcome {
 pub(crate) struct StashPush {
     /// The whole WIP draft, or `WIP on <branch>` (`(no branch)`) when it was empty.
     pub message: String,
+    /// The selected files; empty for the whole worktree.
+    pub paths: Vec<String>,
 }
 
 impl StashPush {
     /// Fills the empty message from HEAD (spec §10), read before the run.
-    pub(crate) fn new(message: String, branch: Option<&str>) -> Self {
+    pub(crate) fn new(message: String, branch: Option<&str>, paths: Vec<String>) -> Self {
         let message = if message.trim().is_empty() { format!("WIP on {}", branch.unwrap_or("(no branch)")) } else { message };
-        Self { message }
+        Self { message, paths }
     }
 }
 
-/// `git stash push --include-untracked -m <message>`: the new stash's `(oid, subject)`, or
-/// `None` when git found nothing to stash. The caller records it before `relist` (review I1).
-async fn push(cx: &mut WriteCx<'_>, message: &str) -> Result<Option<(String, String)>, GbError> {
+/// `git stash push --include-untracked -m <message> [-- <paths>]`: the new stash's `(oid,
+/// subject)`, or `None` when git found nothing to stash. The caller records it before `relist`
+/// (review I1).
+async fn push(cx: &mut WriteCx<'_>, message: &str, paths: &[String]) -> Result<Option<(String, String)>, GbError> {
     let before = crate::journal::autostash::stash_oid(cx.api, cx.root).await?;
-    let inv = cx.git(["stash", "push", "--include-untracked", "-m", message]);
+    let mut args = vec!["stash".to_string(), "push".into(), "--include-untracked".into(), "-m".into(), message.to_string()];
+    if !paths.is_empty() {
+        args.push("--".into());
+        args.extend(paths.iter().cloned());
+    }
+    let inv = cx.git(args);
     cx.run_git(inv).await?;
     let after = crate::journal::autostash::stash_oid(cx.api, cx.root).await?;
     if after == before {
@@ -290,14 +299,14 @@ impl WriteIntent for StashPush {
     /// `stash push -u` ends in a `reset --hard` that writes HEAD's file over a directory in its
     /// place, deleting a repository in it whole (safety review C1): refused first.
     async fn plan(&self, pre: &Pre<'_>) -> Result<Plan, GbError> {
-        refuse_stash_push_in_the_way(pre, "stash").await?;
+        refuse_stash_push_in_the_way(pre, "stash", &self.paths).await?;
         Ok(Plan::default())
     }
     // --- end 2C repo-safety ---
     async fn run(&self, cx: &mut WriteCx<'_>) -> Result<StashPushOutcome, GbError> {
-        let Some((oid, subject)) = push(cx, &self.message).await? else { return Ok(StashPushOutcome::NothingToStash) };
+        let Some((oid, subject)) = push(cx, &self.message, &self.paths).await? else { return Ok(StashPushOutcome::NothingToStash) };
         // Written ahead of the relist's drop (review I1).
-        cx.record_stash(StashMove { oid: oid.clone(), message: subject.clone(), created: true, without_index: false })?;
+        cx.record_stash(StashMove { oid: oid.clone(), message: subject.clone(), created: true, without_index: false, paths: self.paths.clone() })?;
         let now = relist(cx, &oid, &subject, &self.message, &self.label()).await;
         if now != subject {
             cx.edit_entry(|e| {
@@ -387,7 +396,7 @@ impl WriteIntent for StashApply {
             None => {
                 if self.pop {
                     // Written ahead of the drop (review I1, M4).
-                    cx.record_stash(StashMove { oid: self.oid.clone(), message: self.subject.clone(), created: false, without_index: self.without_index })?;
+                    cx.record_stash(StashMove { oid: self.oid.clone(), message: self.subject.clone(), created: false, without_index: self.without_index, paths: Vec::new() })?;
                     if let Err(e) = drop_oid(cx, &self.oid).await {
                         unrecord_if_listed(cx, &self.oid).await;
                         return Err(e);
@@ -436,7 +445,7 @@ impl WriteIntent for StashDrop {
     }
     async fn run(&self, cx: &mut WriteCx<'_>) -> Result<(), GbError> {
         // Written ahead of the drop (review M4): a crash between them leaves a banner.
-        cx.record_stash(StashMove { oid: self.oid.clone(), message: self.subject.clone(), created: false, without_index: false })?;
+        cx.record_stash(StashMove { oid: self.oid.clone(), message: self.subject.clone(), created: false, without_index: false, paths: Vec::new() })?;
         if let Err(e) = drop_oid(cx, &self.oid).await {
             if unrecord_if_listed(cx, &self.oid).await {
                 // Nothing changed: no entry.
@@ -490,9 +499,10 @@ pub(crate) async fn undo_stash(cx: &mut WriteCx<'_>, entry: &JournalEntry, undo:
                 // is still there (dangling); the reflog subject is only its first line.
                 let full = cx.api.cli.run(GitInvocation::new(cx.root, ["show", "-s", "--format=%B", m.oid.as_str()])).await.map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string()).unwrap_or_else(|_| m.message.clone());
                 let message = user_message(&full).to_string();
-                let Some((oid, subject)) = push(cx, &message).await? else { return Err(GbError::new(GbErrorKind::InvalidInput, "Nothing to stash")) };
+                let paths = m.paths.clone();
+                let Some((oid, subject)) = push(cx, &message, &paths).await? else { return Err(GbError::new(GbErrorKind::InvalidInput, "Nothing to stash")) };
                 // Written ahead of the relist's drop (review I1).
-                let new = |subject: String| StashMove { oid: oid.clone(), message: subject, created: true, without_index: false };
+                let new = |subject: String| StashMove { oid: oid.clone(), message: subject, created: true, without_index: false, paths: paths.clone() };
                 edit(cx, entry.id, |e| {
                     if let Some(s) = e.stashes.first_mut() {
                         *s = new(subject.clone());
@@ -573,11 +583,11 @@ async fn request_subject(api: &Api, repo: u32, worktree: &str, oid: &str) -> Res
 }
 
 /// `stashPush`: an empty `message` names HEAD's branch, read first.
-pub(crate) async fn stash_push(api: &Api, repo: u32, worktree: &str, message: String) -> Result<WriteResult<StashPushOutcome>, GbError> {
+pub(crate) async fn stash_push(api: &Api, repo: u32, worktree: &str, message: String, paths: Vec<String>) -> Result<WriteResult<StashPushOutcome>, GbError> {
     let h = api.handle(repo)?;
     let root = api.worktree_dir(&h, worktree).await?;
     let branch = blocking(move || crate::write::head_state(&gix::open(&root).map_err(gix_err)?)).await?.branch;
-    run_write(api, repo, worktree, Default::default(), StashPush::new(message, branch.as_deref())).await
+    run_write(api, repo, worktree, Default::default(), StashPush::new(message, branch.as_deref(), paths)).await
 }
 
 /// `stashApply` (Apply, or Pop).
@@ -908,7 +918,7 @@ mod tests {
                     let id = j.begin(NewEntry { label: label.into(), kind: crate::events::OpKind::Stash, head_before: HeadState::default(), undo: UndoKind::Stash }, now);
                     let e = j.entry_mut(id).unwrap();
                     e.owner = Some(dead.clone());
-                    e.stashes.push(StashMove { oid, message: format!("On main: {}", &label[label.find('"').unwrap() + 1..label.len() - 1]), created, without_index: false });
+                    e.stashes.push(StashMove { oid, message: format!("On main: {}", &label[label.find('"').unwrap() + 1..label.len() - 1]), created, without_index: false, paths: Vec::new() });
                 }
             })
             .unwrap();
@@ -1022,7 +1032,7 @@ mod tests {
         let id = j.begin(NewEntry { label: "pop stash \"x\"".into(), kind: crate::events::OpKind::Stash, head_before: HeadState::default(), undo: UndoKind::Stash }, 1);
         let e = j.entry_mut(id).unwrap();
         e.before = Some(Snapshot { commit: "c0ffee".into(), paths: vec!["a.txt".into()], untracked: Vec::new(), ..Default::default() });
-        e.stashes.push(StashMove { oid: "1a2b".into(), message: "On main: x".into(), created: false, without_index: false });
+        e.stashes.push(StashMove { oid: "1a2b".into(), message: "On main: x".into(), created: false, without_index: false, paths: Vec::new() });
         j.recover_unless(|_| false);
         j.resolve_stash_moves(&[], |_| true);
         assert_eq!(j.kept.len(), 1);
@@ -1094,6 +1104,23 @@ mod tests {
 
     fn stash_push(id: u32, r: &TestRepo, message: &str) -> serde_json::Value {
         json!({"method": "stashPush", "params": {"repo": id, "worktree": wt(r), "message": message}})
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_selected_files_stash_takes_only_those_and_its_redo_does_too() {
+        let r = repo();
+        dirty(&r);
+        let env = WriteEnv::new();
+        let id = open(&env.api, &r).await;
+        send(&env.api, json!({"method": "stashPush", "params": {"repo": id, "worktree": wt(&r), "message": "selected", "paths": ["b.txt"]}})).await.unwrap();
+        assert_eq!(r.git(&["status", "--porcelain"]), "M  a.txt\n?? c.txt", "only b.txt went");
+        let s = journal(&env.api, id, &r).await;
+        send(&env.api, json!({"method": "undo", "params": {"repo": id, "worktree": wt(&r), "entry": s["undo"]["entry"]}})).await.unwrap();
+        assert_eq!(r.git(&["status", "--porcelain"]), "M  a.txt\n M b.txt\n?? c.txt", "undo brings b.txt back");
+        let s = journal(&env.api, id, &r).await;
+        send(&env.api, json!({"method": "redo", "params": {"repo": id, "worktree": wt(&r), "entry": s["redo"]["entry"]}})).await.unwrap();
+        assert_eq!(r.git(&["status", "--porcelain"]), "M  a.txt\n?? c.txt", "redo stashes the same path only");
+        assert_eq!(r.git(&["show", "refs/stash:b.txt"]), "b unstaged", "the stash has b.txt");
     }
 
     /// C1 (S6a): HEAD has the file `b.txt`; the user replaced it by a folder holding a clone.

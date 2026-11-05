@@ -96,6 +96,10 @@ pub struct StashMove {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub without_index: bool,
     // --- end 2C T7 ---
+    /// The paths a selected-files stash took; empty for a whole-worktree stash. Its redo pushes
+    /// the same paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
 }
 
 /// Why a stash is kept (§6.3–6.4, §5.1).

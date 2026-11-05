@@ -17,6 +17,14 @@ export async function stashPushFor(ctx: WriteCtx): Promise<void> {
   if (out?.status === 'stashed') clearWipDraft(repoPath, ctx.worktree);
 }
 
+/** Stash only the selected files (a WIP list's multi-selection). */
+export async function stashSelected(ctx: WriteCtx, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const out = await runWrite(ctx, () => api.stashPush(ctx.repoId, ctx.worktree, '', paths));
+  if (out?.status === 'nothingToStash') useToast.getState().show('No changes to stash in those files');
+  if (out?.status === 'stashed') useToast.getState().show(`Stashed ${paths.length === 1 ? paths[0] : `${paths.length} files`}`);
+}
+
 /** Apply or Pop (spec #2 §10), by the stash's oid. "Apply without restoring what was staged?" is
  * runWrite's question; a refused answer resends with `withoutIndex`. */
 export async function applyStash(ctx: WriteCtx, oid: string, pop: boolean): Promise<void> {

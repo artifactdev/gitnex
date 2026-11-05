@@ -866,9 +866,20 @@ pub enum Request {
     },
     // --- end 2C T5 ---
     // --- 2C T7: stashes ---
-    /// The toolbar Stash, the WIP header's and the WIP row menu's (spec #2 §10):
+    /// The toolbar Stash, the WIP header's, the WIP row menu's and selected files (spec #2 §10):
     /// `WriteResult<StashPushOutcome>`. `message`: the whole WIP draft ("" for the default).
-    StashPush { repo: u32, worktree: String, message: String },
+    /// `paths`: selected files; empty stashes every change.
+    StashPush {
+        repo: u32,
+        worktree: String,
+        message: String,
+        #[serde(default)]
+        #[ts(optional)]
+        paths: Option<Vec<String>>,
+    },
+    /// Add repository-relative `paths` to the worktree's `.gitignore`, creating it when needed:
+    /// `WriteResult<GitignoreOutcome>`.
+    AddToGitignore { repo: u32, worktree: String, paths: Vec<String> },
     /// Apply, or Pop (§10): `WriteResult<StashApplyOutcome>`. `withoutIndex`: after "Apply
     /// without restoring what was staged?". A gone `oid` is `NotFound` "That stash is gone".
     StashApply {
@@ -1442,7 +1453,7 @@ impl Request {
             Request::Checkout { .. } => true,
             // --- end 2C T5 ---
             // --- 2C T7 ---
-            Request::StashPush { .. } | Request::StashApply { .. } | Request::StashDrop { .. } => true,
+            Request::StashPush { .. } | Request::StashApply { .. } | Request::StashDrop { .. } | Request::AddToGitignore { .. } => true,
             // --- end 2C T7 ---
             // --- 2C T6: reset ---
             Request::Reset { .. } => true,
@@ -3517,7 +3528,8 @@ impl Api {
             }
             // --- end 2C T5 ---
             // --- 2C T7 ---
-            Request::StashPush { repo, worktree, message } => to_json(crate::write::stash::stash_push(self, repo, &worktree, message).await?),
+            Request::StashPush { repo, worktree, message, paths } => to_json(crate::write::stash::stash_push(self, repo, &worktree, message, paths.unwrap_or_default()).await?),
+            Request::AddToGitignore { repo, worktree, paths } => to_json(crate::write::files::add_to_gitignore(self, repo, &worktree, paths).await?),
             Request::StashApply { repo, worktree, oid, pop, without_index } => to_json(crate::write::stash::stash_apply(self, repo, &worktree, oid, pop, without_index.unwrap_or(false)).await?),
             Request::StashDrop { repo, worktree, oid } => to_json(crate::write::stash::stash_drop(self, repo, &worktree, oid).await?),
             // --- end 2C T7 ---
@@ -5716,7 +5728,7 @@ mod tests {
         "checkout",
         // --- end 2C T5 ---
         // --- 2C T7 ---
-        "stashPush", "stashApply", "stashDrop",
+        "stashPush", "stashApply", "stashDrop", "addToGitignore",
         // --- end 2C T7 ---
         // --- 2C T6: reset ---
         "reset",
@@ -5838,6 +5850,7 @@ mod tests {
             // --- end 2C T5 ---
             // --- 2C T7 ---
             json!({"method": "stashPush", "params": {"repo": id, "worktree": wt, "message": ""}}),
+            json!({"method": "addToGitignore", "params": {"repo": id, "worktree": wt, "paths": ["nope.txt"]}}),
             json!({"method": "stashApply", "params": {"repo": id, "worktree": wt, "oid": "0000000000000000000000000000000000000000", "pop": false}}),
             json!({"method": "stashDrop", "params": {"repo": id, "worktree": wt, "oid": "0000000000000000000000000000000000000000"}}),
             // --- end 2C T7 ---

@@ -588,6 +588,21 @@ describe('FileList', () => {
     expect(selected()).toEqual(['Staged src/app.php']);
   });
 
+  it('Ctrl-click selects several changed files, Shift-click extends, a plain click clears', () => {
+    useFileListPrefs.getState().set({ mode: 'path', sort: 'path', allFiles: false });
+    setup();
+    const rows = rowEls();
+    const picked = () => rowEls().filter((r) => r.dataset.selected === 'true').map((r) => r.dataset.path);
+    fireEvent.mouseDown(rows[0], { ctrlKey: true });
+    expect(picked()).toEqual(['docs/manual.txt']);
+    fireEvent.mouseDown(rows[2], { ctrlKey: true });
+    expect(picked()).toEqual(['docs/manual.txt', 'src/app.php']);
+    fireEvent.mouseDown(rows[1], { shiftKey: true });
+    expect(picked()).toEqual(['logo.png', 'src/app.php']);
+    fireEvent.mouseDown(rows[1]);
+    expect(picked()).toEqual([]);
+  });
+
   it('Enter/Space on a folder toggles it', () => {
     useFileListPrefs.getState().set({ mode: 'tree', sort: 'path', allFiles: false });
     setup();
