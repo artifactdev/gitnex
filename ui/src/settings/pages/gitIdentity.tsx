@@ -14,6 +14,16 @@ function ExtraGitconfigControl() {
   return <TextField id="extraGitconfig" value={path ?? ''} placeholder={examplePath('.gitconfig-work')} onCommit={(v) => useAppState.getState().updateProfile((p) => ({ ...p, extraGitconfig: v || null }))} />;
 }
 
+function CommitNameControl() {
+  const value = useAppState((s) => s.profile.gitName ?? '');
+  return <TextField id="profileGitName" label="Commit name" value={value} placeholder="Your name" onCommit={(v) => useAppState.getState().updateProfile((p) => ({ ...p, gitName: v.trim() || undefined }))} />;
+}
+
+function CommitEmailControl() {
+  const value = useAppState((s) => s.profile.gitEmail ?? '');
+  return <TextField id="profileGitEmail" label="Email" value={value} placeholder="you@example.com" onCommit={(v) => useAppState.getState().updateProfile((p) => ({ ...p, gitEmail: v.trim() || undefined }))} />;
+}
+
 function signedText(info: GitIdentityInfo): string | null {
   const format = info.signing?.format;
   if (!info.signing) return null;
@@ -25,6 +35,8 @@ function GitIdentityControl({ ctx }: { ctx: SettingsCtx }) {
   const repoId = useRuntime((r) => (ctx.tabId ? r.tabs[ctx.tabId]?.repo?.id ?? null : null));
   const worktree = useRuntime((r) => (ctx.tabId ? r.tabs[ctx.tabId]?.worktree ?? null : null));
   const extra = useAppState((s) => s.profile.extraGitconfig);
+  const ownName = useAppState((s) => s.profile.gitName ?? '');
+  const ownEmail = useAppState((s) => s.profile.gitEmail ?? '');
   const [info, setInfo] = useState<GitIdentityInfo | null>(null);
   const [focusTick, setFocusTick] = useState(0);
   useEffect(() => {
@@ -47,7 +59,7 @@ function GitIdentityControl({ ctx }: { ctx: SettingsCtx }) {
           <span className="setting-desc">{[info.identity.email, signed].filter(Boolean).join(' · ')}</span>
         </>
       ) : <span className="setting-desc">No name and email set: commits will fail until you set user.name and user.email.</span>)}
-      <span className="setting-desc">{from}, with this profile's extra config applied. Change it there, not here.</span>
+      <span className="setting-desc">{ownName || ownEmail ? 'This profile sets it below.' : `${from}, with this profile's extra config applied.`}</span>
     </div>
   );
 }
@@ -58,8 +70,20 @@ const offs = [
     {
       id: 'gitIdentity', label: 'Commits are made as', page: 'git-identity', group: 'Commits', labelFor: 'group',
       keywords: 'user name email author committer signing gpg ssh key identity',
-      description: 'Read-only. Set in git config, not in GitVolt.',
+      description: 'Shown from git config, with this profile’s commit name, email and extra config applied.',
       Control: GitIdentityControl,
+    },
+    {
+      id: 'profileGitName', label: 'Commit name for this profile', page: 'git-identity', group: 'This profile',
+      keywords: 'user.name author name commits profile',
+      description: 'The name this profile’s commits are made as. Empty uses your git config.',
+      Control: CommitNameControl,
+    },
+    {
+      id: 'profileGitEmail', label: 'Email for this profile', page: 'git-identity', group: 'This profile',
+      keywords: 'user.email author email gravatar picture avatar commits profile',
+      description: 'The email this profile’s commits are made as, and the address used for its Gravatar. Empty uses your git config.',
+      Control: CommitEmailControl,
     },
     {
       id: 'extraGitconfig', label: 'Extra git config for this profile', page: 'git-identity', group: 'Config',

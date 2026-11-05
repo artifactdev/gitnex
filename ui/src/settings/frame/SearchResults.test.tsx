@@ -18,10 +18,10 @@ describe('SearchResults', () => {
 
   it('lists every match in place, grouped under where it lives, with the words highlighted', () => {
     const { container } = results('avatar');
-    expect(screen.getByRole('heading', { name: '3 settings match "avatar"' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '4 settings match "avatar"' })).toBeInTheDocument();
     expect(screen.getByText('Change them here, or open their page.')).toBeInTheDocument();
     const rows = [...container.querySelectorAll('[data-setting-id]')];
-    expect(rows.map((r) => r.getAttribute('data-setting-id'))).toEqual(['gravatar', 'forgeAvatars', 'forgeAccounts']);
+    expect(rows.map((r) => r.getAttribute('data-setting-id'))).toEqual(['gravatar', 'forgeAvatars', 'profileGitEmail', 'forgeAccounts']);
     for (const r of rows) expect(r.querySelector('mark'), r.getAttribute('data-setting-id')!).not.toBeNull();
     expect(screen.getByRole('group', { name: 'Graph › Avatars' })).toHaveTextContent('GitVolt › Graph › Avatars');
     expect(screen.getByRole('group', { name: 'Accounts › Accounts' })).toHaveTextContent('Profile · Work › Accounts › Accounts');

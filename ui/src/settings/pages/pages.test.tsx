@@ -53,7 +53,7 @@ describe('settings pages', () => {
     ['editorFontSize', 'diffs'], ['editorFontFamily', 'diffs'], ['editorFontLigatures', 'diffs'], ['editorLineHeight', 'diffs'], ['editorTabSize', 'diffs'], ['editorWhitespace', 'diffs'], ['editorMinimap', 'diffs'],
     ['stickyScroll', 'diffs'], ['fetchInterval', 'fetch'], ['prune', 'fetch'], ['pushFollowTags', 'fetch'],
     ['shortcuts', 'keyboard'], ['debugLogging', 'advanced'], ['openLogs', 'advanced'], ['resetAll', 'advanced'],
-    ['extraGitconfig', 'git-identity'], ['editor', 'editor-folders'], ['reposFolder', 'editor-folders'],
+    ['profileGitName', 'git-identity'], ['profileGitEmail', 'git-identity'], ['extraGitconfig', 'git-identity'], ['editor', 'editor-folders'], ['reposFolder', 'editor-folders'],
     ['forgeAccounts', 'accounts'], ['hostOverrides', 'hosts'],
     ['repoEditor', 'repository'], ['repoPin', 'repository'], ['trunkPatterns', 'repository'], ['forgeTargetRemote', 'repository'], ['forgeAccount', 'repository'], ['branchUpdate', 'repository'],
   ])('%s is registered once, on %s', (id, page) => {

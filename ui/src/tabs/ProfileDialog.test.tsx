@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/client', () => ({
-  api: { createProfile: vi.fn(async () => ({ id: 'w', name: 'Work', color: '#000' })), switchProfile: vi.fn(async () => ({ settings: {}, profile: {}, profiles: [] })), saveProfile: vi.fn(async () => null), saveSettings: vi.fn(async () => null) },
+  api: { createProfile: vi.fn(async () => ({ id: 'w', name: 'Work', color: '#000' })), switchProfile: vi.fn(async () => ({ settings: {}, profile: {}, profiles: [] })), saveProfile: vi.fn(async () => null), saveSettings: vi.fn(async () => null), avatar: vi.fn(async () => null) },
   errorMessage: (e: unknown) => String(e),
 }));
 vi.mock('../api/transport', () => ({ copyText: vi.fn(async () => {}), inTauri: () => false }));
@@ -62,7 +62,21 @@ describe('ProfileDialog: an empty name', () => {
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeEnabled();
     fireEvent.click(save);
-    await vi.waitFor(() => expect(renameProfile).toHaveBeenCalledExactlyOnceWith('', '#4d88ff'));
-    expect(useProfileDialog.getState().mode).toBeNull();
+    await vi.waitFor(() => expect(renameProfile).toHaveBeenCalledExactlyOnceWith('', '#4d88ff', '', ''));
+    await vi.waitFor(() => expect(useProfileDialog.getState().mode).toBeNull());
+  });
+
+  it('saves the commit name and email, which drive the profile avatar', async () => {
+    const { useAppState } = await import('../app/state');
+    const renameProfile = vi.fn();
+    useAppState.setState({ renameProfile, profile: { ...useAppState.getState().profile, name: 'Work', color: '#4d88ff', gitName: 'Ada Lovelace', gitEmail: 'ada@example.com' } });
+    render(<ProfileDialog />);
+    act(() => useProfileDialog.getState().open('rename'));
+    expect(screen.getByLabelText('Commit name')).toHaveValue('Ada Lovelace');
+    expect(screen.getByLabelText('Email')).toHaveValue('ada@example.com');
+    fireEvent.change(screen.getByLabelText('Commit name'), { target: { value: '  Grace Hopper  ' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: ' grace@example.com ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await vi.waitFor(() => expect(renameProfile).toHaveBeenCalledExactlyOnceWith('Work', '#4d88ff', 'Grace Hopper', 'grace@example.com'));
   });
 });

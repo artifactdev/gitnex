@@ -502,6 +502,15 @@ pub struct Profile {
     pub editor: Option<EditorChoice>,
     /// Added to every git command as `-c include.path=<path>` (spec §14.2).
     pub extra_gitconfig: Option<String>,
+    /// The name this profile's commits are made as (`user.name`); `None` uses git config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub git_name: Option<String>,
+    /// The email this profile's commits are made as (`user.email`), and the address whose Gravatar
+    /// the profile shows. `None` uses git config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub git_email: Option<String>,
     /// Host → forge type override (spec §14.4).
     pub host_overrides: BTreeMap<String, HostKind>,
     pub sidebar_width: u32,
@@ -544,6 +553,8 @@ impl Default for Profile {
             repos_folders: None,
             editor: None,
             extra_gitconfig: None,
+            git_name: None,
+            git_email: None,
             host_overrides: BTreeMap::new(),
             sidebar_width: 240,
             sidebar_narrow: false,
@@ -581,11 +592,18 @@ pub struct ProfileMeta {
     pub id: String,
     pub name: String,
     pub color: String,
+    /// The profile's commit name and email, for its menu avatar (`None`: git config's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub git_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub git_email: Option<String>,
 }
 
 impl From<&Profile> for ProfileMeta {
     fn from(p: &Profile) -> Self {
-        Self { id: p.id.clone(), name: p.name.clone(), color: p.color.clone() }
+        Self { id: p.id.clone(), name: p.name.clone(), color: p.color.clone(), git_name: p.git_name.clone(), git_email: p.git_email.clone() }
     }
 }
 
@@ -742,6 +760,9 @@ fn slug(name: &str) -> String {
 
 fn trim_profile(p: &mut Profile) {
     p.version = PROFILE_VERSION;
+    let trimmed = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    p.git_name = trimmed(p.git_name.take());
+    p.git_email = trimmed(p.git_email.take());
     if p.closed_tabs.len() > MAX_CLOSED_TABS {
         let excess = p.closed_tabs.len() - MAX_CLOSED_TABS;
         p.closed_tabs.drain(..excess);
@@ -1260,6 +1281,8 @@ mod tests {
         let mut p = store.active_profile();
         p.repos_folder = Some("/home/u/repos".into());
         p.right_panel_width = Some(420);
+        p.git_name = Some("Ada Lovelace".into());
+        p.git_email = Some("ada@example.com".into());
         p.repos.insert("/r".into(), RepoSettings { columns: Some(ColumnPrefsDto { labels: 200, graph: None, author: 160, date: 170, sha: 90, message: Some(333) }), branch_update: Some(crate::forge::BranchUpdate::Merge), forge_account: Some("42".into()), ..Default::default() });
         p.repos.insert("/s".into(), RepoSettings::default());
         store.save_profile(p).unwrap();
@@ -1270,6 +1293,8 @@ mod tests {
         let profile = read(&dir.path().join("profiles/default/profile.json"));
         assert_eq!(profile["version"], PROFILE_VERSION);
         assert_eq!(profile["reposFolder"], "/home/u/repos");
+        assert_eq!(profile["gitName"], "Ada Lovelace");
+        assert_eq!(profile["gitEmail"], "ada@example.com");
         assert_eq!(profile["repos"]["/r"]["columns"]["sha"], 90);
         assert_eq!(profile["repos"]["/r"]["columns"]["message"], 333);
         assert_eq!(profile["repos"]["/r"]["branchUpdate"], "merge");
@@ -1280,6 +1305,7 @@ mod tests {
         assert_eq!(again.settings.commit_limit, 500);
         assert_eq!(again.profile.repos_folder.as_deref(), Some("/home/u/repos"));
         assert_eq!(again.profile.right_panel_width, Some(420));
+        assert_eq!((again.profile.git_name.as_deref(), again.profile.git_email.as_deref()), (Some("Ada Lovelace"), Some("ada@example.com")));
         assert_eq!(again.profile.repos["/r"].columns.as_ref().unwrap().sha, 90, "a saved SHA width survives a reload");
         assert_eq!(again.profile.repos["/r"].branch_update, Some(crate::forge::BranchUpdate::Merge), "the merge panel's last update way survives a reload");
         assert_eq!(again.profile.repos["/r"].forge_account.as_deref(), Some("42"), "the repository's forge account survives a reload");

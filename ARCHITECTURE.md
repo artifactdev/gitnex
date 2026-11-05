@@ -187,7 +187,8 @@ Every git CLI run goes through one runner, `GitCli` (`git.rs`). It requires git 
 applies timeouts and cancellation, redacts secrets from what it records, and keeps the last 1000
 commands for Help → Debug. Git runs with the user's login-shell environment (captured once at
 startup, so `SSH_AUTH_SOCK` and `PATH` additions apply even when GitVolt starts from a desktop
-launcher). A profile's extra gitconfig is passed as `-c include.path=…`.
+launcher). A profile's commit name/email and extra gitconfig are passed as one generated
+`-c include.path=…` (the extra file first, the profile's `user.*` last).
 
 ### Writes
 
@@ -516,7 +517,7 @@ arrives as `updateChanged` events.
 | What | Where |
 |---|---|
 | App settings (fetch interval, prune, commit limit, date format, Gravatar, window geometry, …) | `$XDG_CONFIG_HOME/gitvolt/settings.json` |
-| Profiles (tabs, recent repos, repos folder, editor, extra gitconfig, host overrides, per-repo settings, file colours (by common git dir)) | `$XDG_CONFIG_HOME/gitvolt/profiles/<id>/profile.json` |
+| Profiles (tabs, recent repos, repos folder, editor, commit name/email, extra gitconfig, host overrides, per-repo settings, file colours (by common git dir)) | `$XDG_CONFIG_HOME/gitvolt/profiles/<id>/profile.json` |
 | Undo journal | `$XDG_DATA_HOME/gitvolt/journal/` |
 | Remotes' tags (the last fetch's listing, per repository) | `$XDG_DATA_HOME/gitvolt/remote-tags/` |
 | Forge cache | `$XDG_DATA_HOME/gitvolt/forge-cache/` |
