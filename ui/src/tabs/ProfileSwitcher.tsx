@@ -1,7 +1,8 @@
-import { forwardRef } from 'react';
+import { forwardRef, type Ref } from 'react';
 import { Pencil, Plus, Trash2, type LucideIcon, type LucideProps } from 'lucide-react';
 import { profileLabel } from '../app/profileLabel';
 import { useAppState } from '../app/state';
+import { Avatar } from '../avatars/Avatar';
 import { openMenuAt } from '../menu/menuStore';
 import { pressOpener } from '../menu/pressDrag';
 import type { MenuRow } from '../menu/types';
@@ -14,20 +15,31 @@ import { ProfileDialog, useProfileDialog } from './ProfileDialog';
  * dot has a ring (in place of the old check). One component per colour/state, kept, so the menu's
  * memoized rows don't remount their icon.
  */
-const dotIcons = new Map<string, LucideIcon>();
-export function profileDotIcon(color: string, current: boolean): LucideIcon {
-  const key = `${color}|${current}`;
-  let icon = dotIcons.get(key);
+function ProfileMarker({ name, email, color, current, size = 16 }: { name: string; email?: string; color: string; current: boolean; size?: number }) {
+  const address = email?.trim();
+  if (address) return <Avatar name={name.trim() || address} email={address} size={size} />;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden data-profile-dot={color}>
+      <circle cx="12" cy="12" r={current ? 6 : 7} fill={color} />
+      {current && <circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" strokeWidth="2" />}
+    </svg>
+  );
+}
+
+const markers = new Map<string, LucideIcon>();
+/** A profile's menu mark: its Gravatar (from the commit email) when it has one, else its dot. */
+export function profileMarkerIcon(name: string, email: string | undefined, color: string, current: boolean): LucideIcon {
+  const key = `${name}|${email ?? ''}|${color}|${current}`;
+  let icon = markers.get(key);
   if (!icon) {
-    const Dot = forwardRef<SVGSVGElement, LucideProps>(({ size = 16, className }, ref) => (
-      <svg ref={ref} width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden data-profile-dot={color}>
-        <circle cx="12" cy="12" r={current ? 6 : 7} fill={color} />
-        {current && <circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" strokeWidth="2" />}
-      </svg>
+    const Marker = forwardRef<SVGSVGElement, LucideProps>(({ size = 16, className }, ref) => (
+      <span ref={ref as unknown as Ref<HTMLSpanElement>} className={className} style={{ display: 'inline-flex' }}>
+        <ProfileMarker name={name} email={email} color={color} current={current} size={typeof size === 'number' ? size : 16} />
+      </span>
     ));
-    Dot.displayName = `ProfileDot(${key})`;
-    icon = Dot as unknown as LucideIcon;
-    dotIcons.set(key, icon);
+    Marker.displayName = `ProfileMarker(${key})`;
+    icon = Marker as unknown as LucideIcon;
+    markers.set(key, icon);
   }
   return icon;
 }
@@ -40,7 +52,7 @@ function rows(): MenuRow[] {
       kind: 'action',
       id: `profile.${p.id}`,
       label: profileLabel(p.name),
-      icon: profileDotIcon(p.color, p.id === profile.id),
+      icon: profileMarkerIcon(p.gitName?.trim() || p.name, p.gitEmail, p.color, p.id === profile.id),
       tooltip: '',
       run: () => { void switchProfile(p.id); },
     })),
@@ -75,12 +87,16 @@ function rows(): MenuRow[] {
  * name shows just its colour. */
 export function ProfileSwitcher() {
   const name = useAppState((s) => s.profile.name).trim();
+  const commitName = useAppState((s) => s.profile.gitName ?? '').trim();
+  const email = useAppState((s) => s.profile.gitEmail ?? '').trim();
   const color = useAppState((s) => s.profile.color);
   return (
     <>
       <HoverTooltip content="Switch profile">
         <button type="button" className="profile-switcher" aria-label={`Profile: ${profileLabel(name)}`} {...pressOpener((el) => openMenuAt(el, rows(), `profile.${useAppState.getState().profile.id}`, rows, 'Switch profile'))}>
-          <span className="profile-dot" style={{ background: color }} aria-hidden />
+          {email
+            ? <Avatar name={commitName || name || email} email={email} size={18} />
+            : <span className="profile-dot" style={{ background: color }} aria-hidden />}
           {name || null}
         </button>
       </HoverTooltip>

@@ -33,6 +33,13 @@ describe('Git identity card', () => {
     expect(gitIdentity).toHaveBeenCalledWith(7, '/r/orbital');
   });
 
+  it("says when this profile's own name and email win", async () => {
+    gitIdentity.mockResolvedValue({ identity: { name: 'Ada Lovelace', email: 'ada@example.com' }, signing: null });
+    useAppState.setState({ profile: { ...useAppState.getState().profile, gitName: 'Ada Lovelace', gitEmail: 'ada@example.com' } });
+    renderCard({ repoPath: '/r/orbital', repoName: 'orbital', tabId: 't1' });
+    expect(await screen.findByText('This profile sets it below.')).toBeInTheDocument();
+  });
+
   it('warns when no identity is set', async () => {
     gitIdentity.mockResolvedValue({ identity: null, signing: null });
     renderCard({ repoPath: '/r/orbital', repoName: 'orbital', tabId: 't1' });

@@ -35,6 +35,15 @@ reposFolders: Array<string> | null, editor: EditorChoice | null,
  */
 extraGitconfig: string | null, 
 /**
+ * The name this profile's commits are made as (`user.name`); `None` uses git config.
+ */
+gitName?: string, 
+/**
+ * The email this profile's commits are made as (`user.email`), and the address whose Gravatar
+ * the profile shows. `None` uses git config.
+ */
+gitEmail?: string, 
+/**
  * Host → forge type override (spec §14.4).
  */
 hostOverrides: { [key in string]: HostKind }, sidebarWidth: number, sidebarNarrow: boolean, 

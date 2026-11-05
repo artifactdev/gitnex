@@ -55,10 +55,10 @@ interface AppState {
   setProfile(profile: Profile): void;
   updateProfile(fn: (p: Profile) => Profile): void;
   updateRepo(path: string, fn: (r: RepoSettings) => RepoSettings): void;
-  createProfile(name: string, color: string): Promise<void>;
+  createProfile(name: string, color: string, gitName?: string, gitEmail?: string): Promise<void>;
   switchProfile(id: string): Promise<void>;
   deleteProfile(id: string): Promise<void>;
-  renameProfile(name: string, color: string): void;
+  renameProfile(name: string, color: string, gitName?: string, gitEmail?: string): void;
 }
 
 // A profile from before tab groups gets none; groups that went stale (a tab gone) are fixed up.
@@ -95,11 +95,15 @@ export const useAppState = create<AppState>((set, get) => ({
   updateRepo(path, fn) {
     get().updateProfile((p) => ({ ...p, repos: { ...p.repos, [path]: fn(p.repos[path] ?? EMPTY_REPO_SETTINGS) } }));
   },
-  async createProfile(name, color) {
+  async createProfile(name, color, gitName, gitEmail) {
     await flushSaves();
     const meta = await api.createProfile(name, color);
     set({ profiles: [...get().profiles, meta] });
     await get().switchProfile(meta.id);
+    const profile = { ...get().profile, gitName: gitName || undefined, gitEmail: gitEmail || undefined };
+    get().setProfile(profile);
+    await flushSaves();
+    set({ profiles: get().profiles.map((m) => (m.id === profile.id ? { ...m, gitName: profile.gitName, gitEmail: profile.gitEmail } : m)) });
   },
   async switchProfile(id) {
     await flushSaves();
@@ -108,9 +112,10 @@ export const useAppState = create<AppState>((set, get) => ({
   async deleteProfile(id) {
     set({ profiles: await api.deleteProfile(id) });
   },
-  renameProfile(name, color) {
+  renameProfile(name, color, gitName, gitEmail) {
     const id = get().profile.id;
-    get().updateProfile((p) => ({ ...p, name, color }));
-    set({ profiles: get().profiles.map((m) => (m.id === id ? { ...m, name, color } : m)) });
+    const git = { gitName: gitName || undefined, gitEmail: gitEmail || undefined };
+    get().updateProfile((p) => ({ ...p, name, color, ...git }));
+    set({ profiles: get().profiles.map((m) => (m.id === id ? { ...m, name, color, ...git } : m)) });
   },
 }));

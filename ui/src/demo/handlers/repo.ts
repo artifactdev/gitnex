@@ -54,7 +54,7 @@ export const repoHandlers = {
   },
   saveProfile: async ({ profile }, ctx) => {
     ctx.state.profile = profile;
-    ctx.state.profiles = ctx.state.profiles.map((p) => (p.id === profile.id ? { id: p.id, name: profile.name, color: profile.color } : p));
+    ctx.state.profiles = ctx.state.profiles.map((p) => (p.id === profile.id ? { id: p.id, name: profile.name, color: profile.color, gitName: profile.gitName, gitEmail: profile.gitEmail } : p));
     return null;
   },
   watchRepo: async ({ repo }, ctx) => {

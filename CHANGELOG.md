@@ -12,6 +12,10 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   token, status and avatar. Add another account with the same host and a different user's token;
   adding the same user's token replaces it. Settings › Repository › Forge account chooses which
   one a repository's merge requests, forks and avatars use; Automatic keeps the host's first.
+- **Profiles have a commit identity and picture.** New profile… and Edit profile… take a commit
+  name and email, also editable in Settings › Git identity. Commits made in that profile use them
+  (git's own config is the fallback), and the email's Gravatar shows in the profile switcher and
+  the profile dialog when there is one.
 
 ## [1.5.0] - 2026-11-05
 

@@ -1,4 +1,5 @@
-//! Settings › Git identity (read-only): who commits are made as, and whether they're signed.
+//! Settings › Git identity: the profile's commit name/email are editable there; this reads who
+//! commits are made as now, and whether they're signed.
 
 use crate::error::GbError;
 use crate::git::{GitCli, GitInvocation};
@@ -7,7 +8,7 @@ use serde::Serialize;
 use std::path::Path;
 use ts_rs::TS;
 
-/// What Settings › Git identity shows (read-only): who commits are made as, and whether they're signed.
+/// What Settings › Git identity shows: who commits are made as now, and whether they're signed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

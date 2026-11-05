@@ -4,12 +4,14 @@ import { useAppState, EMPTY_PROFILE } from '../app/state';
 import { ContextMenu } from '../menu/ContextMenu';
 import { useMenu } from '../menu/menuStore';
 import { mouseDown, mouseUp } from '../menu/pressTesting';
-import { profileDotIcon, ProfileSwitcher } from './ProfileSwitcher';
+import { profileMarkerIcon, ProfileSwitcher } from './ProfileSwitcher';
+
+vi.mock('../api/client', () => ({ api: { avatar: vi.fn(async () => null) }, errorMessage: String }));
 
 describe('profile menu icons (K69)', () => {
   it('each profile row shows its colour as a dot; the current one has a ring', () => {
-    const Other = profileDotIcon('#2ece9d', false);
-    const Current = profileDotIcon('#d90171', true);
+    const Other = profileMarkerIcon('', undefined, '#2ece9d', false);
+    const Current = profileMarkerIcon('', undefined, '#d90171', true);
     const { container } = render(<><Other size={16} /><Current size={16} /></>);
     const [other, current] = container.querySelectorAll('svg');
     expect(other.querySelector('circle')!.getAttribute('fill')).toBe('#2ece9d');
@@ -19,8 +21,15 @@ describe('profile menu icons (K69)', () => {
   });
 
   it('one stable component per colour and state, so rows do not remount their icon', () => {
-    expect(profileDotIcon('#4d88ff', false)).toBe(profileDotIcon('#4d88ff', false));
-    expect(profileDotIcon('#4d88ff', true)).not.toBe(profileDotIcon('#4d88ff', false));
+    expect(profileMarkerIcon('', undefined, '#4d88ff', false)).toBe(profileMarkerIcon('', undefined, '#4d88ff', false));
+    expect(profileMarkerIcon('', undefined, '#4d88ff', true)).not.toBe(profileMarkerIcon('', undefined, '#4d88ff', false));
+  });
+
+  it("a profile with an email shows the email's avatar instead of the colour dot", () => {
+    const Icon = profileMarkerIcon('Ada Lovelace', 'ada@example.com', '#4d88ff', false);
+    const { container } = render(<Icon size={16} />);
+    expect(container.querySelector('[data-testid="avatar"]')).not.toBeNull();
+    expect(container.querySelector('[data-profile-dot]')).toBeNull();
   });
 });
 

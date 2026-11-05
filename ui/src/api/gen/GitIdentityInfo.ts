@@ -3,6 +3,6 @@ import type { CommitIdentity } from "./CommitIdentity";
 import type { SigningInfo } from "./SigningInfo";
 
 /**
- * What Settings › Git identity shows (read-only): who commits are made as, and whether they're signed.
+ * What Settings › Git identity shows: who commits are made as now, and whether they're signed.
  */
 export type GitIdentityInfo = { identity: CommitIdentity | null, signing: SigningInfo | null, };

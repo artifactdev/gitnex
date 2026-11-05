@@ -137,7 +137,8 @@ checksums. After that, GitVolt updates itself (see [Updates](#updates)).
 - **Submodules.** The changes say whether a submodule has new commits, modified content or isn't
   initialised, and its diff names each commit. Update, sync URLs, add, remove or open one in a
   tab.
-- **Profiles.** Each has its own tabs, forge accounts and an optional extra git config file.
+- **Profiles.** Each has its own tabs, forge accounts, commit name and email (with its Gravatar in
+  the switcher), and an optional extra git config file.
 - **Themes,** many built in, dark and light, with per-lane graph colours, density presets and
   app zoom.
 

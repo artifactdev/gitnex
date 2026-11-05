@@ -1670,6 +1670,8 @@ pub struct Api {
     /// GitVolt's data dir (spec #2 §5.1): the journal and temp index files. A private temp dir
     /// unless `with_data_dir` (only the app passes `paths::data_dir()`).
     pub(crate) data_dir: PathBuf,
+    /// Serializes writing the active profile's identity gitconfig (`apply_profile_git_config`).
+    profile_gitconfig: Mutex<()>,
     data_tmp: Option<tempfile::TempDir>,
     pub(crate) clock: crate::journal::Clock,
     /// The staging undo logs (spec #2 §7.6), in memory: a restart clears them.
@@ -1879,6 +1881,7 @@ impl Api {
             remote_tags: Default::default(),
             submodules: Default::default(),
             data_dir,
+            profile_gitconfig: Mutex::new(()),
             data_tmp,
             clock: crate::journal::system_clock(),
             recovered: Mutex::default(),
@@ -2306,15 +2309,73 @@ impl Api {
 
     pub fn with_store(mut self, store: Arc<SettingsStore>) -> Self {
         self.store = store;
-        self.apply_profile_git_config();
+        if let Err(e) = self.apply_profile_git_config() {
+            tracing::warn!("profile git identity not applied: {}", e.message);
+        }
         self
     }
 
-    /// Applies the active profile's extra gitconfig (spec §14.2) to every git command: after
-    /// loading the store, and whenever the profile (or which one is active) changes.
-    fn apply_profile_git_config(&self) {
-        let inc = self.store.active_profile().extra_gitconfig.filter(|p| !p.trim().is_empty()).map(PathBuf::from);
-        self.cli.set_include_path(inc);
+    /// Applies the active profile's extra gitconfig (spec §14.2) and its commit name/email to
+    /// every git command: after loading the store, and whenever the profile (or which one is
+    /// active) changes. The identity goes in a generated file included by git, never as
+    /// `-c user.*`; the user's extra config is included first, so these fields win when both set.
+    fn apply_profile_git_config(&self) -> Result<(), GbError> {
+        let profile = self.store.active_profile();
+        let extra = profile.extra_gitconfig.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+        match self.profile_identity_gitconfig(&profile, extra.as_deref())? {
+            Some(path) => self.cli.set_include_path(Some(path)),
+            None => self.cli.set_include_path(extra),
+        }
+        Ok(())
+    }
+
+    /// The generated include file for the profile's commit name/email, or `None` when it sets
+    /// neither. Writes it under `<data dir>/gitconfig`, atomically, named by its content, and
+    /// removes the previous one so a saved value change reaches the next git command.
+    fn profile_identity_gitconfig(&self, profile: &Profile, extra: Option<&Path>) -> Result<Option<PathBuf>, GbError> {
+        let name = profile.git_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let email = profile.git_email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if name.is_none() && email.is_none() {
+            return Ok(None);
+        }
+        use std::hash::{Hash, Hasher};
+        let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"));
+        let mut content = String::from("# Written by GitVolt for this profile; edits are replaced.\n");
+        if let Some(extra) = extra {
+            content.push_str(&format!("[include]\n\tpath = {}\n", quote(&crate::platform::fs::to_git_path(extra))));
+        }
+        content.push_str("[user]\n");
+        if let Some(name) = name {
+            content.push_str(&format!("\tname = {}\n", quote(name)));
+        }
+        if let Some(email) = email {
+            content.push_str(&format!("\temail = {}\n", quote(email)));
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        let dir = self.data_dir.join("gitconfig");
+        let path = dir.join(format!("profile-{:016x}.gitconfig", hasher.finish()));
+        let _held = self.profile_gitconfig.lock().expect("profile gitconfig poisoned");
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
+            std::fs::create_dir_all(&dir).map_err(|e| GbError::other(format!("Couldn't prepare {}: {e}", dir.display())))?;
+            let mut tmp = tempfile::Builder::new().prefix(".profile-").suffix(".gitconfig").tempfile_in(&dir)
+                .map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
+            use std::io::Write as _;
+            tmp.write_all(content.as_bytes()).map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
+            tmp.as_file().sync_all().map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
+            let _ = std::fs::remove_file(&path);
+            tmp.persist(&path).map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {}", e.error)))?;
+            // Only the current file is useful; keep the directory tidy across value changes.
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p != path && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("profile-")) {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+            }
+        }
+        Ok(Some(path))
     }
 
     pub fn store(&self) -> &Arc<SettingsStore> {
@@ -2814,7 +2875,7 @@ impl Api {
                 to_json(())
             }
             Request::LoadState => {
-                self.apply_profile_git_config();
+                self.apply_profile_git_config()?;
                 let mut state = self.store.state();
                 state.profile.migrate_repos_folders(self.home.as_deref());
                 self.apply_avatar_setting(state.settings.gravatar);
@@ -2827,14 +2888,14 @@ impl Api {
             }
             Request::SaveProfile { profile } => {
                 self.store.save_profile(*profile)?;
-                self.apply_profile_git_config();
+                self.apply_profile_git_config()?;
                 to_json(())
             }
             Request::CreateProfile { name, color } => to_json(self.store.create_profile(&name, &color)?),
             Request::SwitchProfile { id } => {
                 let mut st = self.store.switch_profile(&id)?;
                 st.profile.migrate_repos_folders(self.home.as_deref());
-                self.apply_profile_git_config();
+                self.apply_profile_git_config()?;
                 to_json(st)
             }
             Request::DeleteProfile { id } => {
@@ -4231,6 +4292,36 @@ mod tests {
         // A store opened with an active profile that has one applies it at once.
         let other = super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None).with_store(api.store().clone());
         assert_eq!(other.cli.include_path(), Some(inc));
+    }
+
+    #[tokio::test]
+    async fn profile_commit_name_and_email_reach_git_commands() {
+        let r = TestRepo::new();
+        r.commit("a");
+        let extra = r.root().join("work.gitconfig");
+        std::fs::write(&extra, "[user]\n\tname = Extra Name\n\temail = extra@example.com\n").unwrap();
+        let api = api();
+        let path = r.path().to_path_buf();
+        let read = |key: &str| {
+            let api = &api;
+            let path = &path;
+            let key = key.to_string();
+            async move { String::from_utf8_lossy(&api.cli.run(crate::git::GitInvocation::new(path, ["config", "--get", &key])).await.unwrap().stdout).trim().to_string() }
+        };
+        let mut p = api.store().active_profile();
+        p.git_name = Some("Robin Example".into());
+        p.git_email = Some("robin@example.com".into());
+        p.extra_gitconfig = Some(extra.display().to_string());
+        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        assert_eq!(read("user.name").await, "Robin Example");
+        assert_eq!(read("user.email").await, "robin@example.com", "the profile fields win over its extra config");
+        // Clearing them hands identity back to git config (here, the extra file).
+        let mut p = api.store().active_profile();
+        p.git_name = None;
+        p.git_email = None;
+        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        assert_eq!(read("user.name").await, "Extra Name");
+        assert_eq!(read("user.email").await, "extra@example.com");
     }
 
     #[tokio::test]
