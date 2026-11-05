@@ -15,6 +15,10 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
   cyan second lane. The theme picker lists it as GitNex Dark; a saved `default-dark` keeps it.
 - **Bearded Arc Blueberry.** A new built-in dark theme using the Arc Blueberry palette of
   [Bearded Theme](https://github.com/BeardedBear/bearded-theme).
+- **Create and apply git patches.** A commit's menu saves its diff as a `.patch` file; the working
+  tree's menu does the same for all unstaged or only the staged changes. Repository ▸ Apply
+  patch… (also on the working tree's menu) applies a `.patch`/`.diff` file with `git apply`.
+  Untracked files aren't part of a diff.
 - **Several accounts on one forge.** Settings › Accounts can hold more than one GitHub,
   GitLab or Forgejo account per host (a private account and a work one, say), each with its own
   token, status and avatar. Add another account with the same host and a different user's token;
@@ -49,6 +53,10 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ### Fixed
 
+- **Cloning from an integration's search uses HTTPS.** A hit used its SSH URL, which fails for
+  accounts that authenticate with a token and have no SSH key (the clone form said
+  "Authentication failed or was cancelled"). HTTPS works for public repositories and with the
+  git credential helper; SSH stays the fallback for a forge that gives no HTTPS URL.
 - **AI CLIs are found where your shell puts them.** A GitNex started from the Dock or Finder got
   launchd's bare `PATH`, so GitHub Copilot CLI and the other local tools weren't detected (and a
   configured one couldn't run). Detection and generation now use the login shell's environment.

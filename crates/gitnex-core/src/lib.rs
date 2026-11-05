@@ -34,6 +34,7 @@ pub mod netops;
 pub mod open_copy;
 pub mod ops;
 pub mod openers;
+pub mod patch;
 pub mod paths;
 pub mod payload;
 pub mod platform;

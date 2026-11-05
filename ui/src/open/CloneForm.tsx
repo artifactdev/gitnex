@@ -68,9 +68,11 @@ export function CloneForm({ tabId, autoFocus, onCloned }: { tabId: string; autoF
       setPicking(false);
     }
   };
-  /** A forge search hit: clone it into the chosen folder, in a folder named after it. */
+  /** A forge search hit: clone it into the chosen folder, in a folder named after it. HTTPS
+   * first: it works for public repositories and with the user's git credential helper (and can
+   * prompt); SSH only when the forge gives no HTTPS URL, since a token account has no SSH key. */
   const cloneHit = async (hit: ForgeRepoHit) => {
-    const remote = hit.project.cloneSsh.trim() || hit.project.cloneHttps.trim();
+    const remote = hit.project.cloneHttps.trim() || hit.project.cloneSsh.trim();
     if (!remote) {
       setError(`No clone URL for ${hit.project.path}`);
       return;

@@ -28,6 +28,7 @@ pub(crate) mod checkout;
 pub(crate) mod hooks;
 pub(crate) mod index_lock;
 pub(crate) mod patch;
+pub(crate) mod patch_apply;
 pub(crate) mod precheck;
 pub(crate) mod queue;
 pub(crate) mod refs;

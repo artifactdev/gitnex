@@ -71,6 +71,7 @@ import type { ResetMode } from './gen/ResetMode';
 // --- end 2C T12 ---
 import type { IntegrateKind } from './gen/IntegrateKind';
 import type { IntegratePreviewPayload } from './gen/IntegratePreviewPayload';
+import type { PatchPayload } from './gen/PatchPayload';
 import type { WriteResult } from './gen/WriteResult';
 import type { LfsStatusPayload } from './gen/LfsStatusPayload';
 import type { LfsTransferOutcome } from './gen/LfsTransferOutcome';
@@ -306,6 +307,14 @@ export const api = {
   scanFolders: (roots: string[], refresh: boolean) => call<ScannedRepo[]>({ method: 'scanFolders', params: { roots, refresh } }),
   /** Clones `url` into the absolute `dest` (spec §13); the op's label is `dest`. */
   clone: (url: string, dest: string) => call<RepoSummary>({ method: 'clone', params: { url, dest } }),
+  /** A commit's diff (`git diff` against its first parent) as a patch, with a suggested name. */
+  createCommitPatch: (repo: number, rev: string) => call<PatchPayload>({ method: 'createCommitPatch', params: { repo, rev } }),
+  /** The working tree's diff (or its staged changes) as a patch. Untracked files aren't included. */
+  createWorktreePatch: (repo: number, worktree: string, staged: boolean) =>
+    call<PatchPayload>({ method: 'createWorktreePatch', params: { repo, worktree, staged } }),
+  /** `git apply` a patch into `worktree`; a patch that doesn't fit fails and changes nothing. */
+  applyPatch: (repo: number, worktree: string, patch: string) =>
+    call<WriteResult<null>>({ method: 'applyPatch', params: { repo, worktree, patch } }),
   /** `git init` a new repository at the absolute `path` (the folder must be new or empty) and
    * open it; `branch` empty follows git's default. `readme`: write and commit a README.md;
    * either way the first commit creates the branch. */

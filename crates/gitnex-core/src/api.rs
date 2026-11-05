@@ -341,6 +341,15 @@ pub enum Request {
     SubmoduleRemove { repo: u32, worktree: String, path: String },
     /// Clones `url` into the absolute `dest` (spec §13) and opens it: `RepoSummary`.
     Clone { url: String, dest: String },
+    /// A commit's diff (`git diff` against its first parent; `git show` for a root commit) as a
+    /// `git apply`-ready patch: `PatchPayload`.
+    CreateCommitPatch { repo: u32, rev: String },
+    /// The working tree's diff as a patch: `git diff` (unstaged) or `git diff --cached` (staged).
+    /// Untracked files aren't in a diff. `PatchPayload`.
+    CreateWorktreePatch { repo: u32, worktree: String, staged: bool },
+    /// `git apply` of `patch` into `worktree`: `WriteResult<null>`. Not journaled; a patch that
+    /// doesn't fit fails with git's reason and changes nothing.
+    ApplyPatch { repo: u32, worktree: String, patch: String },
     /// `git init` a new repository at the absolute `path` and opens it: `RepoSummary`. The
     /// folder must not exist yet or be empty. `branch`: the initial branch (`None` or empty:
     /// git's own default). `readme`: write and commit a `README.md`; without it the initial
@@ -1394,6 +1403,8 @@ impl Request {
             Request::SubmoduleUpdate { .. } | Request::SubmoduleSync { .. } | Request::SubmoduleAdd { .. } | Request::SubmoduleRemove { .. } => true,
             Request::Submodules { .. } => false,
             Request::Fetch { .. } | Request::DropCompareRefs { .. } | Request::Clone { .. } | Request::InitRepo { .. } | Request::RemoveIndexLock { .. } => true,
+            Request::CreateCommitPatch { .. } | Request::CreateWorktreePatch { .. } => false,
+            Request::ApplyPatch { .. } => true,
             Request::WriteWorktreeFile { .. } | Request::CreateWorktreeFile { .. } | Request::ApplySuggestion { .. } => true,
             // 2B T1.
             Request::Stage { .. } | Request::Unstage { .. } | Request::StageAll { .. } | Request::UnstageAll { .. } => true,
@@ -3335,6 +3346,22 @@ impl Api {
               }
               // --- end 4D T3 ---
             Request::Clone { url, dest } => to_json(self.clone_repo(url, dest).await?),
+            Request::CreateCommitPatch { repo, rev } => {
+                let h = self.handle(repo)?;
+                to_json(crate::patch::commit_patch(&self.cli, &h.workdir, &rev).await?)
+            }
+            Request::CreateWorktreePatch { repo, worktree, staged } => {
+                let h = self.handle(repo)?;
+                let root = self.worktree_dir(&h, &worktree).await?;
+                to_json(crate::patch::worktree_patch(&self.cli, &root, staged).await?)
+            }
+            Request::ApplyPatch { repo, worktree, patch } => {
+                if patch.len() > crate::patch::MAX_PATCH_BYTES {
+                    return Err(GbError::new(GbErrorKind::InvalidInput, "That patch is over 16 MiB"));
+                }
+                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::patch_apply::ApplyPatch { patch }).await?;
+                to_json(done)
+            }
             Request::RepoInfo { repo } => {
                 let h = self.handle(repo)?;
                 to_json(crate::shelldata::repo_info(&h.repo, &h.workdir).await?)
@@ -4676,6 +4703,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patches_create_and_apply() {
+        let source = TestRepo::new();
+        source.commit("base");
+        source.write("file_0.txt", "changed\n");
+        source.git(&["add", "file_0.txt"]);
+        source.git(&["commit", "-q", "-m", "change"]);
+        let sha = source.git(&["rev-parse", "HEAD"]);
+        let source_api = api();
+        let id = open(&source_api, &source).await;
+        let patch = source_api.dispatch(req(serde_json::json!({"method": "createCommitPatch", "params": {"repo": id, "rev": sha}}))).await.unwrap();
+        let text = patch["text"].as_str().unwrap();
+        assert!(text.contains("diff --git a/file_0.txt b/file_0.txt"), "{text}");
+        assert!(text.contains("+changed"), "{text}");
+
+        let target = TestRepo::new();
+        target.commit("base");
+        let target_api = api();
+        let target_id = open(&target_api, &target).await;
+        target_api.dispatch(req(serde_json::json!({"method": "applyPatch", "params": {"repo": target_id, "worktree": target.path(), "patch": text}}))).await.unwrap();
+        assert_eq!(std::fs::read_to_string(target.path().join("file_0.txt")).unwrap(), "changed\n");
+
+        source.write("file_0.txt", "unstaged\n");
+        let worktree = source_api.dispatch(req(serde_json::json!({"method": "createWorktreePatch", "params": {"repo": id, "worktree": source.path(), "staged": false}}))).await.unwrap();
+        assert_eq!(worktree["name"], "changes.patch");
+        assert!(worktree["text"].as_str().unwrap().contains("+unstaged"));
+    }
+
+    #[tokio::test]
     async fn shell_data_requests_dispatch() {
         let r = TestRepo::new();
         fixtures::basic(&r);
@@ -4755,7 +4810,7 @@ mod tests {
         for bad in ["../x.json", "a/b.json", "a\\b.json", ""] {
             assert!(call(&api, bad, "{}").await.is_err(), "{bad}");
         }
-        assert!(call(&api, "big.json", &"x".repeat(1024 * 1024 + 1)).await.is_err());
+        assert!(call(&api, "big.json", &"x".repeat(16 * 1024 * 1024 + 1)).await.is_err());
         let nothing = api.with_folder_picker(Arc::new(|_: Option<&Path>| None));
         assert!(call(&nothing, "none.json", "{}").await.unwrap().is_null());
         assert!(!dir.path().join("none.json").exists());
@@ -5966,6 +6021,8 @@ mod tests {
             json!({"method": "aiGenerateCommitMessage", "params": {"repo": id, "worktree": wt}}),
             json!({"method": "commitMessage", "params": {"repo": id, "id": head}}),
             json!({"method": "commitDetails", "params": {"repo": id, "id": head}}),
+            json!({"method": "createCommitPatch", "params": {"repo": id, "rev": head}}),
+            json!({"method": "createWorktreePatch", "params": {"repo": id, "worktree": wt, "staged": false}}),
             json!({"method": "remotes", "params": {"repo": id}}),
             json!({"method": "fileList", "params": {"repo": id, "spec": {"kind": "wip", "worktree": wt, "staged": false}}}),
             json!({"method": "fileList", "params": {"repo": id, "spec": {"kind": "wip", "worktree": wt, "staged": true}}}),
@@ -6111,6 +6168,7 @@ mod tests {
         // 3B T1
         "cherryPick",
         "revert",
+        "applyPatch",
     ];
 
     /// One request of each write method: the audit checks `is_write` agrees, so a read can't
@@ -6120,6 +6178,7 @@ mod tests {
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
         vec![
             json!({"method": "fetch", "params": {"repo": id, "background": false}}),
+            json!({"method": "applyPatch", "params": {"repo": id, "worktree": wt, "patch": ""}}),
             json!({"method": "dropCompareRefs", "params": {"repo": id}}),
             // --- 4A T7 ---
             json!({"method": "addRemote", "params": {"repo": id, "worktree": wt, "name": "x", "url": "/nonexistent/x.git"}}),

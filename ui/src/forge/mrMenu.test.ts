@@ -21,7 +21,7 @@ const { useRuntime } = await import('../app/runtime');
 const { mrOf, projectOf } = await import('./testMrs');
 
 type Action = Extract<MenuRow, { kind: 'action' }>;
-const act = () => ({ copy: vi.fn(), openUrl: vi.fn(), openIn: vi.fn(), openDiff: vi.fn(), viewFile: vi.fn(), compare: vi.fn(), copyMessage: vi.fn(), showInGraph: vi.fn(), openFolder: vi.fn() });
+const act = () => ({ copy: vi.fn(), openUrl: vi.fn(), openIn: vi.fn(), openDiff: vi.fn(), viewFile: vi.fn(), compare: vi.fn(), copyMessage: vi.fn(), createCommitPatch: vi.fn(), createWorktreePatch: vi.fn(), applyPatch: vi.fn(), showInGraph: vi.fn(), openFolder: vi.fn() });
 const envOf = (over: Partial<MenuEnv> = {}): MenuEnv => ({ forge: () => null, openers: { list: [], error: null, last: null }, act: act(), headBranch: 'main', headSha: null, inGraph: () => true, write: null, sidebar: null, labelsAt: () => [], activeWorktree: null, mainWorktree: null, inProgress: null, worktreeShown: (p) => `../${p.split('/').pop()}`, ...over });
 const labels = (rows: MenuRow[]) => rows.map((r) => (r.kind === 'separator' ? '---' : r.label));
 const find = (rows: MenuRow[], id: string) => rows.find((r) => r.kind === 'action' && r.id === id) as Action;

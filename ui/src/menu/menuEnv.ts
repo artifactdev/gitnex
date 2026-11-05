@@ -38,6 +38,8 @@ import { wipFileCount } from '../format/wip';
 import { discardScopeOf, type DiscardAllScope } from '../stage/menuRows';
 import { inCommitSelection, openWorktree, selectedCommits, type CommitRef, type DiffTarget, type RepoViewState, type RepoViewStore } from '../repo/store';
 import { useToast } from '../ui/toastStore';
+import { savePatch } from '../patch/create';
+import { useApplyPatch } from '../patch/store';
 import { stackBase, stackFor, stacksOf, type Stack } from '../stacks/detect';
 import './builders';
 import { refreshMenuOn } from './menuStore';
@@ -92,6 +94,12 @@ export interface MenuActions {
   compare(from: string, to: string | 'worktree'): void;
   /** Copies a commit's full message (summary + body), loading it first if it isn't cached. */
   copyMessage(sha: string): void;
+  /** Saves a commit's diff as a `.patch` file (a folder picker, never overwriting). */
+  createCommitPatch(sha: string): void;
+  /** Saves the worktree's diff (all unstaged, or only staged) as a `.patch` file. */
+  createWorktreePatch(worktree: string, staged: boolean): void;
+  /** Opens the Apply patch dialog for `worktree`. */
+  applyPatch(worktree: string): void;
   /** Selects the commit in the graph and moves the keyboard there (the sidebar menus' "Show in
    * graph"); a toast when it isn't in the loaded history. */
   showInGraph(sha: string): void;
@@ -366,6 +374,12 @@ export function fileMenuEnv(store: RepoViewStore): MenuEnv {
       viewFile: (t) => { endStickyHistory(tabId); store.getState().openFile({ ...t, view: 'file' }); },
       compare: (from, to) => compare(store, from, to),
       copyMessage: (sha) => copyMessage(store, sha),
+      createCommitPatch: (sha) => void savePatch(api.createCommitPatch(s.repo, sha)),
+      createWorktreePatch: (worktree, staged) => void savePatch(api.createWorktreePatch(s.repo, worktree, staged)),
+      applyPatch: (worktree) => {
+        const repo = rt?.repo;
+        if (repo) useApplyPatch.getState().open({ repo: repo.id, worktree });
+      },
       showInGraph: (sha) => {
         const g = store.getState();
         if (g.selectCommitById(sha)) g.setFocus('graph');

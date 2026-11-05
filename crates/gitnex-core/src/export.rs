@@ -4,15 +4,15 @@ use crate::error::{GbError, GbErrorKind};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const MAX_BYTES: usize = 1024 * 1024;
+const MAX_BYTES: usize = 16 * 1024 * 1024;
 
-/// Refuses a name that could leave the folder, and contents over 1 MiB (the UI shows it as a toast).
+/// Refuses a name that could leave the folder, and contents over 16 MiB (the UI shows it as a toast).
 pub(crate) fn check(name: &str, contents: &str) -> Result<(), GbError> {
     if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
         return Err(GbError::new(GbErrorKind::Other, format!("\"{name}\" isn't a file name")));
     }
     if contents.len() > MAX_BYTES {
-        return Err(GbError::new(GbErrorKind::Other, "That export is over 1 MiB"));
+        return Err(GbError::new(GbErrorKind::Other, "That file is over 16 MiB"));
     }
     Ok(())
 }

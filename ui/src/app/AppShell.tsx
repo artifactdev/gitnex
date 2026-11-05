@@ -8,6 +8,7 @@ import { Lightbox } from '../lightbox/Lightbox';
 import { ChoiceDialog } from '../ui/ChoiceDialog';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { PromptDialog } from '../ui/PromptDialog';
+import { ApplyPatchDialog } from '../patch/ApplyPatchDialog';
 import { Toast } from '../ui/Toast';
 import { TooltipHost } from '../ui/TooltipHost';
 import './features';
@@ -100,6 +101,7 @@ export function AppShell({ error = null }: { error?: string | null }) {
       <ConfirmDialog />
       <PromptDialog />
       <ChoiceDialog />
+      <ApplyPatchDialog />
     </div>
   );
 }

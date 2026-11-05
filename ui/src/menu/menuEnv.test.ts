@@ -339,7 +339,7 @@ describe('the sidebar item menus', () => {
   it("a local branch: the branch label's commit menu (its upstream as the Remote copy) and Show in graph", () => {
     const rows = sidebarItemMenu(store(), item('local', { name: 'main', target: 'c0', branch: branchLocal }))();
     // main is HEAD: nothing to compare with HEAD, so the working tree instead.
-    expect(labelsOf(rows)).toEqual(['Copy branch name', 'Copy SHA', 'Copy message', 'Forge link', '---', 'Compare with working tree', '---', 'Show in graph']);
+    expect(labelsOf(rows)).toEqual(['Copy branch name', 'Copy SHA', 'Copy message', 'Create patch…', 'Forge link', '---', 'Compare with working tree', '---', 'Show in graph']);
     const copy = rows.find((r) => r.kind === 'action' && r.label === 'Copy branch name') as Extract<MenuRow, { kind: 'action' }>;
     expect(copy.variants!.find((v) => v.id === 'remote')!.disabledReason).toBeUndefined();
     expect(copy.variants!.find((v) => v.id === 'local')!.disabledReason).toBeUndefined();

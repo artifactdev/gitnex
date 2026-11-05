@@ -1,0 +1,52 @@
+.patch-dialog {
+  width: min(680px, calc(100vw - 48px));
+}
+
+.patch-dialog .dim {
+  margin: 0;
+}
+
+.patch-dialog code {
+  font: 12px var(--font-mono);
+  color: var(--text-normal);
+}
+
+.patch-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.patch-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font: 12px var(--font-mono);
+}
+
+.patch-dialog textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--wip-input-border);
+  border-radius: 4px;
+  background: var(--wip-input-bg);
+  color: var(--text-normal);
+  font: 12px/1.45 var(--font-mono);
+  tab-size: 2;
+}
+
+.patch-dialog textarea:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -1px;
+}
+
+.patch-dialog .modal-actions .primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

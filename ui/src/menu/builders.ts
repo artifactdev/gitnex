@@ -88,6 +88,28 @@ registerMenu<WipTarget, MenuEnv>({
   when: (_t, env) => !!env.write,
   rows: (t, env) => (env.write ? [discardAllRow({ ...env.write, worktree: t.worktree }, t.discard ?? { count: 0, inProgress: false })] : []),
 });
+
+/** Create a patch from this worktree (staged or unstaged), or apply one to it. */
+registerMenu<WipTarget, MenuEnv>({
+  id: 'wip.patch', kind: 'wip', group: 'stash', order: 2,
+  when: (_t, env) => !!env.write,
+  rows: (t, env) => env.write ? [
+    row({
+      id: 'wip.createPatch', label: 'Create patch…', icon: ICONS.diff,
+      tooltip: 'Save this worktree’s diff as a .patch file (untracked files aren’t included)',
+      run: () => env.act.createWorktreePatch(t.worktree, false),
+      variants: [
+        { id: 'unstaged', label: 'Unstaged changes', tooltip: 'Save the unstaged changes as a .patch file', run: () => env.act.createWorktreePatch(t.worktree, false) },
+        { id: 'staged', label: 'Staged changes', tooltip: 'Save only the staged changes as a .patch file', run: () => env.act.createWorktreePatch(t.worktree, true) },
+      ],
+    }),
+    row({
+      id: 'wip.applyPatch', label: 'Apply patch…', icon: ICONS.file,
+      tooltip: 'Apply a .patch or .diff file to this worktree (git apply)',
+      run: () => env.act.applyPatch(t.worktree),
+    }),
+  ] : [],
+});
 // --- end 2B T9 ---
 
 registerMenu<FileTarget, MenuEnv>({ id: 'file.copy', kind: 'file', group: 'copy', order: 0, rows: (t, env) => [copyPath('file.copyPath', t.path, t.root, env)] });
@@ -257,6 +279,7 @@ registerMenu<CommitTarget, MenuEnv>({
       ],
     }));
     out.push(row({ id: 'commit.copyMessage', label: 'Copy message', icon: ICONS.message, tooltip: 'Copy the full commit message', run: () => env.act.copyMessage(t.sha) }));
+    out.push(row({ id: 'commit.createPatch', label: 'Create patch…', icon: ICONS.diff, tooltip: 'Save this commit’s diff as a .patch file', run: () => env.act.createCommitPatch(t.sha) }));
     const rb = remoteBranch(b);
     const f = env.forge(rb?.remote);
     if (f) out.push(commitForgeRow('commit.forgeLink', forgeName(f), { url: rb ? branchUrl(f, rb.name) : null }, commitUrl(f, t.sha)!, env));

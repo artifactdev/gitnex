@@ -24,7 +24,7 @@ const OPENERS: OpenerPayload[] = [
 ];
 const gitlab = { host: 'gitlab.example.com', path: 'acme/shop', hostKind: 'gitlab' as const };
 const github = { host: 'github.com', path: 'owner/repo', hostKind: 'github' as const };
-const act = () => ({ copy: vi.fn(), openUrl: vi.fn(), openIn: vi.fn(), openDiff: vi.fn(), viewFile: vi.fn(), compare: vi.fn(), copyMessage: vi.fn(), showInGraph: vi.fn(), openFolder: vi.fn() });
+const act = () => ({ copy: vi.fn(), openUrl: vi.fn(), openIn: vi.fn(), openDiff: vi.fn(), viewFile: vi.fn(), compare: vi.fn(), copyMessage: vi.fn(), createCommitPatch: vi.fn(), createWorktreePatch: vi.fn(), applyPatch: vi.fn(), showInGraph: vi.fn(), openFolder: vi.fn() });
 const envOf = (over: Partial<MenuEnv> = {}): MenuEnv => ({ forge: () => gitlab, openers: { list: OPENERS, error: null, last: null }, act: act(), headBranch: 'main', headSha: 'h'.repeat(40), inGraph: () => true, write: null, sidebar: null, labelsAt: () => [], activeWorktree: null, mainWorktree: null, inProgress: null, worktreeShown: (p) => p, ...over });
 const sha = 'a'.repeat(40);
 const diff: DiffTarget = { key: 'k|src/a b.php', path: 'src/a b.php', oldPath: null, status: 'M', old: { kind: 'object', oid: 'o'.repeat(40) }, new: { kind: 'object', oid: 'n'.repeat(40) }, view: 'diff' };
@@ -209,7 +209,7 @@ describe('the commit menu (spec §7 target table; plan 1C Task 15, commit kind)'
   it('a branch tip: forge refs, then copy (branch name, SHA, message, Forge link), then view; every row has an icon and a tooltip', () => {
     const t = commitTarget({ mrRefs: ['acme/shop!1187', '#3'], branch: branch('feature/x', 'refs/heads/feature/x', { remote: 'origin', branch: 'feature/x' }) });
     const rows = commit(t, envOf());
-    expect(labels(rows)).toEqual(['Open acme/shop!1187', '---', 'Copy branch name', 'Copy SHA', 'Copy message', 'Forge link', '---', 'Compare with HEAD']);
+    expect(labels(rows)).toEqual(['Open acme/shop!1187', '---', 'Copy branch name', 'Copy SHA', 'Copy message', 'Create patch…', 'Forge link', '---', 'Compare with HEAD']);
     const all = (rs: MenuRow[]): Array<Exclude<MenuRow, { kind: 'separator' | 'header' }>> => rs.flatMap((r) => (r.kind === 'separator' || r.kind === 'header' ? [] : r.kind === 'submenu' ? [r, ...all(r.rows)] : [r]));
     for (const r of all(rows)) {
       expect(r.icon, r.id).toBeTruthy();
@@ -221,7 +221,7 @@ describe('the commit menu (spec §7 target table; plan 1C Task 15, commit kind)'
   it('a plain commit (no branch): no branch-name row, Compare with working tree, no forge refs row without a forge', () => {
     const t = commitTarget({ mrRefs: ['!1'] });
     const rows = commit(t, envOf({ forge: () => null }));
-    expect(labels(rows)).toEqual(['Copy SHA', 'Copy message', '---', 'Compare with working tree']);
+    expect(labels(rows)).toEqual(['Copy SHA', 'Copy message', 'Create patch…', '---', 'Compare with working tree']);
   });
 
   it('a WIP row gets no commit menu at all', () => {
