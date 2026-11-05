@@ -18,6 +18,7 @@ use gitnex_forge::gravatar::{Gravatar, DEFAULT_BASE_URL};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tauri::{Emitter, Manager, WebviewWindowBuilder};
+#[cfg(feature = "cef")]
 use tauri_runtime_cef::Cef;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -26,6 +27,16 @@ mod csp;
 mod desktop;
 mod menu;
 mod window_state;
+
+// Without CEF only the macOS system-webview spike can supply a runtime.
+#[cfg(not(any(feature = "cef", all(target_os = "macos", feature = "macos-wkwebview"))))]
+compile_error!("enable the `cef` feature, or `macos-wkwebview` on macOS");
+
+/// What the UI reports as the webview runtime (About/Settings › About).
+#[cfg(all(target_os = "macos", feature = "macos-wkwebview"))]
+const RUNTIME_INFO: &str = "tauri 3.0.0-alpha.5 · tauri-runtime-wry 3.0.0-alpha.5 (WKWebView)";
+#[cfg(not(all(target_os = "macos", feature = "macos-wkwebview")))]
+const RUNTIME_INFO: &str = "tauri 3.0.0-alpha.5 · tauri-runtime-cef 3.0.0-alpha.6 (GitNex patch: CEF #3002)";
 
 #[tauri::command]
 async fn api(state: tauri::State<'_, Arc<Api>>, req: Request) -> Result<serde_json::Value, GbError> {
@@ -38,14 +49,22 @@ async fn api(state: tauri::State<'_, Arc<Api>>, req: Request) -> Result<serde_js
 /// asked; the UI shows its own menu when it wasn't.
 #[tauri::command]
 async fn window_manager(window: tauri::WebviewWindow<tauri::DynRuntime>, request: String) -> Result<bool, String> {
-    use tauri_runtime_cef::{WebviewCefExt, WindowManagerRequest};
-    let request = match request.as_str() {
-        "menu" => WindowManagerRequest::ShowMenu,
-        "keyboard-menu" => WindowManagerRequest::ShowMenuFromKeyboard,
-        "lower" => WindowManagerRequest::Lower,
-        other => return Err(format!("unknown window manager request {other:?}")),
-    };
-    window.window_manager_request(request).map_err(|e| e.to_string())
+    #[cfg(all(feature = "cef", not(all(target_os = "macos", feature = "macos-wkwebview"))))]
+    {
+        use tauri_runtime_cef::{WebviewCefExt, WindowManagerRequest};
+        let request = match request.as_str() {
+            "menu" => WindowManagerRequest::ShowMenu,
+            "keyboard-menu" => WindowManagerRequest::ShowMenuFromKeyboard,
+            "lower" => WindowManagerRequest::Lower,
+            other => return Err(format!("unknown window manager request {other:?}")),
+        };
+        window.window_manager_request(request).map_err(|e| e.to_string())
+    }
+    #[cfg(any(not(feature = "cef"), all(target_os = "macos", feature = "macos-wkwebview")))]
+    {
+        let _ = (window, request);
+        Err("the window manager isn't available in this build".into())
+    }
 }
 
 // A release build of the app never contains the test-only API. `gitnex-core`'s `testing`
@@ -229,6 +248,7 @@ fn opened_folders(urls: &[tauri::Url]) -> Vec<PathBuf> {
 
 /// The spell-check dictionary: Chromium's own en-US one, under the name Chromium 154 looks for
 /// (docs/licensing.md has its source and license).
+#[cfg(feature = "cef")]
 const DICTIONARY: &str = "en-US-10-2.bdic";
 
 /// Where the packages put the app's own files: beside the binary, or on macOS the bundle's
@@ -244,6 +264,7 @@ fn resources_dir(exe: &Path) -> Option<PathBuf> {
 /// Where the dictionary is: `dictionaries/` in the resources folder, where the packages install it
 /// (`/usr/share/GitNex/dictionaries/`, tauri.conf.json), or, in a debug build, this crate's
 /// copy. None (a release build run from `target/`) leaves Chromium without one: no spell check.
+#[cfg(feature = "cef")]
 fn bundled_dictionary(exe_dir: Option<&Path>) -> Option<PathBuf> {
     let beside = exe_dir.map(|dir| dir.join("dictionaries").join(DICTIONARY));
     let ours = cfg!(debug_assertions).then(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("dictionaries").join(DICTIONARY));
@@ -254,6 +275,7 @@ fn bundled_dictionary(exe_dir: Option<&Path>) -> Option<PathBuf> {
 /// side for any process Chromium launched with `--type=` and returns before the Tauri app is
 /// built (required by `tauri-runtime-cef`; see its `examples/cef/src-tauri/src/main.rs`).
 /// The CEF runtime, minus the per-profile tweaks documented where it is built in `main`.
+#[cfg(feature = "cef")]
 fn cef_runtime() -> Cef {
     let cef = Cef::default()
         .profile_preference("settings.a11y.caretbrowsing.enabled", false)
@@ -319,18 +341,18 @@ fn cef_runtime() -> Cef {
 }
 
 /// The variable naming a debug build's DevTools protocol port (Chromium listens on 127.0.0.1).
-#[cfg(debug_assertions)]
+#[cfg(all(feature = "cef", debug_assertions))]
 const DEV_CDP_PORT: &str = "GITNEX_DEV_CDP_PORT";
 
 /// [`DEV_CDP_PORT`]'s port: one Chromium accepts (1024 to 65535), else none.
-#[cfg(debug_assertions)]
+#[cfg(all(feature = "cef", debug_assertions))]
 fn dev_cdp_port(value: Option<&std::ffi::OsStr>) -> Option<u16> {
     value?.to_str()?.trim().parse().ok().filter(|port| *port >= 1024)
 }
 
 /// The `gitnex` binary's `main`; on Windows also the DLL entry points CEF's bootstrap calls
 /// (`RunWinMain` below).
-#[tauri_runtime_cef::cef_entry_point]
+#[cfg_attr(feature = "cef", tauri_runtime_cef::cef_entry_point)]
 pub fn run() {
     // Very first (the attribute above has already sent CEF's own `--type=` helpers away): when
     // git or ssh runs this binary as GIT_ASKPASS/SSH_ASKPASS (spec §5.4), it only asks the
@@ -385,7 +407,7 @@ pub fn run() {
     let parent: ParentWindow = Arc::default();
     let quit: QuitSlot = Arc::default();
     let quit_slot = quit.clone();
-    let mut built = build_api(cli, launch, child_env, quit).with_runtime_info("tauri 3.0.0-alpha.5 · tauri-runtime-cef 3.0.0-alpha.6 (GitNex patch: CEF #3002)");
+    let mut built = build_api(cli, launch, child_env, quit).with_runtime_info(RUNTIME_INFO);
     if let Some(h) = log_handle {
         built = built.with_log_handle(h);
     }
@@ -406,21 +428,25 @@ pub fn run() {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(8 * 1024 * 1024).build().expect("the async runtime");
     tauri::async_runtime::set(Box::leak(Box::new(runtime)).handle().clone());
     // macOS's menu bar (menu.rs); no menu elsewhere.
-    menu::attach(tauri::Builder::default())
-        // Never in caret-browsing mode, even if "Turn on" was once clicked in Chrome's F7
-        // dialog (Chrome keeps it in the profile). The F7 command itself is blocked in the
-        // vendored runtime (vendor/tauri-runtime-cef/GITNEX-PATCH.md). Not `show_dialog=false`:
-        // without the dialog, F7 would silently turn caret browsing on.
-        //
-        // K31: GitNex never ships or checks for Chromium's own components (cert revocation
-        // sets, CT log lists, download file-type policies) — it is a git client, not a browser,
-        // and has no route to `update.googleapis.com` that matters to it. Left on, the updater
-        // tries to memory-map a temp file every run and fails loudly under sandboxing
-        // (`puffin/src/puffpatch.cc: Failed to create a temporary file for memory-mapping:
-        // Operation not permitted`). `component_updates(false)` only adds
-        // `--disable-component-update`; it doesn't touch any Chromium feature GitNex's webview
-        // uses (vendor/tauri-runtime-cef/GITNEX-PATCH.md).
-        .runtime(cef_runtime())
+    let builder = tauri::Builder::default();
+    #[cfg(all(target_os = "macos", feature = "macos-wkwebview"))]
+    let builder = builder.runtime(tauri_runtime_wry::Wry::default());
+    // Never in caret-browsing mode, even if "Turn on" was once clicked in Chrome's F7
+    // dialog (Chrome keeps it in the profile). The F7 command itself is blocked in the
+    // vendored runtime (vendor/tauri-runtime-cef/GITNEX-PATCH.md). Not `show_dialog=false`:
+    // without the dialog, F7 would silently turn caret browsing on.
+    //
+    // K31: GitNex never ships or checks for Chromium's own components (cert revocation
+    // sets, CT log lists, download file-type policies) — it is a git client, not a browser,
+    // and has no route to `update.googleapis.com` that matters to it. Left on, the updater
+    // tries to memory-map a temp file every run and fails loudly under sandboxing
+    // (`puffin/src/puffpatch.cc: Failed to create a temporary file for memory-mapping:
+    // Operation not permitted`). `component_updates(false)` only adds
+    // `--disable-component-update`; it doesn't touch any Chromium feature GitNex's webview
+    // uses (vendor/tauri-runtime-cef/GITNEX-PATCH.md).
+    #[cfg(all(feature = "cef", not(all(target_os = "macos", feature = "macos-wkwebview"))))]
+    let builder = builder.runtime(cef_runtime());
+    menu::attach(builder)
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(backend)
         .invoke_handler(tauri::generate_handler![api, window_manager])
@@ -655,7 +681,7 @@ pub fn run() {
 /// # Safety
 ///
 /// Called by the bootstrap only, with its own `sandbox_info`.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "cef"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn RunWinMain(_instance: *mut std::ffi::c_void, _command_line: *const u16, _show: i32, sandbox_info: *mut std::ffi::c_void, _version: *const std::ffi::c_void) -> i32 {
     // SAFETY: the bootstrap's broker, valid for the life of the process.
@@ -669,7 +695,7 @@ pub unsafe extern "C" fn RunWinMain(_instance: *mut std::ffi::c_void, _command_l
 /// # Safety
 ///
 /// Called by the bootstrap only, with its own `sandbox_info`.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "cef"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn RunConsoleMain(_argc: i32, _argv: *const *const std::ffi::c_char, sandbox_info: *mut std::ffi::c_void, _version: *const std::ffi::c_void) -> i32 {
     // SAFETY: as in `RunWinMain`.
@@ -714,6 +740,7 @@ mod tests {
     /// `localhost` (which stops the spelling dictionary, account sign-in and AI Mode checks), and
     /// component updates, background networking and Safe Browsing are off. The webview only
     /// loads the app's own bundle.
+    #[cfg(feature = "cef")]
     #[test]
     fn chromium_requests_to_google_services_are_off() {
         let cef = format!("{:?}", cef_runtime());
@@ -730,6 +757,7 @@ mod tests {
 
     /// A debug build opens the DevTools protocol only on a valid port named by
     /// `GITNEX_DEV_CDP_PORT`; without it, the runtime keeps the server refused.
+    #[cfg(feature = "cef")]
     #[test]
     fn the_dev_cdp_port_needs_a_valid_port() {
         use std::ffi::OsStr;
@@ -748,6 +776,7 @@ mod tests {
     /// Spell check works offline: the bundled en-US dictionary goes where Chromium looks for it
     /// (the runtime copies it before CEF starts), en-US is the language checked, and Chromium's
     /// "enhanced" spell check, which sends the text to Google, stays off.
+    #[cfg(feature = "cef")]
     #[test]
     fn spell_check_uses_the_bundled_english_dictionary() {
         let cef = format!("{:?}", cef_runtime());
@@ -760,6 +789,7 @@ mod tests {
 
     /// The file Chromium 154 asks for (`spellcheck_common.cc`: en-US is version 10-2), in its
     /// `.bdic` format.
+    #[cfg(feature = "cef")]
     #[test]
     fn the_bundled_dictionary_is_chromiums_en_us_bdic() {
         assert_eq!(DICTIONARY, "en-US-10-2.bdic");
@@ -769,6 +799,7 @@ mod tests {
 
     /// The packages put it in `dictionaries/` beside the binary (tauri.conf.json); a debug build
     /// falls back to this crate's copy, so `just dev` checks spelling too.
+    #[cfg(feature = "cef")]
     #[test]
     fn the_dictionary_beside_the_binary_comes_first() {
         let dir = std::env::temp_dir().join(format!("gitnex-app-dictionary-{}", std::process::id()));

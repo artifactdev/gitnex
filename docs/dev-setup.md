@@ -614,6 +614,9 @@ and the pinned Tauri CLI (`cargo install tauri-cli --version =3.0.0-alpha.5 --lo
   quit and reopened. `--debug` builds the debug profile, `--keep` keeps the temporary directory.
   It clears `MACOSX_DEPLOYMENT_TARGET` for the build: this toolchain makes corrupt proc-macro
   dylibs with it set.
+- **System webview (spike):** `./build-macos-app.sh --wkwebview` builds the same bundle on
+  Tauri's own runtime (WKWebView) and `--no-default-features`, so no CEF is linked or shipped.
+  See [`macos-wkwebview-spike.md`](macos-wkwebview-spike.md); this isn't a release option yet.
 - **The bundle:** `cd crates/gitnex-app && cargo tauri build --debug --bundles app` (or without
   `--debug`) makes `target/<profile>/bundle/macos/GitNex.app`, with the UI embedded. The Tauri
   CLI does the whole layout (`tauri.macos.conf.json` adds to `tauri.conf.json`):

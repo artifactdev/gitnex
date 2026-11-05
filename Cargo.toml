@@ -57,6 +57,9 @@ tokio-tungstenite = "0.30"
 tauri = { version = "=3.0.0-alpha.5", features = [] }
 tauri-build = { version = "=3.0.0-alpha.4", features = [] }
 tauri-runtime-cef = "=3.0.0-alpha.6"
+# Tauri's system-webview runtime (wry): WKWebView on macOS. A spike for the macOS build,
+# behind the app's `macos-wkwebview` feature; CEF stays the default.
+tauri-runtime-wry = "=3.0.0-alpha.5"
 tauri-plugin-clipboard-manager = "=3.0.0-alpha.3"
 # Avatars and URL opening (plan 1B Task 5).
 sha2 = "0.11.0"

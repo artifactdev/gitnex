@@ -12,11 +12,14 @@ fail() { echo "build-macos-app: $*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: ./build-macos-app.sh [--debug] [--keep] [--install]
+Usage: ./build-macos-app.sh [--debug] [--keep] [--install] [--wkwebview]
 
   --debug    build the debug profile instead of release
   --keep     keep the temporary build directory (removed on success otherwise; kept on failure)
   --install  also replace the app in $GITNEX_APP_DIR (default: /Applications/GitNex.app)
+  --wkwebview
+             build on Tauri's system webview (WKWebView) instead of the bundled CEF
+             (spike; see docs/macos-wkwebview-spike.md)
 
 The existing bundle is swapped by renames in the same folder, so a running GitNex keeps
 running the old build until it is quit and reopened.
@@ -26,11 +29,13 @@ EOF
 debug=0
 keep=0
 install=0
+wkwebview=0
 for arg in "$@"; do
   case "$arg" in
     --debug) debug=1 ;;
     --keep) keep=1 ;;
     --install) install=1 ;;
+    --wkwebview) wkwebview=1 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option $arg (try --help)" ;;
   esac
@@ -45,6 +50,20 @@ tauri_args=(--bundles app)
 if [ "$debug" = 1 ]; then
   profile=debug
   tauri_args=(--debug --bundles app)
+fi
+if [ "$wkwebview" = 1 ]; then
+  # The `--no-default-features` goes to cargo through `cargo tauri build`'s runner args, which
+  # must come after every Tauri option. Dropping the default `cef` feature makes the app link
+  # wry (WKWebView) instead of CEF.
+  tauri_args+=(--features macos-wkwebview)
+  runner_args=(-- --no-default-features)
+  # The CLI selects the bundler runtime from the manifest's enabled features and only sees
+  # cargo's default ones, so it still treats this as a CEF app and builds CEF's helper apps.
+  # `embed=false` at least keeps the 322 MB framework out; the helpers are removed below.
+  bundle_config='{"bundle":{"macOS":{"minimumSystemVersion":null},"cef":{"embed":false}}}'
+else
+  runner_args=()
+  bundle_config='{"bundle":{"macOS":{"minimumSystemVersion":null}}}'
 fi
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/gitnex-app.XXXXXX")
 install_new=
@@ -64,10 +83,19 @@ echo "build-macos-app: building the $profile bundle (build directory: $build_dir
   env -u CARGO_INCREMENTAL -u MACOSX_DEPLOYMENT_TARGET \
     CARGO_TARGET_DIR="$build_dir" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     cargo tauri build "${tauri_args[@]}" \
-      --config '{"bundle":{"macOS":{"minimumSystemVersion":null}}}')
+      --config "$bundle_config" \
+      "${runner_args[@]}")
 
 built=$build_dir/$profile/bundle/macos/GitNex.app
 [ -d "$built" ] || fail "the build made no $built"
+if [ "$wkwebview" = 1 ]; then
+  # This app runs on WKWebView and ships no CEF. The CLI still creates CEF's helper apps (it
+  # reads the manifest's default features, not the `--no-default-features` runner arg); the
+  # framework is already left out by `bundle.cef.embed=false`. Remove the helpers before the
+  # final ad-hoc signature below.
+  rm -rf "$built/Contents/Frameworks"/*Helper*.app
+  rmdir "$built/Contents/Frameworks" 2>/dev/null || true
+fi
 plist=$built/Contents/Info.plist
 if ! /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" "$plist" 2>/dev/null; then
   /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 12.0" "$plist"
