@@ -72,6 +72,7 @@ import type { IntegratePreviewPayload } from './gen/IntegratePreviewPayload';
 import type { WriteResult } from './gen/WriteResult';
 import type { LfsStatusPayload } from './gen/LfsStatusPayload';
 import type { LfsTransferOutcome } from './gen/LfsTransferOutcome';
+import type { GitignoreOutcome } from './gen/GitignoreOutcome';
 import type { StashApplyOutcome } from './gen/StashApplyOutcome';
 import type { StashPushOutcome } from './gen/StashPushOutcome';
 import type { StagingUndoState } from './gen/StagingUndoState';
@@ -449,8 +450,11 @@ export const api = {
     call<WriteResult<DeleteOutcome>>({ method: 'deleteBranch', params: { repo, worktree, ...d } }),
   // --- end 2C T11 ---
   // --- 2C T13 ---
-  /** Stash (spec #2 §10): `message` is the WIP draft, '' for the branch-based name. */
-  stashPush: (repo: number, worktree: string, message: string) => call<WriteResult<StashPushOutcome>>({ method: 'stashPush', params: { repo, worktree, message } }),
+  /** Stash (spec #2 §10): `message` is the WIP draft, '' for the branch-based name. `paths`:
+   * stash only those files (none: every change). */
+  stashPush: (repo: number, worktree: string, message: string, paths: string[] = []) => call<WriteResult<StashPushOutcome>>({ method: 'stashPush', params: { repo, worktree, message, paths } }),
+  /** Add repository-relative paths to `.gitignore`, creating it when needed. */
+  addToGitignore: (repo: number, worktree: string, paths: string[]) => call<WriteResult<GitignoreOutcome>>({ method: 'addToGitignore', params: { repo, worktree, paths } }),
   stashApply: (repo: number, worktree: string, oid: string, pop: boolean, withoutIndex: boolean) =>
     call<WriteResult<StashApplyOutcome>>({ method: 'stashApply', params: { repo, worktree, oid, pop, withoutIndex } }),
   stashDrop: (repo: number, worktree: string, oid: string) => call<WriteResult<null>>({ method: 'stashDrop', params: { repo, worktree, oid } }),

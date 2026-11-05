@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CommitTarget, MenuEnv, SidebarTarget, WipTarget } from '../menu/menuEnv';
+import type { CommitTarget, FileTarget, MenuEnv, SidebarTarget, WipTarget } from '../menu/menuEnv';
 import { buildMenu } from '../menu/registry';
 import './feature';
 
@@ -17,5 +17,15 @@ describe('stash rows (spec #2 §10)', () => {
   it('a WIP row offers Stash changes for its own worktree', () => {
     const t: WipTarget = { worktree: '/r-x', name: 'r-x', active: false };
     expect(ids(buildMenu('wip', t, env))).toContain('wip.stash');
+  });
+  it('a WIP file offers Stash file, and a multi-selection Stash N files', () => {
+    const file = (selection?: string[]): FileTarget => ({ path: 'a.txt', root: '/r', sha: null, upstream: null, diff: {} as never, changed: true, deleted: false, list: 'wip', openIn: {} as never, wip: { worktree: '/r', staged: false, oldPath: null, status: 'M' }, selection });
+    const one = buildMenu('file', file(), env);
+    expect(one.find((r) => r.kind === 'action' && r.id === 'file.stash')).toMatchObject({ label: 'Stash file…' });
+    const many = buildMenu('file', file(['a.txt', 'b.txt']), env);
+    expect(many.find((r) => r.kind === 'action' && r.id === 'file.stash')).toMatchObject({ label: 'Stash 2 files…' });
+    const conflicted = file();
+    conflicted.wip!.status = 'U';
+    expect(ids(buildMenu('file', conflicted, env))).not.toContain('file.stash');
   });
 });

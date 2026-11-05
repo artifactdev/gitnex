@@ -3,13 +3,13 @@ import { StashIcon } from '../icons/stash';
 import { activeRuntime, activeTab, registerActions } from '../app/actions';
 import type { RepoCtx } from '../app/repoContext';
 import { useRuntime, type TabRuntime } from '../app/runtime';
-import type { CommitTarget, MenuEnv, SidebarTarget, WipTarget } from '../menu/menuEnv';
+import type { CommitTarget, FileTarget, MenuEnv, SidebarTarget, WipTarget } from '../menu/menuEnv';
 import { registerMenu } from '../menu/registry';
 import type { MenuRow } from '../menu/types';
 import { registerToolbarButton, type ButtonView } from '../toolbar/registry';
 import type { WriteCtx } from '../write/client';
 import { isTypingTarget } from '../ui/keys';
-import { applyStash, dropStash, stashPushFor } from './actions';
+import { applyStash, dropStash, stashPushFor, stashSelected } from './actions';
 
 const writeCtx = (): WriteCtx | null => {
   const t = activeTab();
@@ -64,6 +64,20 @@ const offs = [
     id: 'commit.stash', kind: 'commit', group: 'stash', order: 0,
     when: (t, env) => t.isStash && !!env.write,
     rows: (t, env) => (env.write ? rows(env.write, t.sha) : []),
+  }),
+  registerMenu<FileTarget, MenuEnv>({
+    id: 'file.stash', kind: 'file', group: 'stash', order: 0,
+    when: (t, env) => !!env.write && !!t.wip && t.wip.status !== 'U',
+    rows: (t, env) => {
+      if (!env.write || !t.wip || t.wip.status === 'U') return [];
+      const paths = t.selection?.length ? t.selection : [t.path];
+      if (paths.length === 0) return [];
+      return [{
+        kind: 'action', id: 'file.stash', label: paths.length === 1 ? 'Stash file…' : `Stash ${paths.length} files…`, icon: StashIcon,
+        tooltip: paths.length === 1 ? `Stash only ${paths[0]}'s changes` : `Stash only the ${paths.length} selected files' changes`,
+        run: () => { void stashSelected({ ...env.write!, worktree: t.wip!.worktree }, paths); },
+      }];
+    },
   }),
   registerMenu<WipTarget, MenuEnv>({
     id: 'wip.stash', kind: 'wip', group: 'stash', order: 0,

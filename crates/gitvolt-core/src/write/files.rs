@@ -61,11 +61,15 @@ pub(crate) fn encode(text: &str, encoding: &str, eol: Eol, bom: bool) -> Result<
 /// Temp file in the same folder, the old mode, fsync, rename over.
 pub(crate) fn write_atomic(file: &Path, bytes: &[u8]) -> Result<(), GbError> {
     let dir = file.parent().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "no folder to save into"))?;
-    let perms = std::fs::metadata(file)?.permissions();
+    let perms = std::fs::metadata(file).ok().map(|m| m.permissions());
     let mut tmp = tempfile::Builder::new().prefix(".gitvolt-save-").tempfile_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
-    std::fs::set_permissions(tmp.path(), perms)?;
+    match perms {
+        Some(perms) => std::fs::set_permissions(tmp.path(), perms)?,
+        None if cfg!(unix) => crate::platform::fs::set_mode(tmp.path(), 0o644)?,
+        None => {}
+    }
     tmp.persist(file).map_err(|e| GbError::from(e.error))?;
     // Make the rename itself durable; best effort (some filesystems can't fsync a directory).
     if let Ok(d) = std::fs::File::open(dir) {
@@ -93,6 +97,8 @@ struct WriteWorktreeFile {
     text: String,
     base: String,
     suggestion: bool,
+    /// A new file may be made (`base` is then empty): `.gitignore`'s first entry.
+    create: bool,
     checked: std::sync::Mutex<Checked>,
 }
 
@@ -171,15 +177,21 @@ impl WriteIntent for WriteWorktreeFile {
         if in_nested_repo(pre.root, &self.path) {
             return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} is in a nested repository: edit it there", self.path)));
         }
-        let meta = std::fs::symlink_metadata(&file).map_err(|_| self.changed())?;
-        if !meta.file_type().is_file() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} isn't a regular file: edit it in your editor", self.path)));
-        }
-        if crate::platform::fs::mode(&meta) & 0o200 == 0 {
-            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} is read-only: make it writable first", self.path)));
-        }
-        let bytes = std::fs::read(&file)?;
-        if worktree_id(&bytes) != self.base {
+        let meta = std::fs::symlink_metadata(&file);
+        let (bytes, missing) = match meta {
+            Ok(meta) => {
+                if !meta.file_type().is_file() {
+                    return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} isn't a regular file: edit it in your editor", self.path)));
+                }
+                if crate::platform::fs::mode(&meta) & 0o200 == 0 {
+                    return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} is read-only: make it writable first", self.path)));
+                }
+                (std::fs::read(&file)?, false)
+            }
+            Err(e) if self.create && e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), true),
+            Err(_) => return Err(self.changed()),
+        };
+        if !missing && worktree_id(&bytes) != self.base {
             return Err(self.changed());
         }
         let declared = working_tree_encoding(&pre.api.cli, pre.root, &self.path).await?;
@@ -189,7 +201,7 @@ impl WriteIntent for WriteWorktreeFile {
         }
         let bom = encoding_rs::Encoding::for_bom(&bytes).is_some();
         let out = encode(&self.text, &loaded.encoding, loaded.eol, bom)?;
-        let untracked = if tracked(pre.root, &self.path)? { Vec::new() } else { vec![self.path.clone()] };
+        let untracked = if missing || !tracked(pre.root, &self.path)? { vec![self.path.clone()] } else { Vec::new() };
         *self.checked.lock().map_err(|_| GbError::other("the save's plan is poisoned"))? = Checked { file: Some(file), bytes: out };
         Ok(Plan { snapshot: Some((vec![self.path.clone()], untracked)), ..Plan::default() })
     }
@@ -198,9 +210,12 @@ impl WriteIntent for WriteWorktreeFile {
         let Checked { file, bytes } = std::mem::take(&mut *self.checked.lock().map_err(|_| GbError::other("the save's plan is poisoned"))?);
         let file = file.ok_or_else(|| GbError::other("the save has no plan"))?;
         // Changed since the plan (another program): the snapshot may not hold what the user
-        // loaded, so nothing is written.
-        if std::fs::read(&file).map(|b| worktree_id(&b) != self.base).unwrap_or(true) {
-            return Err(self.changed());
+        // loaded, so nothing is written. A file this save creates may still be absent.
+        match std::fs::read(&file) {
+            Ok(now) if worktree_id(&now) != self.base => return Err(self.changed()),
+            Ok(_) => {}
+            Err(e) if self.create && e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(self.changed()),
         }
         cx.partial = true;
         write_atomic(&file, &bytes)?;
@@ -211,14 +226,78 @@ impl WriteIntent for WriteWorktreeFile {
 }
 
 pub(crate) async fn write_worktree_file(api: &Api, repo: u32, worktree: &str, path: String, text: String, base: String) -> Result<WriteResult<SaveOutcome>, GbError> {
-    run_write(api, repo, worktree, Expect::default(), WriteWorktreeFile { path, text, base, suggestion: false, checked: Default::default() }).await
+    run_write(api, repo, worktree, Expect::default(), WriteWorktreeFile { path, text, base, suggestion: false, create: false, checked: Default::default() }).await
 }
 
 /// A review comment's suggestion applied to the working copy: `text` is the file with the
 /// suggested lines in, as the UI made it from the text it loaded (`base`, as a save's); `expect`:
 /// HEAD at the MR's head, as the UI checked it.
 pub(crate) async fn apply_suggestion(api: &Api, repo: u32, worktree: &str, path: String, text: String, base: String, expect: Expect) -> Result<WriteResult<SaveOutcome>, GbError> {
-    run_write(api, repo, worktree, expect, WriteWorktreeFile { path, text, base, suggestion: true, checked: Default::default() }).await
+    run_write(api, repo, worktree, expect, WriteWorktreeFile { path, text, base, suggestion: true, create: false, checked: Default::default() }).await
+}
+
+/// The paths added to `.gitignore` (none: they were there already).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GitignoreOutcome {
+    pub patterns: Vec<String>,
+}
+
+/// An anchored `.gitignore` pattern for a repository-relative path, its glob characters escaped.
+fn gitignore_pattern(path: &str) -> Result<String, GbError> {
+    let path = path.trim().trim_start_matches("./").trim_start_matches('/');
+    if path.is_empty() || path.contains(['\n', '\r']) {
+        return Err(GbError::new(GbErrorKind::InvalidInput, "That path can't be added to .gitignore"));
+    }
+    let mut out = String::from("/");
+    for c in path.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[' | ']') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    Ok(out)
+}
+
+/// Add `paths` to the worktree's `.gitignore`, creating it when needed. A save's write: journaled,
+/// so Undo restores the file, and only if `.gitignore` is still what was read.
+pub(crate) async fn add_to_gitignore(api: &Api, repo: u32, worktree: &str, paths: Vec<String>) -> Result<WriteResult<GitignoreOutcome>, GbError> {
+    let h = api.handle(repo)?;
+    let root = api.worktree_dir(&h, worktree).await?;
+    let file = root.join(".gitignore");
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(GbError::other(format!("Couldn't read {}: {e}", file.display()))),
+    };
+    let base = worktree_id(&bytes);
+    let text = String::from_utf8(bytes).map_err(|_| GbError::new(GbErrorKind::InvalidInput, ".gitignore isn't UTF-8 text"))?;
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let existing: std::collections::HashSet<&str> = text.lines().map(str::trim).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut patterns = Vec::new();
+    for path in paths {
+        let pattern = gitignore_pattern(&path)?;
+        if existing.contains(pattern.as_str()) || !seen.insert(pattern.clone()) {
+            continue;
+        }
+        patterns.push(pattern);
+    }
+    let mut out = text;
+    if !patterns.is_empty() {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(newline);
+        }
+        for pattern in &patterns {
+            out.push_str(pattern);
+            out.push_str(newline);
+        }
+    }
+    let result = run_write(api, repo, worktree, Expect::default(), WriteWorktreeFile {
+        path: ".gitignore".into(), text: out, base, suggestion: false, create: true, checked: Default::default(),
+    }).await?;
+    Ok(WriteResult { outcome: GitignoreOutcome { patterns }, journal: result.journal, staging: result.staging, wip: result.wip })
 }
 
 // --- UX round 3 O.1: Create file ---
@@ -373,6 +452,23 @@ mod tests {
         save(&api, id, &r, "auto.txt", &text, c["new"]["hash"].as_str().unwrap()).await.unwrap();
         assert_eq!(std::fs::read_to_string(r.path().join("auto.txt")).unwrap(), text.replace('\n', "\r\n"));
         assert_eq!(r.git(&["diff", "--numstat", "--", "auto.txt"]), "2\t2\tauto.txt");
+    }
+
+    #[tokio::test]
+    async fn gitignore_entries_are_anchored_added_once_and_undone() {
+        let data = tempfile::tempdir().unwrap();
+        let r = repo();
+        let api = api(data.path());
+        let id = open(&api, &r).await;
+        let add = |paths: &[&str]| call(&api, "addToGitignore", json!({ "repo": id, "worktree": wt(r.path()), "paths": paths }));
+        let first = add(&["build/a[1].txt", "new.txt"]).await.unwrap();
+        assert_eq!(first["outcome"]["patterns"], json!(["/build/a\\[1\\].txt", "/new.txt"]));
+        assert_eq!(std::fs::read_to_string(r.path().join(".gitignore")).unwrap(), "/build/a\\[1\\].txt\n/new.txt\n");
+        assert_eq!(first["journal"]["undo"]["label"], "save .gitignore");
+        let again = add(&["new.txt"]).await.unwrap();
+        assert_eq!(again["outcome"]["patterns"], json!([]), "already there");
+        journal_step(&api, id, r.path(), "undo").await.unwrap();
+        assert!(!r.path().join(".gitignore").exists(), "the create is undone");
     }
 
     #[tokio::test]
@@ -551,7 +647,7 @@ mod tests {
 
     #[test]
     fn a_save_leaves_the_staging_log_alone() {
-        let s = WriteWorktreeFile { path: "a".into(), text: String::new(), base: String::new(), suggestion: false, checked: Default::default() };
+        let s = WriteWorktreeFile { path: "a".into(), text: String::new(), base: String::new(), suggestion: false, create: false, checked: Default::default() };
         assert_eq!(s.staging(), Staging::Keep);
     }
 

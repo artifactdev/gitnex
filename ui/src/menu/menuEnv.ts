@@ -76,6 +76,9 @@ export interface FileTarget {
    * Unstage / Discard need (`submodule`: a submodule is discarded inside itself, so no Discard).
    * `null` for every other list. */
   wip: { worktree: string; staged: boolean; oldPath: string | null; status: string; submodule?: boolean } | null;
+  /** The selected changed files, when the row is part of a multi-selection (`path` is in it):
+   * Stash files. Empty or absent: just this row. */
+  selection?: string[];
 }
 
 export interface MenuActions {
@@ -521,9 +524,9 @@ function afterOpening(store: RepoViewStore): void {
 }
 
 /** A right-click on a file row: the synchronous builder `openContextMenu` runs. */
-export function fileMenu(store: RepoViewStore, spec: DiffSpec, t: DiffTarget, changed: boolean): () => MenuRow[] {
+export function fileMenu(store: RepoViewStore, spec: DiffSpec, t: DiffTarget, changed: boolean, selection: string[] = []): () => MenuRow[] {
   afterOpening(store);
-  return () => buildMenu<FileTarget, MenuEnv>('file', fileTargetOf(store.getState(), spec, t, changed), fileMenuEnv(store));
+  return () => buildMenu<FileTarget, MenuEnv>('file', { ...fileTargetOf(store.getState(), spec, t, changed), selection }, fileMenuEnv(store));
 }
 
 /** The folder menu's target: `inside`, a path in the folder, is what Open in ▸ Files opens;

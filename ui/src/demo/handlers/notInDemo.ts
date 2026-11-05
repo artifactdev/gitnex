@@ -35,6 +35,7 @@ const WHAT: Record<NotInDemoMethod, string> = {
   gitflowFinishedTag: 'git flow',
   addForgeAccount: 'forge accounts',
   removeForgeAccount: 'forge accounts',
+  addToGitignore: 'editing .gitignore',
   forgeTokenPage: 'forge accounts',
   detectForge: 'forge accounts',
   updateDownload: 'updates',

@@ -112,7 +112,7 @@ export function StatusCountsView({ counts, testId, size }: { counts: StatusCount
 
 /** `onPress`/`onMenu` are the list's two stable handlers (they get the row and its index back), so a
  * row's props are all primitives or the rows' own memoized objects and `memo` can skip it. */
-interface RowProps { /** The scope fill of the row (file colours), or null. */ tint: string | null; id: string; index: number; row: FileRow; mode: FileListMode; active: boolean; /** Its context menu is open (the outline; a right-click never selects). */ context: boolean; top: number; height: number; filterQuery: string; onPress: (e: MouseEvent, row: FileRow, index: number) => void; onMenu: (e: MouseEvent, row: FileRow) => void; renderActions?: (row: FileRow) => ReactNode }
+interface RowProps { /** The scope fill of the row (file colours), or null. */ tint: string | null; id: string; index: number; row: FileRow; mode: FileListMode; active: boolean; /** Part of a Ctrl/Shift multi-selection. */ selected: boolean; /** Its context menu is open (the outline). */ context: boolean; top: number; height: number; filterQuery: string; onPress: (e: MouseEvent, row: FileRow, index: number) => void; onMenu: (e: MouseEvent, row: FileRow) => void; renderActions?: (row: FileRow) => ReactNode }
 
 /** The role of a row: tree mode is a `tree` of `treeitem`s (`aria-level`, folders `aria-expanded`),
  * path mode a flat `listbox` of `option`s (review M8). */
@@ -130,7 +130,7 @@ function ConflictTip({ kind, worktree }: { kind: ConflictKind; worktree: string 
 /** A folder row, or a file row with its full path in an instant hover tooltip, left of the list (a rename: old,
  * ↓, new; feedback H22). A renamed file shows its new name (tree) or new path (path view); the
  * old one is in the tooltip and the diff header. */
-const Row = memo(function Row({ tint, id, index, row, mode, active, context, top, height, filterQuery, onPress, onMenu, renderActions }: RowProps) {
+const Row = memo(function Row({ tint, id, index, row, mode, active, selected, context, top, height, filterQuery, onPress, onMenu, renderActions }: RowProps) {
   const style = { top, height, paddingLeft: rowIndent(row.depth), gap: TREE.gap, ...(tint ? { '--row-tint': tint } : null) } as CSSProperties;
   const file = row.kind === 'file' ? row : null;
   const role = rowRole(mode);
@@ -153,7 +153,7 @@ const Row = memo(function Row({ tint, id, index, row, mode, active, context, top
   };
   if (row.kind === 'folder') {
     return (
-      <div id={id} role={role} aria-selected={active} aria-level={level} aria-expanded={row.expanded} data-context={context || undefined} data-kind="folder" data-tinted={tint ? true : undefined} data-path={row.path} className="file-row" style={style} onMouseDown={onMouseDown} onContextMenu={(e) => { tip.hide(); onMenu(e, row); }} {...folderTip}>
+      <div id={id} role={role} aria-selected={active || selected} aria-level={level} aria-expanded={row.expanded} data-context={context || undefined} data-kind="folder" data-tinted={tint ? true : undefined} data-path={row.path} className="file-row" style={style} onMouseDown={onMouseDown} onContextMenu={(e) => { tip.hide(); onMenu(e, row); }} {...folderTip}>
         <span className="file-chevron" style={{ width: TREE.chevron }}>{row.expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
         <span className="file-name">{highlightMatch(row.name, filterQuery)}</span>
         {row.counts && <StatusCountsView counts={row.counts} testId="folder-counts" size={10} />}
@@ -170,8 +170,9 @@ const Row = memo(function Row({ tint, id, index, row, mode, active, context, top
     <div
       id={id}
       role={role}
-      aria-selected={active}
+      aria-selected={active || selected}
       aria-level={level}
+      data-selected={selected || undefined}
       data-kind="file"
       data-tinted={tint ? true : undefined}
       data-context={context || undefined}
@@ -247,6 +248,19 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
   const allFilesCommit = commitOf ?? (allFilesWorktree ? `${WORKTREE_SOURCE}${allFilesWorktree}` : null);
   const toggleAllFiles = () => setPrefs(allFilesWorktree ? { wipAllFiles: !wipAllFiles } : { allFiles: !commitAllFiles });
   const [cursor, setCursor] = useState<Cursor | null>(null);
+  // Ctrl/Shift-selected changed files (a WIP list's: Stash files). A plain click clears them.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const selectionRef = useRef(selected);
+  selectionRef.current = selected;
+  const selectionAnchor = useRef<string | null>(null);
+  useEffect(() => {
+    if (selected.size === 0) return;
+    const have = new Set(list.files.map((f) => f.path));
+    setSelected((s) => {
+      const next = new Set([...s].filter((p) => have.has(p)));
+      return next.size === s.size ? s : next;
+    });
+  }, [list, selected.size]);
   // "View all files"' filter (feedback K18-K20): transient, never persisted, and only shown (or
   // applied) while View all files is on — cleared when it's turned off.
   const [filterText, setFilterText] = useState('');
@@ -434,8 +448,14 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
   };
   // The file or folder menu (spec §7) for `row`. A folder's Open in ▸ Files opens a path in it:
   // its first file listed.
+  const selectedFiles = (row: FileRow): string[] => {
+    if (row.kind !== 'file' || !selectionRef.current.has(row.target.path)) return [];
+    // Conflicted files can't be stashed: leave them out of the action's paths.
+    const usable = new Set(list.files.filter((f) => f.status !== 'U').map((f) => f.path));
+    return [...selectionRef.current].filter((p) => usable.has(p));
+  };
   const rowMenuFor = (row: FileRow) => {
-    if (row.kind === 'file') return fileMenu(store, spec, row.target, row.change !== null);
+    if (row.kind === 'file') return fileMenu(store, spec, row.target, row.change !== null, selectedFiles(row));
     const inside = `${row.path}/`;
     const child = list.files.find((f) => f.path.startsWith(inside))?.path ?? unchanged?.paths.find((p) => p.startsWith(inside)) ?? `${inside}${row.name}`;
     // Mark resolved takes the conflicted files the folder shows (the filter's, when one is on).
@@ -469,19 +489,46 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
 
   // The rows' handlers are the same functions on every render (they reach the latest closure
   // through a ref), so a row re-renders only when its own props change (review M2).
-  const latest = useRef({ toggleFile, place, toggle, menuFor });
-  useLayoutEffect(() => { latest.current = { toggleFile, place, toggle, menuFor }; });
+  const latest = useRef({ toggleFile, place, toggle, menuFor, rows });
+  useLayoutEffect(() => { latest.current = { toggleFile, place, toggle, menuFor, rows }; });
   const onRowPress = useCallback((e: MouseEvent, row: FileRow, index: number) => {
     // Every press toggles (K2, K3), the second of a quick pair too: the browser counts
     // it as a double-click (`detail` 2), but to the user it's just another click.
     if (e.button !== 0) return;
-    const l = latest.current;
-    if (row.kind === 'file') return l.toggleFile(row, index);
-    l.place(row);
-    l.toggle(row.path);
+    if (row.kind === 'file') {
+      const path = row.target.path;
+      const files = latest.current.rows.filter((r): r is Extract<FileRow, { kind: 'file' }> => r.kind === 'file');
+      if (e.shiftKey && selectionAnchor.current !== null) {
+        const a = files.findIndex((r) => r.target.path === selectionAnchor.current);
+        const b = files.findIndex((r) => r.target.path === path);
+        if (a >= 0 && b >= 0) {
+          setSelected(new Set(files.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.target.path)));
+          e.preventDefault();
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey) {
+        setSelected((s) => {
+          const next = new Set(s);
+          if (next.has(path)) next.delete(path);
+          else next.add(path);
+          return next;
+        });
+        selectionAnchor.current = path;
+        e.preventDefault();
+        return;
+      }
+      setSelected(new Set());
+      selectionAnchor.current = path;
+      return latest.current.toggleFile(row, index);
+    }
+    setSelected(new Set());
+    selectionAnchor.current = null;
+    latest.current.place(row);
+    latest.current.toggle(row.path);
   }, []);
-  // A right-click never moves the selection (`onRowPress` ignores it): the row gets the context
-  // outline while its menu is open instead (UX round 2).
+  // A right-click never moves the selection (UX round 2): a selected row's menu uses the
+  // selection, another row's just its own path. Its row gets the context outline meanwhile.
   const [contextRow, openContextFor] = useContextTarget<string>();
   const onRowMenu = useCallback((e: MouseEvent, row: FileRow) => openContextFor(row.id, () => openContextMenu(e, latest.current.menuFor(row))), [openContextFor]);
   // --- UX round 3 O.1 ---
@@ -511,6 +558,21 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
   }));
 
   const onKeyDown = (e: KeyboardEvent) => {
+    // Ctrl/Cmd+Space toggles the active file in the multi-selection (the keyboard's Ctrl+click).
+    if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
+      const row = rows[activeIndex];
+      if (row?.kind === 'file') {
+        e.preventDefault();
+        setSelected((s) => {
+          const next = new Set(s);
+          if (next.has(row.target.path)) next.delete(row.target.path);
+          else next.add(row.target.path);
+          return next;
+        });
+        selectionAnchor.current = row.target.path;
+      }
+      return;
+    }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     // A stale list (the next selection is loading, feedback F12) opens nothing; the keys it
     // would have handled are still swallowed, or the list would scroll natively and carry that
@@ -668,6 +730,7 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
         className="file-list-scroll"
         role={mode === 'tree' ? 'tree' : 'listbox'}
         aria-label={label}
+        aria-multiselectable={true}
         aria-activedescendant={activeIndex >= 0 && items.some((it) => it.index === activeIndex) ? rowId(activeIndex) : undefined}
         data-open-file={own || undefined}
         data-empty={rows.length === 0 || undefined}
@@ -688,6 +751,7 @@ export function FileList({ list, spec, label, allFilesCommit: commitOf = null, a
                 row={row}
                 mode={mode}
                 active={row.id === activeId}
+                selected={row.kind === 'file' && selected.has(row.target.path)}
                 context={row.id === contextRow}
                 top={item.start}
                 height={rowH}

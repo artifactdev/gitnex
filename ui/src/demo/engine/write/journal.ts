@@ -27,6 +27,8 @@ export interface StashMove {
   /** True: the op created it; false: it dropped it. */
   created: boolean;
   withoutIndex: boolean;
+  /** A selected-files stash's paths (its redo pushes the same); absent: the whole worktree. */
+  paths?: string[];
 }
 
 export type KeptReason =

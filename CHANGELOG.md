@@ -16,6 +16,10 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   name and email, also editable in Settings › Git identity. Commits made in that profile use them
   (git's own config is the fallback), and the email's Gravatar shows in the profile switcher and
   the profile dialog when there is one.
+- **Changed files: select several, stash only those, or ignore them.** Ctrl/Cmd-click toggles a
+  file in the selection and Shift-click extends it. The right-click menu then offers Stash N
+  files… and Add N files to .gitignore. A single file gets Stash file… and Add to .gitignore;
+  both writes are journaled, so Undo brings the changes or .gitignore back.
 
 ## [1.5.0] - 2026-11-05
 
