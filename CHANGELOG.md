@@ -10,8 +10,11 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
 - **Several accounts on one forge.** Settings › Accounts can hold more than one GitHub,
   GitLab or Forgejo account per host (a private account and a work one, say), each with its own
   token, status and avatar. Add another account with the same host and a different user's token;
-  adding the same user's token replaces it. Settings › Repository › Forge account chooses which
-  one a repository's merge requests, forks and avatars use; Automatic keeps the host's first.
+  adding the same user's token updates theirs, and Replace token takes only that user's. The
+  host's first account is its default, marked once it has another. Settings › Repository › Forge
+  account, shown where a repository's host has more than one, chooses which one its merge
+  requests, stacks, forks and avatars use; Automatic names the default it uses. The first account
+  keeps its keyring entry's name, so going back to 1.5.0 still finds its token.
 - **Profiles have a commit identity and picture.** New profile… and Edit profile… take a commit
   name and email, also editable in Settings › Git identity. Commits made in that profile use them
   (git's own config is the fallback), and the email's Gravatar shows in the profile switcher and
@@ -35,6 +38,15 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   command-line tool; GitVolt detects common local servers and CLIs such as GitHub Copilot CLI,
   Codex, Claude Code, Gemini, Ollama and `llm`. Off by default, and it asks before replacing a
   message you typed.
+
+### Fixed
+
+- **Split diffs open with both sides at the first change.** A file opened again, its first
+  change where the editor was last scrolled to, no longer had its old side jump back to the top
+  a few frames on, the two sides then scrolling together out of line.
+- **The editor's find widget takes clicks.** In a diff or a file, Previous and Next Match, the
+  Match Case, Whole Word and Regex toggles and Close work when clicked after the pointer rests on
+  them: their tooltip no longer wraps over the button and takes the click (it flickered there).
 
 ## [1.5.0] - 2026-11-05
 
