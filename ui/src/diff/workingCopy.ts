@@ -242,7 +242,7 @@ export function guardTabClose(ids: string[], go: () => void): void {
 }
 
 const anyDirty = () => Object.values(useWorkingCopy.getState().copies).some((c) => c?.dirty) || [...unsavedSources].some((s) => s.anyAtAll()); // 2D T20: + other unsaved work
-/** Before GitVolt goes (the window's close, Restart GitVolt): true when nothing is unsaved, or
+/** Before GitNex goes (the window's close, Restart GitNex): true when nothing is unsaved, or
  * the user chose to discard it; false when they cancelled. */
 export async function confirmDiscardUnsaved(): Promise<boolean> {
   if (!anyDirty()) return true;
@@ -276,5 +276,5 @@ export function installWindowCloseGuard(): void {
         if (discard) void win.destroy();
       });
     });
-  }).catch((e: unknown) => console.warn('[gitvolt] window close events unavailable', e));
+  }).catch((e: unknown) => console.warn('[gitnex] window close events unavailable', e));
 }

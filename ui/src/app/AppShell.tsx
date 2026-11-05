@@ -31,7 +31,7 @@ function useDropClosedTabs() {
 }
 
 /**
- * The app shell (spec §6): GitVolt's own title bar (Linux), the header slot (the tab bar), every
+ * The app shell (spec §6): GitNex's own title bar (Linux), the header slot (the tab bar), every
  * tab of the active profile inside `<Activity>` (only the active one visible; the hidden ones do
  * no work, spec §4.4), the status bar and overlay slots, and the app's one toast, context menu
  * and tooltip (spec §7).
@@ -59,11 +59,11 @@ export function AppShell({ error = null }: { error?: string | null }) {
     if (booted && tabs.length === 0) useAppState.getState().updateProfile((p) => openBlankTab(p).profile);
   }, [booted, tabs.length]);
   useEffect(() => {
-    if (loaded && tabs.length === 0) document.title = 'GitVolt';
+    if (loaded && tabs.length === 0) document.title = 'GitNex';
   }, [loaded, tabs.length]);
   return (
     <div className="app-shell">
-      {/* GitVolt's own title bar, when the window has no system one: there whatever the state,
+      {/* GitNex's own title bar, when the window has no system one: there whatever the state,
           so the window can always be moved and closed. */}
       <TitleBar />
       {gitProblem ? (

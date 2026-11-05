@@ -1,24 +1,24 @@
 // The page's link previews: the og: and twitter: tags that need the site's absolute address
-// (`<!--social:meta-->`), built from GITVOLT_SITE_ORIGIN and GITVOLT_SITE_BASE (docs/website.md).
+// (`<!--social:meta-->`), built from GITNEX_SITE_ORIGIN and GITNEX_SITE_BASE (docs/website.md).
 // The rest of them are plain text in index.html. Scrapers don't resolve relative URLs, hence this.
 import { esc, type Marker } from './page.ts';
 
 /** Where the site lives when nothing says otherwise. */
-export const SITE_ORIGIN = 'https://gitvolt.com';
+export const SITE_ORIGIN = 'https://gitnex.com';
 
 /** The image (`just site-og`), in site/public/ so it keeps its name in the build. */
 export const OG_IMAGE = {
   file: 'og.jpg',
   width: 1200,
   height: 630,
-  alt: "The GitVolt icon and name over the site's lane lines, the line \"A fast, keyboard-friendly desktop Git client\", and the app's commit graph",
+  alt: "The GitNex icon and name over the site's lane lines, the line \"A fast, keyboard-friendly desktop Git client\", and the app's commit graph",
 };
 
 /** The site's address: `origin` (https and a host, no path) and `base` (the path it's served under). */
 export function siteUrl(origin = SITE_ORIGIN, base = '/'): string {
   const o = origin.replace(/\/+$/, '');
-  if (!/^https:\/\/[^/?#\s]+$/.test(o)) throw new Error(`GITVOLT_SITE_ORIGIN: "${origin}" isn't a scheme and host, like ${SITE_ORIGIN}`);
-  if (!/^\/(?:[^/?#\s]+\/)*$/.test(base)) throw new Error(`GITVOLT_SITE_BASE: "${base}" isn't a path that starts and ends with /`);
+  if (!/^https:\/\/[^/?#\s]+$/.test(o)) throw new Error(`GITNEX_SITE_ORIGIN: "${origin}" isn't a scheme and host, like ${SITE_ORIGIN}`);
+  if (!/^\/(?:[^/?#\s]+\/)*$/.test(base)) throw new Error(`GITNEX_SITE_BASE: "${base}" isn't a path that starts and ends with /`);
   return `${o}${base}`;
 }
 

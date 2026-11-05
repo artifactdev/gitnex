@@ -1664,10 +1664,10 @@ impl<T: UserEvent> CefWebviewDispatcher<T> {
     rx.recv().map_err(|_| Error::FailedToReceiveMessage)?
   }
 
-  /// GitVolt patch: asks the window manager for `request` about this webview's window, for a
+  /// GitNex patch: asks the window manager for `request` about this webview's window, for a
   /// window that draws its own title bar. Whether it was asked: on X11, the window menu only
   /// where the window manager supports `_GTK_SHOW_WINDOW_MENU`; on Windows, only for a window
-  /// with GitVolt's frame (`platform/windows/chrome.rs`), and the menu shows after this returns.
+  /// with GitNex's frame (`platform/windows/chrome.rs`), and the menu shows after this returns.
   pub fn window_manager_request(&self, request: crate::WindowManagerRequest) -> Result<bool> {
     let (tx, rx) = mpsc::channel();
     self.context.send_message(Message::Window {

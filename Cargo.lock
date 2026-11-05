@@ -2100,25 +2100,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitvolt-ai"
+name = "gitnex-ai"
 version = "1.5.0"
 dependencies = [
- "gitvolt-core",
+ "gitnex-core",
  "serde_json",
  "tempfile",
  "ureq",
 ]
 
 [[package]]
-name = "gitvolt-app"
+name = "gitnex-app"
 version = "1.5.0"
 dependencies = [
  "block2",
  "gdk4-x11",
  "gio",
- "gitvolt-ai",
- "gitvolt-core",
- "gitvolt-forge",
+ "gitnex-ai",
+ "gitnex-core",
+ "gitnex-forge",
  "glib",
  "objc2-foundation",
  "raw-window-handle",
@@ -2135,7 +2135,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitvolt-core"
+name = "gitnex-core"
 version = "1.5.0"
 dependencies = [
  "base64 0.23.1",
@@ -2147,7 +2147,7 @@ dependencies = [
  "encoding_rs",
  "fontdb",
  "futures-util",
- "gitvolt-graph",
+ "gitnex-graph",
  "gix",
  "insta",
  "nix",
@@ -2174,11 +2174,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitvolt-forge"
+name = "gitnex-forge"
 version = "1.5.0"
 dependencies = [
  "base64 0.23.1",
- "gitvolt-core",
+ "gitnex-core",
  "gix",
  "httpdate",
  "keyring",
@@ -2193,7 +2193,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitvolt-graph"
+name = "gitnex-graph"
 version = "1.5.0"
 dependencies = [
  "serde",
@@ -2202,16 +2202,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitvolt-graph-wasm"
+name = "gitnex-graph-wasm"
 version = "1.5.0"
 dependencies = [
- "gitvolt-graph",
+ "gitnex-graph",
  "serde_json",
  "wasm-bindgen",
 ]
 
 [[package]]
-name = "gitvolt-harness"
+name = "gitnex-harness"
 version = "1.5.0"
 dependencies = [
  "axum",
@@ -2219,8 +2219,8 @@ dependencies = [
  "ctor",
  "flate2",
  "futures-util",
- "gitvolt-core",
- "gitvolt-forge",
+ "gitnex-core",
+ "gitnex-forge",
  "serde",
  "serde_json",
  "sha2 0.11.0",

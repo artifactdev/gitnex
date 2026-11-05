@@ -1,18 +1,18 @@
 # Files that keep the old name on purpose (the rename script skips them): negative tests that the
 # old names are refused, and the docs of the move. Task 12 adds the rest.
-crates/gitvolt-core/src/updates/install.rs
-crates/gitvolt-core/src/updates/tests.rs
-crates/gitvolt-forge/src/updates.rs
-crates/gitvolt-harness/tests/it/updates.rs
+crates/gitnex-core/src/updates/install.rs
+crates/gitnex-core/src/updates/tests.rs
+crates/gitnex-forge/src/updates.rs
+crates/gitnex-harness/tests/it/updates.rs
 docs/releasing.md
 PRIVACY.md
 SECURITY.md
 CHANGELOG.md
 README.md
 docs/dev-setup.md
-crates/gitvolt-app/linux/com.gitvolt.desktop.metainfo.xml.in
+crates/gitnex-app/linux/com.gitnex.desktop.metainfo.xml.in
 scripts/check-deb.sh
 scripts/test-check-deb.sh
 scripts/test-windows-installers.sh
 scripts/test-name.sh
-packaging/windows/gitvolt.wxs
+packaging/windows/gitnex.wxs

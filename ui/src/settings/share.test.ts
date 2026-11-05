@@ -3,7 +3,7 @@ import { exportFileName, MAX_SHARE_BYTES, parseShareJson, toShareJson, uniqueNam
 
 describe('share envelope', () => {
   it('round-trips a body', () => {
-    const text = toShareJson('theme', 1, { name: 'Nord', gitvolt: 'x', version: 9 });
+    const text = toShareJson('theme', 1, { name: 'Nord', gitnex: 'x', version: 9 });
     expect(parseShareJson(text, 'theme', 1)).toEqual({ ok: true, version: 1, body: { name: 'Nord' } });
   });
 
@@ -15,9 +15,9 @@ describe('share envelope', () => {
     expect(bad('null')).toBe(false);
     expect(bad('"theme"')).toBe(false);
     expect(bad(toShareJson('branch-preset', 1, {}))).toBe(false);
-    expect(bad('{"gitvolt":"theme"}')).toBe(false);
-    expect(bad('{"gitvolt":"theme","version":1.5}')).toBe(false);
-    expect(bad('{"gitvolt":"theme","version":"1"}')).toBe(false);
+    expect(bad('{"gitnex":"theme"}')).toBe(false);
+    expect(bad('{"gitnex":"theme","version":1.5}')).toBe(false);
+    expect(bad('{"gitnex":"theme","version":"1"}')).toBe(false);
     expect(bad(toShareJson('theme', 2, {}))).toBe(false);
   });
 
@@ -42,7 +42,7 @@ describe('uniqueName', () => {
 
 describe('exportFileName', () => {
   it('slugs the name', () => {
-    expect(exportFileName('Nord (Custom)', 'theme')).toBe('nord-custom.gitvolt-theme.json');
-    expect(exportFileName('!!!', 'branch-preset')).toBe('branch-preset.gitvolt-branch-preset.json');
+    expect(exportFileName('Nord (Custom)', 'theme')).toBe('nord-custom.gitnex-theme.json');
+    expect(exportFileName('!!!', 'branch-preset')).toBe('branch-preset.gitnex-branch-preset.json');
   });
 });

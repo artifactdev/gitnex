@@ -19,7 +19,7 @@ export type EntryState = 'pending' | 'done' | 'paused';
 
 export const MAX_ENTRIES = 50;
 export const HISTORY_ROWS = 10;
-export const UNVERIFIED = "Can't be undone: GitVolt couldn't read what it changed";
+export const UNVERIFIED = "Can't be undone: GitNex couldn't read what it changed";
 
 export interface StashMove {
   oid: string;
@@ -247,7 +247,7 @@ export class Journal {
   undo: JournalEntry[] = [];
   /** The last is what Redo redoes. */
   redo: JournalEntry[] = [];
-  /** Stashes GitVolt made and still keeps (their banners). */
+  /** Stashes GitNex made and still keeps (their banners). */
   kept: KeptStash[] = [];
   nextId = 1;
 

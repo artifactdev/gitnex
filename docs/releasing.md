@@ -1,4 +1,4 @@
-# Releasing GitVolt
+# Releasing GitNex
 
 A release is a tag. `just release <version>` prepares the release commit and tag locally;
 pushing them starts [.github/workflows/release.yml](../.github/workflows/release.yml), which
@@ -24,7 +24,7 @@ automatically.
    just release 0.1.0-alpha.1
    ```
 
-   It sets the version in `crates/gitvolt-app/tauri.conf.json`, the workspace `Cargo.toml` and
+   It sets the version in `crates/gitnex-app/tauri.conf.json`, the workspace `Cargo.toml` and
    `Cargo.lock`, and `ui/package.json` and its lockfile. Then it turns `## [Unreleased]` into
    `## [0.1.0-alpha.1] - <today>` under a fresh, empty `## [Unreleased]`, commits
    "Release 0.1.0-alpha.1" and creates the annotated tag `v0.1.0-alpha.1`. It never pushes.
@@ -40,7 +40,7 @@ automatically.
    git push origin main v0.1.0-alpha.1
    ```
 
-   GitVolt's Push does the same with **Push tags with branches** on (the default), since the
+   GitNex's Push does the same with **Push tags with branches** on (the default), since the
    tag is annotated. The build then runs on main's push, warm (see
    [Which run builds](#which-run-builds)). Pushed apart, it still releases: see there.
 
@@ -48,7 +48,7 @@ automatically.
    It fails fast when the tag doesn't match `tauri.conf.json`'s version or CHANGELOG.md has no
    section for it.
 
-4. **Review the draft** under Releases. It's titled "GitVolt 0.1.0-alpha.1" and has the
+4. **Review the draft** under Releases. It's titled "GitNex 0.1.0-alpha.1" and has the
    changelog section as its notes, plus the `.deb`, the `.pkg.tar.zst`, the `.rpm`, the Windows
    `-setup.exe` and `.msi`, the macOS `.dmg`, and `SHA256SUMS`. A
    version with a pre-release part (`-alpha.1`, `-rc.2`) is marked pre-release. Edit the notes
@@ -65,21 +65,21 @@ automatically.
 
 ## Asset names are an API
 
-Installed GitVolts find their update by these names (`crates/gitvolt-core/src/updates/release.rs`),
-in the releases of `GitVoltApp/gitvolt` only. GitBolt 0.6.1, the app under its old name, also takes
-these names, from `GitVoltApp/gitvolt` (or `GitBoltApp/gitbolt` while that one doesn't exist), and
-installs GitVolt. So keep the names exactly as they are, and keep `SHA256SUMS` in every release: an update
+Installed GitNexs find their update by these names (`crates/gitnex-core/src/updates/release.rs`),
+in the releases of `artifactdev/gitvolt` only. GitBolt 0.6.1, the app under its old name, also takes
+these names, from `artifactdev/gitvolt` (or `GitBoltApp/gitbolt` while that one doesn't exist), and
+installs GitNex. So keep the names exactly as they are, and keep `SHA256SUMS` in every release: an update
 whose package `SHA256SUMS` doesn't list is never installed. The website's downloads
 (`scripts/site-release.py`) find the packages by these names too.
 
 | Install | Asset |
 |---|---|
-| `.deb` | `GitVolt_<version>_amd64.deb` |
-| Arch | `GitVolt-<pkgver>-1-x86_64.pkg.tar.zst` (`<pkgver>`: the version without the pre-release's `-`) |
-| `.rpm` (Fedora, openSUSE) | `GitVolt-<version>-1.x86_64.rpm` (the version as in the `.deb`'s name: `GitVolt-0.1.0-alpha.1-1.x86_64.rpm`, although the package's Version is `0.1.0~alpha.1`) |
-| Windows (NSIS) | `GitVolt_<version>_x64-setup.exe` |
-| Windows (MSI) | `GitVolt_<version>_x64.msi` |
-| macOS | `GitVolt_<version>_aarch64.dmg` (Apple Silicon; an Intel Mac takes `GitVolt_<version>_x64.dmg`, which no release has yet). The image holds `GitVolt.app` at its top level |
+| `.deb` | `GitNex_<version>_amd64.deb` |
+| Arch | `GitNex-<pkgver>-1-x86_64.pkg.tar.zst` (`<pkgver>`: the version without the pre-release's `-`) |
+| `.rpm` (Fedora, openSUSE) | `GitNex-<version>-1.x86_64.rpm` (the version as in the `.deb`'s name: `GitNex-0.1.0-alpha.1-1.x86_64.rpm`, although the package's Version is `0.1.0~alpha.1`) |
+| Windows (NSIS) | `GitNex_<version>_x64-setup.exe` |
+| Windows (MSI) | `GitNex_<version>_x64.msi` |
+| macOS | `GitNex_<version>_aarch64.dmg` (Apple Silicon; an Intel Mac takes `GitNex_<version>_x64.dmg`, which no release has yet). The image holds `GitNex.app` at its top level |
 | all | `SHA256SUMS` (`sha256sum` output listing each package) |
 
 The tag stays `v<version>`, and the release's body (the CHANGELOG section) is what the update
@@ -90,42 +90,42 @@ Each package says how it was installed in an `install-kind` file beside the bina
 app reads at run time (one build goes into both packages of a platform, so the binary itself
 can't know):
 
-- the `.deb` ships `/usr/share/GitVolt/install-kind` = `deb`
-  (`crates/gitvolt-app/packaging/install-kind-deb`, through tauri.conf.json), and
+- the `.deb` ships `/usr/share/GitNex/install-kind` = `deb`
+  (`crates/gitnex-app/packaging/install-kind-deb`, through tauri.conf.json), and
   `scripts/package-arch.sh` rewrites it to `arch`, `scripts/package-rpm.sh` to `rpm`;
-- the NSIS installer writes `install-kind` = `nsis` beside `GitVolt.exe`, and the MSI installs
+- the NSIS installer writes `install-kind` = `nsis` beside `GitNex.exe`, and the MSI installs
   `packaging/windows/install-kind-msi` (`msi`) there; `scripts/package-windows.ps1` checks the
   MSI has it;
-- the `.dmg`'s GitVolt.app has `Contents/Resources/install-kind` = `dmg` (the bundle's place for
-  its files: `crates/gitvolt-app/packaging/install-kind-dmg`, through
+- the `.dmg`'s GitNex.app has `Contents/Resources/install-kind` = `dmg` (the bundle's place for
+  its files: `crates/gitnex-app/packaging/install-kind-dmg`, through
   `packaging/macos/dmg.conf.json`, which only `just package-macos` passes, so a plain
   `cargo tauri build` bundle counts as a build from source); `scripts/package-macos.sh` checks it.
-  An update mounts the new `.dmg` and copies its `GitVolt.app` over the running bundle, so the
-  image must keep holding `GitVolt.app` at its top level.
+  An update mounts the new `.dmg` and copies its `GitNex.app` over the running bundle, so the
+  image must keep holding `GitNex.app` at its top level.
 
 No file: a build from source, which is only offered the release page. `just package`,
 `just package-windows` and `just package-macos` also bake the stamped version in
-(`GITVOLT_BUILD_VERSION`), which the status bar and the update check use.
+(`GITNEX_BUILD_VERSION`), which the status bar and the update check use.
 
 ## The move from GitBoltApp/gitbolt
 
 The project was called GitBolt until 0.7.0, and its repository was `GitBoltApp/gitbolt`. On
-2026-10-14 it was transferred to `GitVoltApp/gitvolt` and renamed in one call, so GitHub redirects
-the old addresses. 0.6.1 bridged the two names (it checks `GitVoltApp/gitvolt` first, takes
-`GitVolt_*` packages and updates into GitVolt); 0.6.0 and earlier only know `GitBoltApp/gitbolt`
-and the GitBolt asset names, so they can't follow (the README says so). GitVolt itself checks
-`GitVoltApp/gitvolt` only and takes only `GitVolt_*` packages.
+2026-10-14 it was transferred to `artifactdev/gitvolt` and renamed in one call, so GitHub redirects
+the old addresses. 0.6.1 bridged the two names (it checks `artifactdev/gitvolt` first, takes
+`GitNex_*` packages and updates into GitNex); 0.6.0 and earlier only know `GitBoltApp/gitbolt`
+and the GitBolt asset names, so they can't follow (the README says so). GitNex itself checks
+`artifactdev/gitvolt` only and takes only `GitNex_*` packages.
 
 - **Never delete or rename the `GitBoltApp` organization, nor create a `gitbolt` repository in
   it.** It would take over the old address: an install still on 0.6.0 (or on 0.6.1, if
-  `GitVoltApp/gitvolt` were missing) would check it and its updates would be captured, and
+  `artifactdev/gitvolt` were missing) would check it and its updates would be captured, and
   GitHub's redirect for old links would end. The old Pages address
   redirects through the `GitBoltApp/gitboltapp.github.io` repository for the same reason.
-- **Since 1.0.0, GitVolt doesn't take over a GitBolt install.** Its packages don't replace
+- **Since 1.0.0, GitNex doesn't take over a GitBolt install.** Its packages don't replace
   GitBolt's, and its first start doesn't move GitBolt's folders or keyring items (0.7.x did): a
-  GitBolt user installs GitVolt fresh. What stays: the metainfo `<replaces>` `dev.gitbolt.desktop`,
-  the MSI's UpgradeCode, every package named `gitvolt` (`fix-deb.sh` renames Tauri's `git-volt`),
-  and every `GitVolt_*.dmg` containing `GitVolt.app`.
+  GitBolt user installs GitNex fresh. What stays: the metainfo `<replaces>` `dev.gitbolt.desktop`,
+  the MSI's UpgradeCode, every package named `gitnex` (`fix-deb.sh` renames Tauri's `gitnex`),
+  and every `GitNex_*.dmg` containing `GitNex.app`.
 
 ## Versions
 
@@ -140,9 +140,9 @@ before the release:
 
 | SemVer (tag `v…`) | `.deb` and `.rpm` Version | Arch `pkgver` | Files |
 |---|---|---|---|
-| `0.1.0-alpha.1` | `0.1.0~alpha.1` | `0.1.0alpha.1` | `GitVolt_0.1.0-alpha.1_amd64.deb`, `GitVolt-0.1.0alpha.1-1-x86_64.pkg.tar.zst`, `GitVolt-0.1.0-alpha.1-1.x86_64.rpm` |
-| `0.1.0-rc.2` | `0.1.0~rc.2` | `0.1.0rc.2` | `GitVolt_0.1.0-rc.2_amd64.deb`, `GitVolt-0.1.0rc.2-1-x86_64.pkg.tar.zst`, `GitVolt-0.1.0-rc.2-1.x86_64.rpm` |
-| `0.1.0` | `0.1.0` | `0.1.0` | `GitVolt_0.1.0_amd64.deb`, `GitVolt-0.1.0-1-x86_64.pkg.tar.zst`, `GitVolt-0.1.0-1.x86_64.rpm` |
+| `0.1.0-alpha.1` | `0.1.0~alpha.1` | `0.1.0alpha.1` | `GitNex_0.1.0-alpha.1_amd64.deb`, `GitNex-0.1.0alpha.1-1-x86_64.pkg.tar.zst`, `GitNex-0.1.0-alpha.1-1.x86_64.rpm` |
+| `0.1.0-rc.2` | `0.1.0~rc.2` | `0.1.0rc.2` | `GitNex_0.1.0-rc.2_amd64.deb`, `GitNex-0.1.0rc.2-1-x86_64.pkg.tar.zst`, `GitNex-0.1.0-rc.2-1.x86_64.rpm` |
+| `0.1.0` | `0.1.0` | `0.1.0` | `GitNex_0.1.0_amd64.deb`, `GitNex-0.1.0-1-x86_64.pkg.tar.zst`, `GitNex-0.1.0-1.x86_64.rpm` |
 | local build of `0.1.0` | `0.1.0+202610051325.ab4dbf9e` | `0.1.0.202610051325.ab4dbf9e` | stamped, as before |
 
 - Debian's `~` sorts before anything, so `0.1.0~alpha.1` is older than `0.1.0`
@@ -155,7 +155,7 @@ before the release:
   number directly (`scripts/arch-pkg.py`).
 - `scripts/test-version-order.sh` (part of `just test-scripts`) checks the whole order with
   `dpkg --compare-versions`, and with `vercmp` and rpm's `rpm.vercmp` when they're installed. Run
-  it with `GITVOLT_TEST_DOCKER=1` to use them in `archlinux:latest` and `fedora:latest`
+  it with `GITNEX_TEST_DOCKER=1` to use them in `archlinux:latest` and `fedora:latest`
   containers.
 
 Windows wants numeric versions: the MSI's `ProductVersion` and the files' `FILEVERSION` are
@@ -163,18 +163,18 @@ Windows wants numeric versions: the MSI's `ProductVersion` and the files' `FILEV
 compares only the first three fields, so the MSI allows same-version upgrades
 (`AllowSameVersionUpgrades`): any build of `0.1.0` replaces whichever `0.1.0` build is installed,
 pre-release or not, and an older `X.Y.Z` is refused. The full version stays in the file names
-(`GitVolt_0.1.0-alpha.1_x64-setup.exe`, `GitVolt_0.1.0-alpha.1_x64.msi`), in the files' version
+(`GitNex_0.1.0-alpha.1_x64-setup.exe`, `GitNex_0.1.0-alpha.1_x64.msi`), in the files' version
 strings (Properties > Details) and in the NSIS installer's entry in Settings > Apps; the MSI's
 entry shows `0.1.0.0`.
 
 Local `just package` builds stay stamped (`<version>+<UTC time>.<commit>`), so each one installs
-over the last. `GITVOLT_RELEASE_VERSION=<version> just package` builds the plain version the way
+over the last. `GITNEX_RELEASE_VERSION=<version> just package` builds the plain version the way
 the workflow does; it must equal `tauri.conf.json`'s version.
 
 Local builds also reuse what hasn't changed since the last one (the license notices, the UI build,
 `dpkg-shlibdeps`) and compress fast (zstd 3); see [dev-setup.md](dev-setup.md#packaging-just-package).
-The workflow sets `GITVOLT_REBUILD=1`, which regenerates all of it, and
-`GITVOLT_PACKAGE_COMPRESSION=release` (`GITVOLT_RELEASE_VERSION` alone implies it too): the
+The workflow sets `GITNEX_REBUILD=1`, which regenerates all of it, and
+`GITNEX_PACKAGE_COMPRESSION=release` (`GITNEX_RELEASE_VERSION` alone implies it too): the
 `.deb` in gzip 6, the Arch package and the RPM in zstd -19, as they have always shipped. To build
 locally exactly as the workflow does, set all three.
 
@@ -190,8 +190,8 @@ side by side, then the release job:
      `binutils`, `cmake`, `ninja-build`, and `appstream` and `desktop-file-utils` for
      `check-deb.sh`), stable
      Rust, Node 22, `just`, `tauri-cli` 3.0.0-alpha.5 and cargo-about 0.9.2;
-   - runs `just package` with `GITVOLT_RELEASE_VERSION`, `GITVOLT_REBUILD=1` and
-     `GITVOLT_PACKAGE_COMPRESSION=release` set (no local caches, the release compression). That
+   - runs `just package` with `GITNEX_RELEASE_VERSION`, `GITNEX_REBUILD=1` and
+     `GITNEX_PACKAGE_COMPRESSION=release` set (no local caches, the release compression). That
      generates the third-party license notices (`scripts/licenses.sh`, failing on a license
      outside `about.toml`'s allow-list; see [licensing.md](licensing.md)), builds, and runs
      `fix-deb.sh`, `check-deb.sh` (which also checks the notices are in the `.deb`), then
@@ -202,12 +202,12 @@ side by side, then the release job:
    - writes `SHA256SUMS`, and keeps the packages, the checksums and the notes as a workflow
      artifact for 3 days.
 2. **Windows** (`windows-latest`, read-only): stable Rust, Node 22, `just`, cargo-about 0.9.2
-   and Visual Studio's Ninja; runs `just package-windows` with `GITVOLT_RELEASE_VERSION` set (see
+   and Visual Studio's Ninja; runs `just package-windows` with `GITNEX_RELEASE_VERSION` set (see
    [Windows installers](#windows-installers)), and keeps both installers and their checksums as
    a workflow artifact.
 3. **macOS** (`macos-15`, Apple Silicon, read-only): stable Rust, Node 22, `just`, CMake and
    Ninja, `tauri-cli` and cargo-about; imports the signing certificate into a throwaway keychain
-   (see [macOS signing](#macos-signing)), runs `just package-macos` with `GITVOLT_RELEASE_VERSION`
+   (see [macOS signing](#macos-signing)), runs `just package-macos` with `GITNEX_RELEASE_VERSION`
    set (see [macOS disk image](#macos-disk-image)), and keeps the `.dmg` and its checksum as a
    workflow artifact. Its caches (cargo, the two cargo tools, the CEF archive) are saved from main
    only, as the others are.
@@ -240,23 +240,23 @@ per release, decided by the workflow's first job, **Plan**:
 `just package-windows` (on Windows; `scripts/package-windows.ps1`) builds once and packages twice,
 into `target\release\bundle\windows\`:
 
-- **`GitVolt_<version>_x64-setup.exe`** (NSIS): installs for the current user, no administrator
-  rights, into `%LOCALAPPDATA%\Programs\GitVolt`. Silent: `/S`, and `/D=<folder>` (last,
+- **`GitNex_<version>_x64-setup.exe`** (NSIS): installs for the current user, no administrator
+  rights, into `%LOCALAPPDATA%\Programs\GitNex`. Silent: `/S`, and `/D=<folder>` (last,
   unquoted) for another folder. Settings > Apps lists it; its uninstaller is
   `uninstall.exe` (`/S` for silent). Installing a newer one over it runs the old uninstaller first.
-- **`GitVolt_<version>_x64.msi`** (WiX v5): installs for all users into `Program Files\GitVolt`
-  (administrator rights), for managed deployment: `msiexec /i GitVolt_<version>_x64.msi /qn`.
+- **`GitNex_<version>_x64.msi`** (WiX v5): installs for all users into `Program Files\GitNex`
+  (administrator rights), for managed deployment: `msiexec /i GitNex_<version>_x64.msi /qn`.
 
-Both add a Start menu shortcut and "Open in GitVolt" on folders in File Explorer, and leave the
-user's settings and data (`%APPDATA%\gitvolt`, `%LOCALAPPDATA%\gitvolt`,
-`%LOCALAPPDATA%\com.gitvolt.desktop`) on uninstall.
+Both add a Start menu shortcut and "Open in GitNex" on folders in File Explorer, and leave the
+user's settings and data (`%APPDATA%\gitnex`, `%LOCALAPPDATA%\gitnex`,
+`%LOCALAPPDATA%\com.gitnex.desktop`) on uninstall.
 
 The MSI keeps GitBolt's UpgradeCode (the app's name before 0.7.0): never change it. The NSIS
 installer leaves a GitBolt install alone.
 
-The installed folder is CEF's sandboxed layout: `GitVolt.exe` is CEF's `bootstrap.exe` (with
-GitVolt's icon, version information and `packaging/windows/GitVolt.exe.manifest`), which loads
-`GitVolt.dll` (gitvolt-app built as a DLL) and runs Chromium sandboxed; then CEF's runtime files,
+The installed folder is CEF's sandboxed layout: `GitNex.exe` is CEF's `bootstrap.exe` (with
+GitNex's icon, version information and `packaging/windows/GitNex.exe.manifest`), which loads
+`GitNex.dll` (gitnex-app built as a DLL) and runs Chromium sandboxed; then CEF's runtime files,
 `dictionaries\` and the license notices in `licenses\`. The bootstrap must come from the CEF build
 the DLL links, and nothing at run time checks that, so the script compares `bootstrap.exe`'s and
 `libcef.dll`'s versions with `Cargo.lock`'s CEF before staging.
@@ -268,11 +268,11 @@ The MSI also goes through Windows Installer's ICE checks.
 ### Signing
 
 The installers aren't signed yet, so SmartScreen warns about them ("Windows protected your PC" >
-More info > Run anyway). The hook is in place: `GITVOLT_SIGN_COMMAND`, a command that signs the
+More info > Run anyway). The hook is in place: `GITNEX_SIGN_COMMAND`, a command that signs the
 file path appended to it in place (for example `signtool sign /fd sha256 /tr <timestamp URL> /td
 sha256 /f <certificate>`). With it set, `package-windows.ps1` signs, in order:
 
-1. `GitVolt.exe` and `GitVolt.dll`, **with the same certificate**: a signed bootstrap only loads a
+1. `GitNex.exe` and `GitNex.dll`, **with the same certificate**: a signed bootstrap only loads a
    DLL signed with its own certificate, so signing one without the other, or with two
    certificates, makes the app refuse to start;
 2. the NSIS uninstaller (while the installer is built, through NSIS's `!uninstfinalize`), then the
@@ -284,9 +284,9 @@ step's comment marks the place).
 
 ## macOS disk image
 
-`just package-macos` (on a Mac; `scripts/package-macos.sh`) builds the release `GitVolt.app` and
-`target/release/bundle/dmg/GitVolt_<version>_aarch64.dmg` with the Tauri CLI's own bundlers: the
-`.dmg` holds `GitVolt.app` and a link to `/Applications`. The app is CEF's layout (the framework
+`just package-macos` (on a Mac; `scripts/package-macos.sh`) builds the release `GitNex.app` and
+`target/release/bundle/dmg/GitNex_<version>_aarch64.dmg` with the Tauri CLI's own bundlers: the
+`.dmg` holds `GitNex.app` and a link to `/Applications`. The app is CEF's layout (the framework
 and the helper apps in `Contents/Frameworks`; docs/dev-setup.md), with the spell-check
 dictionary, the `install-kind` marker and the license notices in `Contents/Resources`, and an
 `Info.plist` that declares folders as a document type (Open With). The script then checks the
@@ -295,12 +295,12 @@ the mounted image.
 
 ### macOS signing
 
-The release's app is signed with **GitVolt's own self-signed code-signing certificate**, so that
+The release's app is signed with **GitNex's own self-signed code-signing certificate**, so that
 macOS recognises each new version as the same app:
 
 | | |
 |---|---|
-| Subject | CN "GitVolt Self-Signed Code Signing", O GitVolt |
+| Subject | CN "GitNex Self-Signed Code Signing", O GitNex |
 | Key | RSA 3072; extended key usage code signing (critical) |
 | Valid until | 2046 |
 | SHA-1 | `A5:88:1F:4C:AA:33:ED:87:6E:1F:79:49:0E:6A:B8:E3:ED:68:C3:9B` |
@@ -311,14 +311,14 @@ app's *designated requirement*. For an ad-hoc signature, as up to 1.2.0, that is
 certificate it is the same in every release:
 
 ```
-identifier "com.gitvolt.desktop" and certificate root = H"a5881f4caa33ed876e1f79490e6ab8e3ed68c39b"
+identifier "com.gitnex.desktop" and certificate root = H"a5881f4caa33ed876e1f79490e6ab8e3ed68c39b"
 ```
 
 (codesign's default for a certificate outside Apple's: the identifier and the hash of the chain's
 root, which for a self-signed certificate is the certificate itself.) The first signed release
 still asks once, since 1.2.0's requirement was its cdhash; the ones after it don't.
 
-**The Keychain still asks after an update.** A login-keychain item (where GitVolt keeps forge
+**The Keychain still asks after an update.** A login-keychain item (where GitNex keeps forge
 tokens, through the `keyring` crate) has two checks: its access list, which names apps by the
 designated requirement, so it now matches every release; and its *partition list*, which names
 the app that created it by its Team ID, for code signed with an Apple Developer ID, and otherwise
@@ -331,8 +331,8 @@ Developer Program) gives a partition that survives updates.
 
 **It isn't notarization.** The certificate isn't Apple's: no Developer ID, no Team ID, and the
 `.dmg` isn't notarized. Gatekeeper still rejects a downloaded copy (`spctl --assess` says
-"rejected"), so it needs `xattr -dr com.apple.quarantine /Applications/GitVolt.app` or **Open
-Anyway** once (README.md). An update downloaded by GitVolt itself carries no quarantine flag, so
+"rejected"), so it needs `xattr -dr com.apple.quarantine /Applications/GitNex.app` or **Open
+Anyway** once (README.md). An update downloaded by GitNex itself carries no quarantine flag, so
 it needs neither. Nothing trusts the certificate, and nothing needs to: codesign signs with an
 untrusted identity by its hash (`security find-identity` lists it as `CSSMERR_TP_NOT_TRUSTED`,
 "0 valid identities"), `codesign --verify --deep --strict` checks the signature against its own
@@ -341,27 +341,27 @@ does Privacy & Security. So the certificate is never added to a trust store, not
 runner.
 
 **How the release signs.** The certificate and its key are two repository secrets:
-`MACOS_CERTIFICATE_P12` (the `.p12`, base64, with the friendly name "GitVolt Self-Signed Code
+`MACOS_CERTIFICATE_P12` (the `.p12`, base64, with the friendly name "GitNex Self-Signed Code
 Signing" and the legacy encryption `security import` reads) and `MACOS_CERTIFICATE_PASSWORD`. The
 macOS job's "Signing keychain" step (`scripts/macos-keychain.sh import`) puts them in a throwaway
 keychain on the runner, unlocked and searched for the build, tries a signature, and sets
-`GITVOLT_MACOS_SIGNING_IDENTITY` to the certificate's SHA-1; the job deletes the keychain after
-the build, whatever happens. A run on `GitVoltApp/gitvolt` without the secrets fails there; a
+`GITNEX_MACOS_SIGNING_IDENTITY` to the certificate's SHA-1; the job deletes the keychain after
+the build, whatever happens. A run on `artifactdev/gitvolt` without the secrets fails there; a
 fork's run builds ad-hoc. `mac-port.yml`'s package job does the same, minus the requirement.
 
-`just package-macos` signs with `GITVOLT_MACOS_SIGNING_IDENTITY` when it's set (an identity in
+`just package-macos` signs with `GITNEX_MACOS_SIGNING_IDENTITY` when it's set (an identity in
 the keychain search list, by SHA-1 or name), and ad-hoc otherwise (`signingIdentity: "-"` in
 `tauri.macos.conf.json`; a local build, a fork). The Tauri bundler signs inside out: the helper
 apps, the framework's libraries and the framework, the main binary, then the bundle, each with the
 hardened runtime and CEF's entitlements (JIT, unsigned executable memory, and no library
 validation, without which the hardened runtime would refuse CEF's framework under any identity but
 Apple's); with an identity, the `.dmg` too. Each helper app gets its own identifier
-(`com.gitvolt.desktop.helper`, `.helper.gpu`, `.helper.renderer`, `.helper.plugin`,
+(`com.gitnex.desktop.helper`, `.helper.gpu`, `.helper.renderer`, `.helper.plugin`,
 `.helper.alerts`), through `scripts/macos-codesign/codesign` ahead on the bundler's `PATH`. The
 script then checks, in the bundle and in the mounted `.dmg`: `codesign --verify --deep --strict`,
 the hardened runtime, the library-validation entitlement, the identifiers and, with an identity,
 that the app's and every helper's designated requirement is their identifier and the
-certificate's hash (never a cdhash). It prints the signature (`Authority=GitVolt Self-Signed Code
+certificate's hash (never a cdhash). It prints the signature (`Authority=GitNex Self-Signed Code
 Signing`, `TeamIdentifier=not set`) and the requirement.
 
 **Where it's kept.** The `.p12` and its password are in the repository's secrets, which GitHub
@@ -374,13 +374,13 @@ with the move from ad-hoc. To make a new one:
 
 ```sh
 openssl req -x509 -newkey rsa:3072 -sha256 -days 7300 -noenc -keyout key.pem -out cert.pem \
-  -subj "/CN=GitVolt Self-Signed Code Signing/O=GitVolt" \
+  -subj "/CN=GitNex Self-Signed Code Signing/O=GitNex" \
   -addext "basicConstraints=critical,CA:FALSE" -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning"
 openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem \
-  -name "GitVolt Self-Signed Code Signing" -out gitvolt-codesign.p12
-base64 < gitvolt-codesign.p12 | gh secret set MACOS_CERTIFICATE_P12 -R GitVoltApp/gitvolt
-gh secret set MACOS_CERTIFICATE_PASSWORD -R GitVoltApp/gitvolt   # prompts for it
+  -name "GitNex Self-Signed Code Signing" -out gitnex-codesign.p12
+base64 < gitnex-codesign.p12 | gh secret set MACOS_CERTIFICATE_P12 -R artifactdev/gitvolt
+gh secret set MACOS_CERTIFICATE_PASSWORD -R artifactdev/gitvolt   # prompts for it
 ```
 
 Keep the `.p12` and its password in the password manager, delete `key.pem`, and update the SHA-1
@@ -397,10 +397,10 @@ would also let the Keychain's **Always Allow** carry over.
 
 **Versions.** `CFBundleShortVersionString` and `CFBundleVersion` are the package version as is
 (`0.4.0-rc.1`, or a local build's stamp): macOS shows it in Finder and nothing compares it, since
-the updater uses GitVolt's own version.
+the updater uses GitNex's own version.
 
 **Intel Macs.** Not built yet: the release has only the `aarch64` `.dmg`. An Intel build would
-be a second, separate `GitVolt_<version>_x64.dmg` (the updater already picks its own
+be a second, separate `GitNex_<version>_x64.dmg` (the updater already picks its own
 architecture's), cross-compiled on the same runner with CEF's x64 distribution. A universal app
 would need both CEF distributions, two builds, and `lipo` on the app, every helper and the
 framework's libraries, doubling the download for everyone.
@@ -430,11 +430,11 @@ The release job attests every package with `actions/attest-build-provenance`, so
 check that a file came from this workflow:
 
 ```sh
-gh attestation verify GitVolt_0.1.0-alpha.1_amd64.deb --repo GitVoltApp/gitvolt
+gh attestation verify GitNex_0.1.0-alpha.1_amd64.deb --repo artifactdev/gitvolt
 ```
 
 Attestations need a public repository, or GitHub Enterprise Cloud for a private one. While the
-repository is private, the step is skipped unless the repository variable `GITVOLT_ATTEST` is
+repository is private, the step is skipped unless the repository variable `GITNEX_ATTEST` is
 `true` (set it only on a plan that supports them). `SHA256SUMS` is always uploaded.
 
 ## Build time and cost
@@ -447,7 +447,7 @@ runner; public ones get 4 vCPUs, roughly halving the compile steps):
 | Setup (checkout, apt, Rust, Node, `npm ci`) | 3–4 min | 2–3 min |
 | `tauri-cli` and `cargo-about` installs | 10–15 min (compiled) | seconds (cached) |
 | CEF download (~310 MB) | 1 min | restored from the cache |
-| `just package`: Rust release build | 30–45 min | 10–15 min (only GitVolt's own crates) |
+| `just package`: Rust release build | 30–45 min | 10–15 min (only GitNex's own crates) |
 | `just package`: UI build, `.deb`, Arch package, `.rpm` | 6–8 min | 6–8 min |
 | `just check-arch-pkg` | 3–5 min | 3–5 min |
 | `just check-rpm-pkg` | 2–3 min | 2–3 min |

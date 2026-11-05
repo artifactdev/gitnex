@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 import { checkPage, expectedPlaceholders, firstLoadFiles, PAGE_BUDGETS } from './check.ts';
 import { SHOTS } from './shots.ts';
 
-const SOCIAL = '<meta property="og:image" content="https://gitvolt.com/og.jpg"><meta name="twitter:image" content="https://gitvolt.com/og.jpg">';
+const SOCIAL = '<meta property="og:image" content="https://gitnex.com/og.jpg"><meta name="twitter:image" content="https://gitnex.com/og.jpg">';
 const GOOD = `<!doctype html><html><head>${SOCIAL}<link rel="stylesheet" href="./assets/site.css"><script type="module" src="./assets/main.js"></script></head>
 <body><img class="still" src="./assets/hero-1x.webp" srcset="./assets/hero-1x.webp 1240w, ./assets/hero.webp 2480w" width="1240" height="775" alt="The app">
 <img src="./assets/graph-1x.webp" width="720" height="450" alt="A graph" loading="lazy"></body></html>`;
@@ -60,15 +60,15 @@ test("a link preview's image must be there, absolute, and a file of the build un
     'index.html: no og:image <meta> (link previews would have no image)',
     'index.html: no twitter:image <meta> (link previews would have no image)',
   ]);
-  expect(checkPage(page(GOOD.replace(SOCIAL, SOCIAL.replaceAll('https://gitvolt.com/', './')))).errors).toEqual([
+  expect(checkPage(page(GOOD.replace(SOCIAL, SOCIAL.replaceAll('https://gitnex.com/', './')))).errors).toEqual([
     'index.html: og:image "./og.jpg" isn\'t an absolute https URL',
     'index.html: twitter:image "./og.jpg" isn\'t an absolute https URL',
   ]);
-  const under = page(GOOD.replace(SOCIAL, SOCIAL.replaceAll('gitvolt.com/', 'gitvoltapp.github.io/gitvolt/')));
-  expect(checkPage(under, PAGE_BUDGETS, { base: '/gitvolt/' }).errors).toEqual([]);
+  const under = page(GOOD.replace(SOCIAL, SOCIAL.replaceAll('gitnex.com/', 'artifactdev.github.io/gitnex/')));
+  expect(checkPage(under, PAGE_BUDGETS, { base: '/gitnex/' }).errors).toEqual([]);
   expect(checkPage(under).errors).toEqual([
-    'index.html: og:image "https://gitvoltapp.github.io/gitvolt/og.jpg" isn\'t a file in the build (base /)',
-    'index.html: twitter:image "https://gitvoltapp.github.io/gitvolt/og.jpg" isn\'t a file in the build (base /)',
+    'index.html: og:image "https://artifactdev.github.io/gitnex/og.jpg" isn\'t a file in the build (base /)',
+    'index.html: twitter:image "https://artifactdev.github.io/gitnex/og.jpg" isn\'t a file in the build (base /)',
   ]);
 });
 

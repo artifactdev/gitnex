@@ -249,7 +249,7 @@ describe('remote deletes', () => {
     await remoteHandlers.push({ repo: id, worktree: wt, branch: 'topic', target: { remote: 'origin', branch: 'topic' }, setUpstream: true, expect: NO_EXPECT }, ctx);
     const lease = await t.rev('refs/remotes/origin/topic');
     const del = (l: string) => HANDLERS.deleteBranch({ repo: id, worktree: wt, branch: 'topic', local: false, remote: { remote: 'origin', branch: 'topic', lease: l }, force: false, expect: NO_EXPECT }, ctx);
-    await expect(del('0'.repeat(40))).rejects.toMatchObject({ kind: 'RefMoved', message: 'origin/topic changed outside GitVolt' });
+    await expect(del('0'.repeat(40))).rejects.toMatchObject({ kind: 'RefMoved', message: 'origin/topic changed outside GitNex' });
     const theirs = await commitInOrigin(t, origin, 'topic', 'r.txt', 'r\n', 'Teammate');
     await expect(del(lease)).rejects.toMatchObject({ kind: 'RefMoved', message: 'origin/topic changed on the server. Fetch, then try again.' });
     expect(await originRef(t, origin, 'refs/heads/topic')).toBe(theirs);

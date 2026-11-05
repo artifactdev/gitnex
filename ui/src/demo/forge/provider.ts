@@ -1,4 +1,4 @@
-// GitLab's provider (gitvolt-forge/src/gitlab.rs `impl ForgeProvider`) over the fake GitLab in the
+// GitLab's provider (gitnex-forge/src/gitlab.rs `impl ForgeProvider`) over the fake GitLab in the
 // page: each method asks the fake what the harness's would answer and maps it with gitlabJson.ts.
 // No HTTP, so no ETags or rate limits, and everything is fresh; the pages the provider reads (its
 // `per_page` and page caps) are kept, so a long list is cut where the core's is.
@@ -75,7 +75,7 @@ function bodyMessage(body: unknown): string | null {
   return [...redact(said)].slice(0, 200).join('');
 }
 
-/** gitvolt-forge's http.rs `status_error`. */
+/** gitnex-forge's http.rs `status_error`. */
 export function statusError(status: number, body: unknown): GbError {
   const s = bodyMessage(body);
   if (status === 401) return gbError('AuthFailed', `${HOST} rejected the token: replace it in Settings › Accounts.`);
@@ -154,7 +154,7 @@ export function plainValidation(said: string): string | null {
 }
 
 /** gitlab.rs `unreadable`. */
-const unreadable = (what: string) => gbError('Other', `${HOST} sent a ${what} GitVolt couldn't read`);
+const unreadable = (what: string) => gbError('Other', `${HOST} sent a ${what} GitNex couldn't read`);
 
 export class DemoGitLab {
   readonly fake: FakeGitLab;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-//! GitVolt patch: the geometry of a Windows window that draws its own title bar but keeps the
+//! GitNex patch: the geometry of a Windows window that draws its own title bar but keeps the
 //! system's frame everywhere else (`platform/windows/chrome.rs`), as pure functions so they're
 //! tested on every platform.
 //!

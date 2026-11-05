@@ -3,13 +3,13 @@
 # before deploying): the landing page (`just site-build`, which runs the page's own checks), the
 # demo under demo/ (`just demo-build`: the WebAssembly graph, then `vite build --mode demo` over the
 # bundles in site/demo-data/) and the 404 page, then ui/scripts/check-site.mjs over the result.
-# GITVOLT_SITE_BASE is the path the site is served under: / on gitvolt.com; GITVOLT_SITE_ORIGIN its
-# scheme and host, https://gitvolt.com by default (the link previews' URLs). See docs/website.md.
+# GITNEX_SITE_BASE is the path the site is served under: / on gitnex.com; GITNEX_SITE_ORIGIN its
+# scheme and host, https://gitnex.com by default (the link previews' URLs). See docs/website.md.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-export GITVOLT_SITE_BASE=${GITVOLT_SITE_BASE:-/}
-base=$GITVOLT_SITE_BASE
+export GITNEX_SITE_BASE=${GITNEX_SITE_BASE:-/}
+base=$GITNEX_SITE_BASE
 
 # The page (with its own checks, site/build/check.ts), then the demo under demo/; either order works.
 just site-build demo-build

@@ -1,6 +1,6 @@
 # The website
 
-[gitvolt.com](https://gitvolt.com/) is static files on GitHub
+[gitnex.com](https://gitnex.com/) is static files on GitHub
 Pages: the landing page (`site/`), the live demo (`ui/demo.html`, built with
 `vite build --mode demo` over the committed bundles in `site/demo-data/`) and a 404 page. Two
 workflows publish it; nothing else does. It loads nothing from other hosts
@@ -10,10 +10,10 @@ workflows publish it; nothing else does. It loads nothing from other hosts
 
 - **Site** (`.github/workflows/site.yml`) runs on a push to main that changes one of:
   `site/`, `ui/src/demo/`, `ui/demo.html`, `ui/build/`, `ui/scripts/check-site.mjs`,
-  `ui/vite.config.ts`, `crates/gitvolt-graph/`, `crates/gitvolt-graph-wasm/`,
+  `ui/vite.config.ts`, `crates/gitnex-graph/`, `crates/gitnex-graph-wasm/`,
   `scripts/site-pages.sh`, `.github/workflows/site.yml`, `README.md` (the features),
   `about.toml` (the font license check), `justfile`, `ui/src/security/csp.ts` and
-  `crates/gitvolt-app/tauri.conf.json` (the demo page's CSP). It also runs by hand: Actions, Site,
+  `crates/gitnex-app/tauri.conf.json` (the demo page's CSP). It also runs by hand: Actions, Site,
   Run workflow.
 - **Jobs:** build (`contents: read`) builds the graph's WebAssembly (`just demo-wasm`), the
   landing page and the demo, and checks them (`just site-pages`, below), then uploads the
@@ -60,15 +60,15 @@ The format, `schema` 1 (`release` is `null` while there's no published release):
     "tag": "v0.7.3",
     "prerelease": false,
     "published": "2026-10-13T03:04:03Z",
-    "url": "https://github.com/GitVoltApp/gitvolt/releases/tag/v0.7.3",
-    "sums": "https://github.com/GitVoltApp/gitvolt/releases/download/v0.7.3/SHA256SUMS",
+    "url": "https://github.com/artifactdev/gitvolt/releases/tag/v0.7.3",
+    "sums": "https://github.com/artifactdev/gitvolt/releases/download/v0.7.3/SHA256SUMS",
     "downloads": [
       {
         "os": "linux",
         "kind": "deb",
         "arch": "x86_64",
-        "file": "GitVolt_0.7.3_amd64.deb",
-        "url": "https://github.com/GitVoltApp/gitvolt/releases/download/v0.7.3/GitVolt_0.7.3_amd64.deb",
+        "file": "GitNex_0.7.3_amd64.deb",
+        "url": "https://github.com/artifactdev/gitvolt/releases/download/v0.7.3/GitNex_0.7.3_amd64.deb",
         "bytes": 165800042,
         "sha256": "264c81a9…"
       }
@@ -99,13 +99,13 @@ GitHub Pages sends every file with `Cache-Control: max-age=600` and has no setti
 - **The page's own checks** (`just site-build`, `site/build/check.ts`): nothing left unfilled, the
   first screen's weight, a placeholder screenshot only while its scene waits on a demo method
   still pending (`ui/src/demo/coverage.ts`), and `og:image` and `twitter:image` there, absolute
-  and a file of the build under `GITVOLT_SITE_BASE`.
+  and a file of the build under `GITNEX_SITE_BASE`.
 - **Pages:** `index.html`, `404.html`, `demo/demo.html` and the demo's manifest are there; no
   dotfile (the upload leaves them out) and no source map.
 - **No third-party requests:** every script, stylesheet, image, frame, font and icon a page or
   stylesheet loads is on the site. Links to other sites are fine.
 - **Links:** internal links and `#fragments` resolve. The 404 page's links follow
-  `GITVOLT_SITE_BASE` (`/` by default; `scripts/site-pages.sh` rewrites them), since Pages
+  `GITNEX_SITE_BASE` (`/` by default; `scripts/site-pages.sh` rewrites them), since Pages
   serves it at any missing path.
 - **CSP:** every page has a Content-Security-Policy `<meta>` with no host or scheme source (only
   `'self'`, `'none'`, hashes, nonces, `data:`, `blob:`, `'unsafe-inline'`, `'wasm-unsafe-eval'`),
@@ -139,8 +139,8 @@ The page's `og:` and `twitter:` tags give link previews (chat apps, social sites
 description and an image. Scrapers need absolute URLs, so the build writes `og:url`, `og:image`
 and `twitter:image` from two settings (`site/build/social.ts`):
 
-- **`GITVOLT_SITE_ORIGIN`:** the scheme and host, `https://gitvolt.com` by default.
-- **`GITVOLT_SITE_BASE`:** the path under it, `/` by default (see The domain).
+- **`GITNEX_SITE_ORIGIN`:** the scheme and host, `https://gitnex.com` by default.
+- **`GITNEX_SITE_BASE`:** the path under it, `/` by default (see The domain).
 
 **The image** is `site/public/og.jpg`, 1200x630, served unhashed at the site's root. It's drawn
 from `site/og/og.html` (the page's tokens, fonts and lane art, and a slice of the hero
@@ -174,14 +174,14 @@ headline in the middle 630 px, since some previews crop to near-square.
 
 ## The domain
 
-The site is at https://gitvolt.com/: Settings, Pages, Custom domain, with Enforce HTTPS (a
+The site is at https://gitnex.com/: Settings, Pages, Custom domain, with Enforce HTTPS (a
 deploy from Actions needs no `CNAME` file). The organization's Settings, Pages, Verified domains
-holds gitvolt.com, so no other account can claim it. DNS at the registrar: `A` records
+holds gitnex.com, so no other account can claim it. DNS at the registrar: `A` records
 185.199.108.153, 185.199.109.153, 185.199.110.153 and 185.199.111.153; `AAAA` records
 2606:50c0:8000::153, 2606:50c0:8001::153, 2606:50c0:8002::153 and 2606:50c0:8003::153; `www` a
-`CNAME` to gitvoltapp.github.io. gitvoltapp.github.io/gitvolt/ redirects to the domain.
+`CNAME` to artifactdev.github.io. artifactdev.github.io/gitnex/ redirects to the domain.
 
-`GITVOLT_SITE_BASE` is the path the site is served under: `/`, the default. To serve it under a
-path instead (Pages without the domain: `/gitvolt/`), set it as an `env:` entry on the build job
-in `.github/workflows/site.yml`, with `GITVOLT_SITE_ORIGIN` (`https://gitvoltapp.github.io`) for
+`GITNEX_SITE_BASE` is the path the site is served under: `/`, the default. To serve it under a
+path instead (Pages without the domain: `/gitnex/`), set it as an `env:` entry on the build job
+in `.github/workflows/site.yml`, with `GITNEX_SITE_ORIGIN` (`https://artifactdev.github.io`) for
 the link previews' URLs.

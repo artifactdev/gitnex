@@ -40,17 +40,17 @@ export const test = base.extend<{ resetHarness: void; isolatedContext: boolean; 
   // test keeps what the test saved), and its pages are closed after it. The file lists start in
   // Path mode, which most specs were written against; a Tree step switches to Tree itself. A test that needs a
   // context of its own (one that installs a clock, which is the context's) asks for one with
-  // `test.use({ isolatedContext: true })`. GITVOLT_E2E_FRESH_CONTEXT=1 gives every test its own.
+  // `test.use({ isolatedContext: true })`. GITNEX_E2E_FRESH_CONTEXT=1 gives every test its own.
   isolatedContext: [false, { option: true }],
   context: async ({ browser, contextPool, isolatedContext, _combinedContextOptions }, use) => {
-    if (isolatedContext || process.env.GITVOLT_E2E_FRESH_CONTEXT) {
+    if (isolatedContext || process.env.GITNEX_E2E_FRESH_CONTEXT) {
       const fresh = await browser.newContext(_combinedContextOptions);
       await reportCspViolations(fresh);
       await fresh.addInitScript(() => {
         try {
           if (window !== window.top || location.protocol === 'about:' || sessionStorage.getItem('__gbE2eTab')) return;
           sessionStorage.setItem('__gbE2eTab', '1');
-          localStorage.setItem('gitvolt.fileList.v1', JSON.stringify({ mode: 'path', sort: 'path', advanceAfterStage: true }));
+          localStorage.setItem('gitnex.fileList.v1', JSON.stringify({ mode: 'path', sort: 'path', advanceAfterStage: true }));
         } catch {
           // An opaque origin has no storage.
         }
@@ -69,7 +69,7 @@ export const test = base.extend<{ resetHarness: void; isolatedContext: boolean; 
           if (window !== window.top || location.protocol === 'about:' || sessionStorage.getItem('__gbE2eTab')) return;
           sessionStorage.setItem('__gbE2eTab', '1');
           localStorage.clear();
-          localStorage.setItem('gitvolt.fileList.v1', JSON.stringify({ mode: 'path', sort: 'path', advanceAfterStage: true }));
+          localStorage.setItem('gitnex.fileList.v1', JSON.stringify({ mode: 'path', sort: 'path', advanceAfterStage: true }));
         } catch {
           // An opaque origin has no storage.
         }
@@ -189,7 +189,7 @@ expect.poll = ((actual, messageOrOptions) =>
 export type { Locator, Page } from '@playwright/test';
 
 /** Whether a `@budget` test's timing assertions apply: in the `chromium-budget` project only, the
- * engine GitVolt ships (CEF = Chromium), run after the rest so a loaded run doesn't trip them.
+ * engine GitNex ships (CEF = Chromium), run after the rest so a loaded run doesn't trip them.
  * WebKit still runs those tests' flows, and their `[budget]` logs, but its timings aren't a budget. */
 export const budgetApplies = () => base.info().project.name === 'chromium-budget';
 

@@ -1,6 +1,6 @@
-// The harness fake forge's GitLab (crates/gitvolt-harness/src/fake_forge/gitlab.rs, gitlab_mrs.rs,
+// The harness fake forge's GitLab (crates/gitnex-harness/src/fake_forge/gitlab.rs, gitlab_mrs.rs,
 // create.rs), answering without HTTP: the same seed, the same JSON, the same write semantics, so
-// gitvolt-forge's mapping (gitlabJson.ts) makes of it what the core makes of the fake's answers.
+// gitnex-forge's mapping (gitlabJson.ts) makes of it what the core makes of the fake's answers.
 import type { ReviewLine } from '../../api/gen/ReviewLine';
 import { compareBytes } from '../engine/refs';
 import { commentableLines, lineCode } from './review';

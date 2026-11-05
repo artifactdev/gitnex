@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds GitVolt.app locally, ad-hoc signs it, sets its minimum macOS version to 12.0, and copies
-# it to target/<profile>/bundle/macos/GitVolt.app. The build runs in a fresh temporary target
+# Builds GitNex.app locally, ad-hoc signs it, sets its minimum macOS version to 12.0, and copies
+# it to target/<profile>/bundle/macos/GitNex.app. The build runs in a fresh temporary target
 # directory (compiling into a network volume can corrupt build artifacts); MACOSX_DEPLOYMENT_TARGET
 # stays unset because this toolchain makes corrupt proc-macro dylibs with it.
 #
@@ -16,9 +16,9 @@ Usage: ./build-macos-app.sh [--debug] [--keep] [--install]
 
   --debug    build the debug profile instead of release
   --keep     keep the temporary build directory (removed on success otherwise; kept on failure)
-  --install  also replace the app in $GITVOLT_APP_DIR (default: /Applications/GitVolt.app)
+  --install  also replace the app in $GITNEX_APP_DIR (default: /Applications/GitNex.app)
 
-The existing bundle is swapped by renames in the same folder, so a running GitVolt keeps
+The existing bundle is swapped by renames in the same folder, so a running GitNex keeps
 running the old build until it is quit and reopened.
 EOF
 }
@@ -46,7 +46,7 @@ if [ "$debug" = 1 ]; then
   profile=debug
   tauri_args=(--debug --bundles app)
 fi
-build_dir=$(mktemp -d "${TMPDIR:-/tmp}/gitvolt-app.XXXXXX")
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/gitnex-app.XXXXXX")
 install_new=
 cleanup() {
   local status=$?
@@ -60,13 +60,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "build-macos-app: building the $profile bundle (build directory: $build_dir)"
-(cd "$root/crates/gitvolt-app" && \
+(cd "$root/crates/gitnex-app" && \
   env -u CARGO_INCREMENTAL -u MACOSX_DEPLOYMENT_TARGET \
     CARGO_TARGET_DIR="$build_dir" CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     cargo tauri build "${tauri_args[@]}" \
       --config '{"bundle":{"macOS":{"minimumSystemVersion":null}}}')
 
-built=$build_dir/$profile/bundle/macos/GitVolt.app
+built=$build_dir/$profile/bundle/macos/GitNex.app
 [ -d "$built" ] || fail "the build made no $built"
 plist=$built/Contents/Info.plist
 if ! /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" "$plist" 2>/dev/null; then
@@ -75,7 +75,7 @@ fi
 codesign --force --deep --sign - --timestamp=none "$built" >/dev/null 2>&1
 codesign --verify --deep --strict "$built"
 
-dest=$root/target/$profile/bundle/macos/GitVolt.app
+dest=$root/target/$profile/bundle/macos/GitNex.app
 mkdir -p "$(dirname "$dest")"
 rm -rf "$dest"
 cp -R "$built" "$dest"
@@ -83,11 +83,11 @@ codesign --verify --deep --strict "$dest"
 echo "build-macos-app: $dest"
 
 if [ "$install" = 1 ]; then
-  app_dir=${GITVOLT_APP_DIR:-/Applications}
-  target=$app_dir/GitVolt.app
+  app_dir=${GITNEX_APP_DIR:-/Applications}
+  target=$app_dir/GitNex.app
   [ -w "$app_dir" ] || fail "no write access to $app_dir (install by hand, or grant it and retry)"
-  install_new=$app_dir/.GitVolt.app.new.$$
-  install_old=$app_dir/.GitVolt.app.old.$$
+  install_new=$app_dir/.GitNex.app.new.$$
+  install_old=$app_dir/.GitNex.app.old.$$
   rm -rf "$install_new" "$install_old"
   ditto "$dest" "$install_new"
   if [ -d "$target" ]; then
@@ -104,7 +104,7 @@ if [ "$install" = 1 ]; then
   fi
   codesign --verify --deep --strict "$target"
   echo "build-macos-app: installed $target"
-  if pgrep -x GitVolt >/dev/null 2>&1; then
-    echo "build-macos-app: GitVolt is running; quit and reopen it to use this build" >&2
+  if pgrep -x GitNex >/dev/null 2>&1; then
+    echo "build-macos-app: GitNex is running; quit and reopen it to use this build" >&2
   fi
 fi

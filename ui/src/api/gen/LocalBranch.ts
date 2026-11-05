@@ -24,7 +24,7 @@ pushTarget: string | null,
  */
 pushBehind: number | null, 
 /**
- * GitVolt rewrote it since its last push (a live rewrite mark, §12.3): Push forces with
+ * GitNex rewrote it since its last push (a live rewrite mark, §12.3): Push forces with
  * the lease recorded then when `push_behind` > 0.
  */
 rewritten: Rewritten | null, 

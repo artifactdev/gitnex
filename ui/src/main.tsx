@@ -1,4 +1,6 @@
 // First: where actions start (the confirm model), seen before the key router or React acts.
+// Also before any store reads localStorage: move GitVolt's keys to GitNex's names once.
+import './app/legacyStoreKeys';
 import './ui/arm/origin';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';

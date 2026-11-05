@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({
   saveSettings: vi.fn(async () => null),
   saveProfile: vi.fn(async () => null),
-  saveExport: vi.fn(async (_name: string, _contents: string): Promise<string | null> => '/home/ada/themes/nord-custom.gitvolt-theme.json'),
+  saveExport: vi.fn(async (_name: string, _contents: string): Promise<string | null> => '/home/ada/themes/nord-custom.gitnex-theme.json'),
   forgeAccounts: vi.fn(async () => []),
   listOpeners: vi.fn(async () => []),
 }));
@@ -152,13 +152,13 @@ describe('sharing', () => {
     expect(useToast.getState().message).toBe('Copied Nord (Custom) as JSON');
   });
 
-  it('Export file… saves "<name>.gitvolt-theme.json" where the user picks; a cancel says nothing', async () => {
+  it('Export file… saves "<name>.gitnex-theme.json" where the user picks; a cancel says nothing', async () => {
     use({ theme: nordCustom.id, customThemes: [nordCustom] });
     render(<EditingStrip />);
     fireEvent.click(screen.getByRole('button', { name: 'Export file…' }));
-    await waitFor(() => expect(useToast.getState().message).toBe('Saved nord-custom.gitvolt-theme.json'));
-    expect(api.saveExport).toHaveBeenCalledWith('nord-custom.gitvolt-theme.json', expect.stringContaining('"gitvolt": "theme"'));
-    expect(useToast.getState().detail).toBe('/home/ada/themes/nord-custom.gitvolt-theme.json');
+    await waitFor(() => expect(useToast.getState().message).toBe('Saved nord-custom.gitnex-theme.json'));
+    expect(api.saveExport).toHaveBeenCalledWith('nord-custom.gitnex-theme.json', expect.stringContaining('"gitnex": "theme"'));
+    expect(useToast.getState().detail).toBe('/home/ada/themes/nord-custom.gitnex-theme.json');
     act(() => useToast.getState().dismiss());
     api.saveExport.mockResolvedValueOnce(null);
     fireEvent.click(screen.getByRole('button', { name: 'Export file…' }));
@@ -178,7 +178,7 @@ describe('sharing', () => {
     use({ theme: nordCustom.id, customThemes: [nordCustom] });
     const dialog = showThemePage();
     expect(within(dialog).getByRole('radio', { name: 'Nord (Custom)' })).toHaveFocus();
-    transport.readClipboardText.mockResolvedValueOnce(JSON.stringify({ gitvolt: 'theme', version: 1, name: 'Nord (Custom)', base: 'nord', colors: { 'app-bg0': '#101010' }, graph: [] }));
+    transport.readClipboardText.mockResolvedValueOnce(JSON.stringify({ gitnex: 'theme', version: 1, name: 'Nord (Custom)', base: 'nord', colors: { 'app-bg0': '#101010' }, graph: [] }));
     ctrlV(document.activeElement!);
     await waitFor(() => expect(current()?.name).toBe('Nord (Custom) (2)'));
     expect(current()?.colors).toEqual({ 'app-bg0': '#101010' });
@@ -192,12 +192,12 @@ describe('sharing', () => {
     const before = settings();
     transport.readClipboardText.mockResolvedValueOnce('hello');
     ctrlV(within(dialog).getByRole('radio', { name: 'Nord' }));
-    await waitFor(() => expect(useToast.getState().message).toBe("The clipboard doesn't hold a GitVolt theme"));
+    await waitFor(() => expect(useToast.getState().message).toBe("The clipboard doesn't hold a GitNex theme"));
     expect(settings()).toBe(before);
   });
 
   it('the Paste a theme card pastes from the clipboard', async () => {
-    transport.readClipboardText.mockResolvedValueOnce(JSON.stringify({ gitvolt: 'theme', version: 1, name: 'Dusk', base: 'dracula', colors: {}, graph: [] }));
+    transport.readClipboardText.mockResolvedValueOnce(JSON.stringify({ gitnex: 'theme', version: 1, name: 'Dusk', base: 'dracula', colors: {}, graph: [] }));
     render(<ThemeCards />);
     fireEvent.click(screen.getByRole('button', { name: /Paste a theme/ }));
     await waitFor(() => expect(current()?.name).toBe('Dusk'));

@@ -18,7 +18,7 @@ export const SITE_CSP = [
 
 export function sitePolicy(): Plugin {
   return {
-    name: 'gitvolt-site-csp',
+    name: 'gitnex-site-csp',
     apply: 'build',
     transformIndexHtml: {
       order: 'post',

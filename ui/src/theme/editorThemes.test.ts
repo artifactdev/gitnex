@@ -11,7 +11,7 @@ import { useTheme } from './store';
 import { SHIKI_BUNDLED_THEMES, THEME_IDS, THEMES } from './themes';
 
 describe('editor themes', () => {
-  it("bundles only the Shiki themes GitVolt uses, never Shiki's whole registry or a dropped theme", () => {
+  it("bundles only the Shiki themes GitNex uses, never Shiki's whole registry or a dropped theme", () => {
     expect(Object.keys(SHIKI_THEMES).sort()).toEqual([...SHIKI_BUNDLED_THEMES].sort());
     const dropped = Object.keys(exceptions.dropped.themes);
     expect(dropped).toContain('aurora-x');

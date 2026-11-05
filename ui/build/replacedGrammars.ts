@@ -1,12 +1,12 @@
-// Shiki grammars GitVolt replaces with its own files (build/license-exceptions.json `replaced`,
+// Shiki grammars GitNex replaces with its own files (build/license-exceptions.json `replaced`,
 // docs/licensing.md): src/diff/shikiLanguages.ts imports those files directly, but some of Shiki's
 // grammars embed a replaced one (cpp, elm, nim and es-tag-glsl import './glsl.mjs'). This plugin
-// resolves those imports to GitVolt's file too, so Shiki's copy is never bundled (the license
+// resolves those imports to GitNex's file too, so Shiki's copy is never bundled (the license
 // notices fail the build if it is).
 import { join } from 'node:path';
 import type { Plugin } from 'vite';
 
-const PREFIX = '\0gitvolt-grammar:';
+const PREFIX = '\0gitnex-grammar:';
 
 export function replacedGrammars(opts: { root: string; ids: string[] }): Plugin {
   const ids = new Set(opts.ids);
@@ -16,7 +16,7 @@ export function replacedGrammars(opts: { root: string; ids: string[] }): Plugin 
     return /^(?:shiki\/langs\/([^/]+)\.mjs|@shikijs\/langs\/([^/]+))$/.exec(source)?.slice(1).find(Boolean) ?? null;
   };
   return {
-    name: 'gitvolt-replaced-grammars',
+    name: 'gitnex-replaced-grammars',
     enforce: 'pre',
     resolveId(source, importer) {
       const id = fromShiki(source, importer);

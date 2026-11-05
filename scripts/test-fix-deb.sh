@@ -7,12 +7,12 @@ command -v dpkg-shlibdeps >/dev/null || { echo "test-fix-deb: skipped (dpkg-dev 
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 pkg="$work/pkg"
-mkdir -p "$pkg/DEBIAN" "$pkg/usr/share/GitVolt"
-cp /usr/bin/true "$pkg/usr/share/GitVolt/gitvolt"
-printf '#!/bin/sh\n' > "$pkg/usr/share/GitVolt/chrome-sandbox"
-chmod 4755 "$pkg/usr/share/GitVolt/chrome-sandbox"
+mkdir -p "$pkg/DEBIAN" "$pkg/usr/share/GitNex"
+cp /usr/bin/true "$pkg/usr/share/GitNex/gitnex"
+printf '#!/bin/sh\n' > "$pkg/usr/share/GitNex/chrome-sandbox"
+chmod 4755 "$pkg/usr/share/GitNex/chrome-sandbox"
 cat > "$pkg/DEBIAN/control" <<'EOT'
-Package: git-volt
+Package: gitnex
 Version: 0.1.0
 Architecture: amd64
 Maintainer: fix-deb self-test <test@example.invalid>
@@ -35,7 +35,7 @@ eq() { [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 eq version-plain "$(dpkg-deb -f "$work/t.deb" Version)" 0.1.0
 eq license "$(dpkg-deb -f "$work/t.deb" License)" MIT
 eq description "$(dpkg-deb -f "$work/t.deb" Description)" 'fix-deb self-test'
-eq package "$(dpkg-deb -f "$work/t.deb" Package)" gitvolt
+eq package "$(dpkg-deb -f "$work/t.deb" Package)" gitnex
 # A SemVer pre-release becomes a Debian one: '~' sorts before the final release, '-' wouldn't.
 for v in '0.1.0-alpha.1:0.1.0~alpha.1' '0.1.0-rc.2+202610051325.ab4dbf9e:0.1.0~rc.2+202610051325.ab4dbf9e' \
          '0.1.0+202610051325.ab4dbf9e:0.1.0+202610051325.ab4dbf9e'; do
@@ -44,21 +44,21 @@ for v in '0.1.0-alpha.1:0.1.0~alpha.1' '0.1.0-rc.2+202610051325.ab4dbf9e:0.1.0~r
   "$here/fix-deb.sh" "$work/v.deb" >/dev/null
   eq "version ${v%%:*}" "$(dpkg-deb -f "$work/v.deb" Version)" "${v#*:}"
 done
-# GITVOLT_SHLIBDEPS_CACHE: the second run of the same ELF files reuses the first's answer; a file
-# that links something else doesn't, and GITVOLT_REBUILD=1 never reads the cache.
+# GITNEX_SHLIBDEPS_CACHE: the second run of the same ELF files reuses the first's answer; a file
+# that links something else doesn't, and GITNEX_REBUILD=1 never reads the cache.
 sed -i "s/^Version: .*/Version: 0.1.0/" "$pkg/DEBIAN/control"
 cache_run() {
   dpkg-deb --root-owner-group -Zgzip -b "$pkg" "$work/c.deb" >/dev/null
-  (cd "$work" && GITVOLT_SHLIBDEPS_CACHE=cache "$here/fix-deb.sh" c.deb) # relative, as `just package` passes it
+  (cd "$work" && GITNEX_SHLIBDEPS_CACHE=cache "$here/fix-deb.sh" c.deb) # relative, as `just package` passes it
 }
 out=$(cache_run)
 grep -q 'result from' <<<"$out" && fail "a first run hit the cache: $out"
 out=$(cache_run)
 grep -q 'result from' <<<"$out" || fail "the second run missed the cache: $out"
 eq cached-depends "$(dpkg-deb -f "$work/c.deb" Depends)" "$deps"
-out=$(GITVOLT_REBUILD=1 cache_run)
-grep -q 'result from' <<<"$out" && fail "GITVOLT_REBUILD=1 read the cache: $out"
-cp "$(command -v ls)" "$pkg/usr/share/GitVolt/gitvolt" # other libraries and symbols
+out=$(GITNEX_REBUILD=1 cache_run)
+grep -q 'result from' <<<"$out" && fail "GITNEX_REBUILD=1 read the cache: $out"
+cp "$(command -v ls)" "$pkg/usr/share/GitNex/gitnex" # other libraries and symbols
 out=$(cache_run)
 grep -q 'result from' <<<"$out" && fail "a changed ELF file hit the cache: $out"
 echo "test-fix-deb: OK ($deps)"

@@ -1,12 +1,16 @@
 # Changelog
 
-All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, newest first. The format follows
+All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0) are listed here, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
 ### Added
 
+- **GitVolt is now GitNex.** The app, its bundles and its packages are GitNex. The first start
+  copies GitVolt's profiles, settings, undo history and token files to GitNex's folders and keyring
+  service; the old folders stay as they are. The update repository stays `artifactdev/gitvolt`,
+  and the internal crates and binary are `gitnex-*` / `gitnex`.
 - **Several accounts on one forge.** Settings › Accounts can hold more than one GitHub,
   GitLab or Forgejo account per host (a private account and a work one, say), each with its own
   token, status and avatar. Add another account with the same host and a different user's token;
@@ -24,7 +28,7 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
   files… and Add N files to .gitignore. A single file gets Stash file… and Add to .gitignore;
   both writes are journaled, so Undo brings the changes or .gitignore back.
 - **Clone: a folder picker and repository search.** The destination starts at your default repos
-  folder. Choose… picks the parent folder, and GitVolt clones into a new folder named after the
+  folder. Choose… picks the parent folder, and GitNex clones into a new folder named after the
   repository inside it. Search repositories finds your own repositories across every configured
   GitHub, GitLab and Forgejo account, grouped by integration and account, and clones one into
   that folder in one click.
@@ -35,12 +39,15 @@ All notable changes to GitVolt (called GitBolt before 0.7.0) are listed here, ne
 - **AI commit messages.** Settings › AI turns on a sparkles button beside the commit summary. It
   reads the staged diff and fills the summary and description. Choose an OpenAI-compatible
   endpoint (optional token in the system keyring, models loaded from the endpoint) or a local
-  command-line tool; GitVolt detects common local servers and CLIs such as GitHub Copilot CLI,
+  command-line tool; GitNex detects common local servers and CLIs such as GitHub Copilot CLI,
   Codex, Claude Code, Gemini, Ollama and `llm`. Off by default, and it asks before replacing a
   message you typed.
 
 ### Fixed
 
+- **AI CLIs are found where your shell puts them.** A GitNex started from the Dock or Finder got
+  launchd's bare `PATH`, so GitHub Copilot CLI and the other local tools weren't detected (and a
+  configured one couldn't run). Detection and generation now use the login shell's environment.
 - **Split diffs open with both sides at the first change.** A file opened again, its first
   change where the editor was last scrolled to, no longer had its old side jump back to the top
   a few frames on, the two sides then scrolling together out of line.

@@ -15,7 +15,7 @@ Subcommands (each prints to stdout; errors go to stderr with exit status 2):
                                 need and the payload doesn't bring, as rpm's elfdeps names them:
                                 libnss3.so()(64bit), libc.so.6(GLIBC_2.34)(64bit)
   build <control> <dir> <out-dir> <epoch> <license> [zstd-level]
-                                writes <out-dir>/GitVolt-<filever>-1.x86_64.rpm (printed) from the
+                                writes <out-dir>/GitNex-<filever>-1.x86_64.rpm (printed) from the
                                 .deb's control file and the payload under <dir>, compressed with
                                 zstd at zstd-level (default 19)
   verify <data.tar> <pkg.rpm> [edited...]
@@ -57,25 +57,25 @@ class Fail(Exception):
     pass
 
 
-NAME = "gitvolt"
+NAME = "gitnex"
 RELEASE = "1"
 ARCH = "x86_64"
-URL_DEFAULT = "https://github.com/GitVoltApp/gitvolt"
+URL_DEFAULT = "https://github.com/artifactdev/gitvolt"
 
 # The directories the package owns: its own. The rest of the .deb's directories belong to the
 # system (filesystem, hicolor-icon-theme), and owning one with another mode is a file conflict
 # (Fedora's /usr/bin is 555), so the package leaves them out. A directory in neither list fails
 # the build, so a new one is never silently left unowned.
-OWNED_DIRS = re.compile(r"usr/share/GitVolt(/.*)?|usr/share/doc/gitvolt(/.*)?")
+OWNED_DIRS = re.compile(r"usr/share/GitNex(/.*)?|usr/share/doc/gitnex(/.*)?")
 SYSTEM_DIRS = re.compile(r"usr|usr/bin|usr/share|usr/share/(applications|doc|licenses|metainfo|icons)|usr/share/icons/hicolor(/[^/]+(/apps)?)?")
 # The license notices: %license files, which rpm installs even with --nodocs (dnf's
 # tsflags=nodocs, the default in Fedora's container images).
-LICENSE_FILES = re.compile(r"usr/share/doc/gitvolt/[^/]+")
+LICENSE_FILES = re.compile(r"usr/share/doc/gitnex/[^/]+")
 RPMFILE_DOC, RPMFILE_LICENSE = 1 << 1, 1 << 7
 
 # What package-rpm.sh adds to the .deb's payload: Fedora's license directory, a symlink to the
-# .deb's /usr/share/doc/gitvolt (as in the Arch package).
-RPM_EXTRA = {"usr/share/licenses/gitvolt": ("link", 0, 0, "../doc/gitvolt")}
+# .deb's /usr/share/doc/gitnex (as in the Arch package).
+RPM_EXTRA = {"usr/share/licenses/gitnex": ("link", 0, 0, "../doc/gitnex")}
 
 # Debian dependencies that the ELF scan doesn't name: Debian package -> RPM requirement. git is a
 # program, not a library (git-core is its package on Fedora and openSUSE, without git's Perl and
@@ -323,7 +323,7 @@ def files_of(root, epoch):
             if not OWNED_DIRS.fullmatch(rel):
                 if SYSTEM_DIRS.fullmatch(rel):
                     continue
-                raise Fail(f"the directory {rel} is neither GitVolt's nor a system one: add it to OWNED_DIRS or SYSTEM_DIRS in scripts/rpm-pkg.py")
+                raise Fail(f"the directory {rel} is neither GitNex's nor a system one: add it to OWNED_DIRS or SYSTEM_DIRS in scripts/rpm-pkg.py")
             e["size"] = 0
         elif stat.S_ISLNK(st.st_mode):
             e["link"] = os.readlink(full)
@@ -419,10 +419,10 @@ def build(control, root, outdir, epoch, license_, level="19"):
             (1004, I18NSTRING, summary),
             (1005, I18NSTRING, desc),
             (1006, INT32, [epoch]),
-            (1007, STRING, "gitvolt-build"),
+            (1007, STRING, "gitnex-build"),
             (1009, INT32, [sum(e["size"] for e in files)]),
             (1014, STRING, license_),
-            (1015, STRING, "GitVolt build"),
+            (1015, STRING, "GitNex build"),
             (1016, I18NSTRING, "Unspecified"),
             (1020, STRING, url),
             (1021, STRING, "linux"),
@@ -475,7 +475,7 @@ def build(control, root, outdir, epoch, license_, level="19"):
             (1007, INT32, [raw_size]),
         ])
         lead = struct.pack(">4sBBhh66shh16s", b"\xed\xab\xee\xdb", 3, 0, 0, 1, f"{NAME}-{evr}".encode()[:65], 1, 5, b"")
-        name = f"GitVolt-{file_version(debver)}-{RELEASE}.{ARCH}.rpm"
+        name = f"GitNex-{file_version(debver)}-{RELEASE}.{ARCH}.rpm"
         tmp = os.path.join(work, name)
         with open(tmp, "wb") as out, open(payload, "rb") as f:
             out.write(lead + sig + b"\0" * (-len(sig) % 8) + hdr)
