@@ -349,7 +349,8 @@ export function fileMenuEnv(store: RepoViewStore): MenuEnv {
     conflicted: s.graph.rows.find((r) => r.kind === 'wip' && r.wip?.worktreePath === active)?.wip?.conflicted ?? 0,
     // --- end 3B final fixes ---
     forge: (remote) => {
-      const r = projectRemote(remote === undefined ? remotes : remotes.filter((x) => x.name === remote), useAppState.getState().profile.hostOverrides);
+      const profile = useAppState.getState().profile;
+      const r = projectRemote(remote === undefined ? remotes : remotes.filter((x) => x.name === remote), profile.hostOverrides, profile.bitbucketBases);
       return r && r.hostKind !== 'generic' ? r : null;
     },
     mainRemote: {

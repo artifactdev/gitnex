@@ -24,7 +24,7 @@ function isWordChar(c: string): boolean {
 /** A path-segment byte: ASCII alphanumeric, `_`, `.`, `-` or the `/` separator. ASCII-only,
  * matching the Rust parser's byte-wise `is_path_byte`. */
 function isPathByte(c: string): boolean {
-  return /^[A-Za-z0-9_.\-/]$/.test(c);
+  return /^[A-Za-z0-9_.~\-/]$/.test(c);
 }
 
 /** `segment/…/segment`: at least two non-empty segments. */
@@ -109,7 +109,7 @@ function buildRefToken(label: string, sigil: '!' | '#', remote: ProjectRemote): 
     const url = issueUrl(remote, project, n);
     return url ? { kind: 'link', text: label, url, ref: { type: 'issue', project, number: n, label } } : null;
   }
-  if (remote.hostKind === 'github' || remote.hostKind === 'forgejo') {
+  if (remote.hostKind === 'github' || remote.hostKind === 'forgejo' || remote.hostKind === 'bitbucket') {
     const url = mergeRequestUrl(remote, project, n);
     return url ? { kind: 'link', text: label, url, ref: { type: 'mr', project, number: n, label } } : null;
   }

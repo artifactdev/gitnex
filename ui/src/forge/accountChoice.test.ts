@@ -5,7 +5,7 @@ import { EMPTY_REPO_SETTINGS } from '../app/state';
 import { byHost, hostDefault, removalEffects, repoAccountsOf } from './accountChoice';
 
 const view = (id: string, host: string, username: string): ForgeAccountView => ({
-  account: { id, host, kind: 'gitlab', user: { id: 1, username, name: username, avatarUrl: null, webUrl: '', email: null, emails: [] }, storage: 'keyring', version: null, versionCheckedAt: 0, addedAt: 0 },
+  account: { id, host, baseUrl: null, kind: 'gitlab', user: { id: 1, username, name: username, avatarUrl: null, webUrl: '', email: null, emails: [] }, storage: 'keyring', version: null, versionCheckedAt: 0, addedAt: 0 },
   status: { kind: 'ok' },
 });
 const H = 'gitlab.example.com';

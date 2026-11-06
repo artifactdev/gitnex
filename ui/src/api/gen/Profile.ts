@@ -52,7 +52,11 @@ aiCommit?: AiCommitSettings,
 /**
  * Host → forge type override (spec §14.4).
  */
-hostOverrides: { [key in string]: HostKind }, sidebarWidth: number, sidebarNarrow: boolean, 
+hostOverrides: { [key in string]: HostKind }, 
+/**
+ * Account-owned Bitbucket installation URLs, keyed by HTTPS authority.
+ */
+bitbucketBases?: { [key in string]: string }, sidebarWidth: number, sidebarNarrow: boolean, 
 /**
  * Sidebar panel id → its height in px when last resized (the weights the expanded panels share).
  */

@@ -142,7 +142,7 @@ export async function forgeRemotes(ctx: DemoContext, repo: number): Promise<Remo
 /** hub.rs `accounts`: the demo's one account, always fine, its id the host (a host's first
  * account's, `ForgeAccount::id`). No token, so none to show. */
 export function accounts(f: DemoForge): ForgeAccountView[] {
-  return [{ account: { id: HOST, host: HOST, kind: 'gitlab', user: f.provider.me(), storage: 'keyring', version: f.fake.seed.version || null, versionCheckedAt: 0, addedAt: 0 }, status: { kind: 'ok' } }];
+  return [{ account: { id: HOST, host: HOST, baseUrl: null, kind: 'gitlab', user: f.provider.me(), storage: 'keyring', version: f.fake.seed.version || null, versionCheckedAt: 0, addedAt: 0 }, status: { kind: 'ok' } }];
 }
 
 /** hub.rs `account_for`, for the demo's one account. */

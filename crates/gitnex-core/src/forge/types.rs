@@ -15,6 +15,7 @@ pub enum ForgeKind {
     GitHub,
     /// Forgejo, and Gitea, whose API it shares.
     Forgejo,
+    Bitbucket,
 }
 
 impl ForgeKind {
@@ -24,6 +25,7 @@ impl ForgeKind {
             HostKind::GitLab => Some(Self::GitLab),
             HostKind::GitHub => Some(Self::GitHub),
             HostKind::Forgejo => Some(Self::Forgejo),
+            HostKind::Bitbucket => Some(Self::Bitbucket),
             HostKind::Generic => None,
         }
     }
@@ -33,6 +35,7 @@ impl ForgeKind {
             Self::GitLab => "GitLab",
             Self::GitHub => "GitHub",
             Self::Forgejo => "Forgejo",
+            Self::Bitbucket => "Bitbucket",
         }
     }
 }
@@ -157,7 +160,11 @@ pub struct ForgeProjectSettings {
 /// Whether a token may make changes (spec #4 §3.2). `Unknown`: the forge can't say (a GitHub
 /// fine-grained token, an older GitLab).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(export)]
 pub enum WriteAccess {
     Yes,
@@ -231,11 +238,21 @@ pub struct Fresh<T> {
 
 impl<T> Fresh<T> {
     pub fn new(value: T, fetched_at: i64) -> Self {
-        Self { value, not_modified: false, poll_interval_secs: None, fetched_at }
+        Self {
+            value,
+            not_modified: false,
+            poll_interval_secs: None,
+            fetched_at,
+        }
     }
 
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Fresh<U> {
-        Fresh { value: f(self.value), not_modified: self.not_modified, poll_interval_secs: self.poll_interval_secs, fetched_at: self.fetched_at }
+        Fresh {
+            value: f(self.value),
+            not_modified: self.not_modified,
+            poll_interval_secs: self.poll_interval_secs,
+            fetched_at: self.fetched_at,
+        }
     }
 }
 
@@ -388,11 +405,15 @@ pub fn label_color(raw: &str) -> Option<String> {
 
 /// The label names and colours of a forge's `labels` array: names (GitLab's plain list) or
 /// objects with `name` and `color` (GitHub's; GitLab's with `with_labels_details=true`).
-pub fn labels_of(v: &serde_json::Value) -> (Vec<String>, std::collections::BTreeMap<String, String>) {
+pub fn labels_of(
+    v: &serde_json::Value,
+) -> (Vec<String>, std::collections::BTreeMap<String, String>) {
     let mut names = Vec::new();
     let mut colors = std::collections::BTreeMap::new();
     for l in v.as_array().into_iter().flatten() {
-        let Some(name) = l.as_str().or(l["name"].as_str()) else { continue };
+        let Some(name) = l.as_str().or(l["name"].as_str()) else {
+            continue;
+        };
         if let Some(c) = l["color"].as_str().and_then(label_color) {
             colors.insert(name.to_string(), c);
         }
@@ -402,14 +423,20 @@ pub fn labels_of(v: &serde_json::Value) -> (Vec<String>, std::collections::BTree
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(export)]
 pub enum MergeStatus {
     Mergeable,
     /// The forge is still computing it.
     Checking,
     /// Why Merge is disabled (spec #4 §2: "disabled with the reason").
-    Blocked { reason: String },
+    Blocked {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -579,17 +606,28 @@ pub struct NoteRef {
 }
 
 /// GitHub's reactions, in its order: the only names it takes.
-pub const GITHUB_REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"];
+pub const GITHUB_REACTIONS: [&str; 8] = [
+    "+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes",
+];
 
 /// `reactions` grouped by name, in first-seen order (GitHub's: its own order): `(name, user id,
 /// display name)` each, `me` the token's user.
-pub fn group_reactions<'a>(items: impl IntoIterator<Item = (&'a str, u64, &'a str)>, me: Option<u64>, github: bool) -> Vec<ForgeReaction> {
+pub fn group_reactions<'a>(
+    items: impl IntoIterator<Item = (&'a str, u64, &'a str)>,
+    me: Option<u64>,
+    github: bool,
+) -> Vec<ForgeReaction> {
     let mut out: Vec<ForgeReaction> = Vec::new();
     for (name, id, who) in items {
         let r = match out.iter_mut().find(|r| r.name == name) {
             Some(r) => r,
             None => {
-                out.push(ForgeReaction { name: name.to_string(), count: 0, mine: false, users: Vec::new() });
+                out.push(ForgeReaction {
+                    name: name.to_string(),
+                    count: 0,
+                    mine: false,
+                    users: Vec::new(),
+                });
                 out.last_mut().expect("just pushed")
             }
         };
@@ -598,7 +636,12 @@ pub fn group_reactions<'a>(items: impl IntoIterator<Item = (&'a str, u64, &'a st
         r.users.push(who.to_string());
     }
     if github {
-        out.sort_by_key(|r| GITHUB_REACTIONS.iter().position(|n| *n == r.name).unwrap_or(usize::MAX));
+        out.sort_by_key(|r| {
+            GITHUB_REACTIONS
+                .iter()
+                .position(|n| *n == r.name)
+                .unwrap_or(usize::MAX)
+        });
     }
     out
 }
@@ -671,7 +714,11 @@ pub struct ReviewLine {
 impl ReviewLine {
     /// The side a comment on it is on: a removed line's is the old one, the others' the new one.
     pub fn side(&self) -> DiffSide {
-        if self.kind == LineKind::Removed { DiffSide::Old } else { DiffSide::New }
+        if self.kind == LineKind::Removed {
+            DiffSide::Old
+        } else {
+            DiffSide::New
+        }
     }
 
     /// Its number on `side()`.
@@ -882,7 +929,10 @@ pub struct PeopleLimits {
 
 impl PeopleLimits {
     /// GitHub's: at most 10 assignees.
-    pub const GITHUB: PeopleLimits = PeopleLimits { max_reviewers: None, max_assignees: Some(10) };
+    pub const GITHUB: PeopleLimits = PeopleLimits {
+        max_reviewers: None,
+        max_assignees: Some(10),
+    };
 }
 
 /// An MR/PR's head ref on its target's remote, to fetch (the MR view's Compare).
@@ -908,6 +958,7 @@ impl MrHead {
         let src = match self.kind {
             ForgeKind::GitLab => format!("refs/merge-requests/{n}/head"),
             ForgeKind::GitHub | ForgeKind::Forgejo => format!("refs/pull/{n}/head"),
+            ForgeKind::Bitbucket => format!("refs/pull-requests/{n}/from"),
         };
         format!("+{src}:{}", self.local_ref(remote))
     }
@@ -916,7 +967,7 @@ impl MrHead {
     pub fn local_ref(&self, remote: &str) -> String {
         let word = match self.kind {
             ForgeKind::GitLab => "mr",
-            ForgeKind::GitHub | ForgeKind::Forgejo => "pr",
+            ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket => "pr",
         };
         format!("{COMPARE_REFS}{remote}/{word}/{}", self.number)
     }
@@ -959,7 +1010,11 @@ impl PeopleEdit {
     /// The whole list after the change (GitLab's `reviewer_ids`): `current` without the removed
     /// ones, then the added ones not already in it.
     pub fn apply(&self, current: &[u64]) -> Vec<u64> {
-        let mut out: Vec<u64> = current.iter().copied().filter(|id| !self.remove.contains(id)).collect();
+        let mut out: Vec<u64> = current
+            .iter()
+            .copied()
+            .filter(|id| !self.remove.contains(id))
+            .collect();
         for id in &self.add {
             if !out.contains(id) {
                 out.push(*id);
@@ -1039,8 +1094,16 @@ mod tests {
 
     #[test]
     fn label_colours_normalize_and_anything_else_is_none() {
-        assert_eq!(label_color("ededed").as_deref(), Some("#ededed"), "GitHub's");
-        assert_eq!(label_color("#428BCA").as_deref(), Some("#428bca"), "GitLab's");
+        assert_eq!(
+            label_color("ededed").as_deref(),
+            Some("#ededed"),
+            "GitHub's"
+        );
+        assert_eq!(
+            label_color("#428BCA").as_deref(),
+            Some("#428bca"),
+            "GitLab's"
+        );
         assert_eq!(label_color("#FfF").as_deref(), Some("#ffffff"));
         for bad in ["", "#12345", "red", "fff;background:url(x)", "#gggggg"] {
             assert_eq!(label_color(bad), None, "{bad}");
@@ -1050,20 +1113,55 @@ mod tests {
     #[test]
     fn labels_come_as_names_or_objects_with_colours() {
         let (names, colors) = labels_of(&json!(["a", "b"]));
-        assert_eq!((names, colors.len()), (vec!["a".to_string(), "b".to_string()], 0), "GitLab without details");
-        let (names, colors) = labels_of(&json!([{"name": "feature :gear:", "color": "a2eeef"}, {"name": "docs", "color": "#0075CA"}, {"name": "x", "color": null}]));
+        assert_eq!(
+            (names, colors.len()),
+            (vec!["a".to_string(), "b".to_string()], 0),
+            "GitLab without details"
+        );
+        let (names, colors) = labels_of(
+            &json!([{"name": "feature :gear:", "color": "a2eeef"}, {"name": "docs", "color": "#0075CA"}, {"name": "x", "color": null}]),
+        );
         assert_eq!(names, ["feature :gear:", "docs", "x"]);
-        assert_eq!(colors.into_iter().collect::<Vec<_>>(), [("docs".to_string(), "#0075ca".to_string()), ("feature :gear:".to_string(), "#a2eeef".to_string())]);
+        assert_eq!(
+            colors.into_iter().collect::<Vec<_>>(),
+            [
+                ("docs".to_string(), "#0075ca".to_string()),
+                ("feature :gear:".to_string(), "#a2eeef".to_string())
+            ]
+        );
         // An MR from an older GitNex's cache (no `labelColors`) still loads.
         let old = r#"{"number":1,"title":"t","state":"open","author":{"id":1,"username":"a","name":"A"},"sourceProject":"p","sourceBranch":"b","targetProject":"p","targetBranch":"main","headSha":null,"webUrl":"","pipeline":null,"review":{"decision":"none","approvals":0,"approvalsRequired":null,"reviews":[]},"conflicts":null,"labels":["a"],"updatedAt":0}"#;
-        assert!(serde_json::from_str::<ForgeMr>(old).unwrap().label_colors.is_empty());
+        assert!(
+            serde_json::from_str::<ForgeMr>(old)
+                .unwrap()
+                .label_colors
+                .is_empty()
+        );
     }
 
     // --- 5A T1 ---
     #[test]
     fn body_html_is_sent_only_when_the_forge_gave_one() {
-        let author = ForgeUser { id: 1, username: "ada".into(), name: "Ada".into(), avatar_url: None, web_url: "https://x/ada".into(), email: None, emails: vec![] };
-        let mut n = ForgeNote { id: "1".into(), author, body: "b".into(), created_at: 0, system: false, position: None, body_html: None, reactions: vec![], web_url: None };
+        let author = ForgeUser {
+            id: 1,
+            username: "ada".into(),
+            name: "Ada".into(),
+            avatar_url: None,
+            web_url: "https://x/ada".into(),
+            email: None,
+            emails: vec![],
+        };
+        let mut n = ForgeNote {
+            id: "1".into(),
+            author,
+            body: "b".into(),
+            created_at: 0,
+            system: false,
+            position: None,
+            body_html: None,
+            reactions: vec![],
+            web_url: None,
+        };
         assert!(serde_json::to_value(&n).unwrap().get("bodyHtml").is_none());
         n.body_html = Some("<p>b</p>".into());
         assert_eq!(serde_json::to_value(&n).unwrap()["bodyHtml"], "<p>b</p>");
@@ -1075,13 +1173,44 @@ mod tests {
     // --- comment actions ---
     #[test]
     fn reactions_group_by_name_with_mine_and_who() {
-        let g = group_reactions([("heart", 1, "Ada"), ("+1", 2, "Grace"), ("heart", 2, "Grace")], Some(2), false);
-        assert_eq!(g, [
-            ForgeReaction { name: "heart".into(), count: 2, mine: true, users: vec!["Ada".into(), "Grace".into()] },
-            ForgeReaction { name: "+1".into(), count: 1, mine: true, users: vec!["Grace".into()] },
-        ]);
-        let g = group_reactions([("eyes", 1, "a"), ("heart", 1, "a"), ("+1", 3, "c")], Some(9), true);
-        assert_eq!(g.iter().map(|r| (r.name.as_str(), r.mine)).collect::<Vec<_>>(), [("+1", false), ("heart", false), ("eyes", false)], "GitHub's order");
+        let g = group_reactions(
+            [
+                ("heart", 1, "Ada"),
+                ("+1", 2, "Grace"),
+                ("heart", 2, "Grace"),
+            ],
+            Some(2),
+            false,
+        );
+        assert_eq!(
+            g,
+            [
+                ForgeReaction {
+                    name: "heart".into(),
+                    count: 2,
+                    mine: true,
+                    users: vec!["Ada".into(), "Grace".into()]
+                },
+                ForgeReaction {
+                    name: "+1".into(),
+                    count: 1,
+                    mine: true,
+                    users: vec!["Grace".into()]
+                },
+            ]
+        );
+        let g = group_reactions(
+            [("eyes", 1, "a"), ("heart", 1, "a"), ("+1", 3, "c")],
+            Some(9),
+            true,
+        );
+        assert_eq!(
+            g.iter()
+                .map(|r| (r.name.as_str(), r.mine))
+                .collect::<Vec<_>>(),
+            [("+1", false), ("heart", false), ("eyes", false)],
+            "GitHub's order"
+        );
     }
 
     #[test]
@@ -1096,39 +1225,112 @@ mod tests {
     // --- review comments ---
     #[test]
     fn review_types_serialize_as_the_ui_reads_them() {
-        let l = ReviewLine { kind: LineKind::Context, old_line: 3, new_line: 4 };
-        assert_eq!(serde_json::to_value(l).unwrap(), json!({"kind": "context", "oldLine": 3, "newLine": 4}));
+        let l = ReviewLine {
+            kind: LineKind::Context,
+            old_line: 3,
+            new_line: 4,
+        };
+        assert_eq!(
+            serde_json::to_value(l).unwrap(),
+            json!({"kind": "context", "oldLine": 3, "newLine": 4})
+        );
         assert_eq!(serde_json::to_value(DiffSide::Old).unwrap(), "old");
-        let p: DiffPosition = serde_json::from_value(json!({"path": "a", "oldPath": null, "line": 1, "oldLine": null, "snippet": null})).unwrap();
-        assert_eq!((p.head_sha.clone(), p.outdated), (None, false), "a position from an older GitNex's cache still loads");
+        let p: DiffPosition = serde_json::from_value(
+            json!({"path": "a", "oldPath": null, "line": 1, "oldLine": null, "snippet": null}),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.head_sha.clone(), p.outdated),
+            (None, false),
+            "a position from an older GitNex's cache still loads"
+        );
         let v = serde_json::to_value(&p).unwrap();
-        assert!(v.get("headSha").is_none() && v.get("outdated").is_none(), "{v}");
-        let out = SubmitOutcome { published: 2, event_error: Some("refused".into()), body_posted: true, event_sent: false, fallback: false };
-        assert_eq!(serde_json::to_value(out).unwrap(), json!({"published": 2, "eventError": "refused", "bodyPosted": true, "eventSent": false, "fallback": false}));
+        assert!(
+            v.get("headSha").is_none() && v.get("outdated").is_none(),
+            "{v}"
+        );
+        let out = SubmitOutcome {
+            published: 2,
+            event_error: Some("refused".into()),
+            body_posted: true,
+            event_sent: false,
+            fallback: false,
+        };
+        assert_eq!(
+            serde_json::to_value(out).unwrap(),
+            json!({"published": 2, "eventError": "refused", "bodyPosted": true, "eventSent": false, "fallback": false})
+        );
     }
 
     #[test]
     fn a_line_is_on_its_own_side_and_a_position_names_only_its_sides() {
-        let (add, del, ctx) = (ReviewLine { kind: LineKind::Added, old_line: 3, new_line: 2 }, ReviewLine { kind: LineKind::Removed, old_line: 2, new_line: 2 }, ReviewLine { kind: LineKind::Context, old_line: 3, new_line: 4 });
-        assert_eq!((add.side(), add.number(), add.position_lines()), (DiffSide::New, 2, (None, Some(2))));
-        assert_eq!((del.side(), del.number(), del.position_lines()), (DiffSide::Old, 2, (Some(2), None)));
-        assert_eq!((ctx.side(), ctx.number(), ctx.position_lines()), (DiffSide::New, 4, (Some(3), Some(4))));
+        let (add, del, ctx) = (
+            ReviewLine {
+                kind: LineKind::Added,
+                old_line: 3,
+                new_line: 2,
+            },
+            ReviewLine {
+                kind: LineKind::Removed,
+                old_line: 2,
+                new_line: 2,
+            },
+            ReviewLine {
+                kind: LineKind::Context,
+                old_line: 3,
+                new_line: 4,
+            },
+        );
+        assert_eq!(
+            (add.side(), add.number(), add.position_lines()),
+            (DiffSide::New, 2, (None, Some(2)))
+        );
+        assert_eq!(
+            (del.side(), del.number(), del.position_lines()),
+            (DiffSide::Old, 2, (Some(2), None))
+        );
+        assert_eq!(
+            (ctx.side(), ctx.number(), ctx.position_lines()),
+            (DiffSide::New, 4, (Some(3), Some(4)))
+        );
     }
     // --- end review comments ---
 
     #[test]
     fn a_people_change_adds_after_the_kept_ones_once_each() {
-        let change = PeopleEdit { add: vec![9, 3, 9], remove: vec![2, 5] };
-        assert_eq!(change.apply(&[1, 2, 3]), [1, 3, 9], "3 was there; 9 once; 5 wasn't");
-        assert_eq!(PeopleEdit { add: vec![], remove: vec![1] }.apply(&[1]), Vec::<u64>::new());
+        let change = PeopleEdit {
+            add: vec![9, 3, 9],
+            remove: vec![2, 5],
+        };
+        assert_eq!(
+            change.apply(&[1, 2, 3]),
+            [1, 3, 9],
+            "3 was there; 9 once; 5 wasn't"
+        );
+        assert_eq!(
+            PeopleEdit {
+                add: vec![],
+                remove: vec![1]
+            }
+            .apply(&[1]),
+            Vec::<u64>::new()
+        );
         assert!(PeopleEdit::default().is_empty());
     }
 
     #[test]
     fn an_edit_without_people_reads_as_before() {
-        let e: MrEdit = serde_json::from_value(json!({"title": "t", "description": null, "labels": null})).unwrap();
+        let e: MrEdit =
+            serde_json::from_value(json!({"title": "t", "description": null, "labels": null}))
+                .unwrap();
         assert_eq!((e.reviewers, e.assignees), (None, None));
         let e: MrEdit = serde_json::from_value(json!({"title": null, "description": null, "labels": null, "reviewers": {"add": [7], "remove": []}})).unwrap();
-        assert_eq!(e.reviewers, Some(PeopleEdit { add: vec![7], remove: vec![] }));
+        assert_eq!(
+            e.reviewers,
+            Some(PeopleEdit {
+                add: vec![7],
+                remove: vec![]
+            })
+        );
     }
 }

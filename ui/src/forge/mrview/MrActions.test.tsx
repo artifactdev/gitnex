@@ -6,7 +6,7 @@ import type { ForgeMrDetail } from '../../api/gen/ForgeMrDetail';
 import type { ReviewDraft } from '../../api/gen/ReviewDraft';
 import type { ReviewSession } from '../mrStore';
 
-const api = vi.hoisted(() => ({ forgeApprove: vi.fn(async () => null), forgeReview: vi.fn(async () => ({ fallback: false })), forgeSetDraft: vi.fn(), forgePeopleLimits: vi.fn(() => new Promise(() => {})), forgeSearchUsers: vi.fn(async () => []), forgeEditMr: vi.fn(), forgeSetSubscribed: vi.fn(async (_r: number, _n: number, on: boolean) => on), forgeLabels: vi.fn(async () => [{ name: 'ui', color: '#1f75cb', description: null }]) }));
+const api = vi.hoisted(() => ({ forgeApprove: vi.fn(async () => null), forgeReview: vi.fn(async () => ({ fallback: false })), forgeSetDraft: vi.fn(), forgeSetClosed: vi.fn(), forgePeopleLimits: vi.fn(() => new Promise(() => {})), forgeSearchUsers: vi.fn(async () => []), forgeEditMr: vi.fn(), forgeSetSubscribed: vi.fn(async (_r: number, _n: number, on: boolean) => on), forgeLabels: vi.fn(async () => [{ name: 'ui', color: '#1f75cb', description: null }]) }));
 vi.mock('../../api/client', () => ({ api, errorMessage: (e: unknown) => String((e as { message?: string })?.message ?? e) }));
 const polling = vi.hoisted(() => ({ notifyForgeWrite: vi.fn() }));
 vi.mock('../usePolling', () => polling);
@@ -96,6 +96,29 @@ afterEach(() => {
 });
 
 describe("the MR/PR view's actions (spec #4 §4 \"4B\")", () => {
+  it('Bitbucket declines only after an in-place confirmation', async () => {
+    api.forgeSetClosed.mockResolvedValue(mrOf(12, { state: 'closed' }));
+    show(mr, detail, 'bitbucket');
+    press(screen.getByRole('button', { name: 'Decline pull request' }));
+    expect(api.forgeSetClosed).not.toHaveBeenCalled();
+    clock.settle();
+    press(overlay()!);
+    await waitFor(() => expect(api.forgeSetClosed).toHaveBeenCalledWith(4, 12, true));
+    expect(forgeOf('t').details[12].value.mr.state).toBe('closed');
+  });
+  it('Bitbucket reopens only after confirmation and preserves the state on refusal', async () => {
+    api.forgeSetClosed.mockRejectedValueOnce({ message: 'Not permitted' });
+    const closed = mrOf(12, { state: 'closed' });
+    patchForge('t', { details: { 12: { value: detailOf(closed), at: 1 } } });
+    show(closed, detailOf(closed), 'bitbucket');
+    press(screen.getByRole('button', { name: 'Reopen pull request' }));
+    expect(api.forgeSetClosed).not.toHaveBeenCalled();
+    clock.settle();
+    press(overlay()!);
+    await waitFor(() => expect(api.forgeSetClosed).toHaveBeenCalledWith(4, 12, false));
+    expect(forgeOf('t').details[12].value.mr.state).toBe('closed');
+    expect(useToast.getState().message).toContain("Couldn't reopen #12: Not permitted");
+  });
   it('Approve arms in place first, then approves on the second click, says so, and has the poller reload', async () => {
     show();
     press(screen.getByRole('button', { name: 'Approve' }));

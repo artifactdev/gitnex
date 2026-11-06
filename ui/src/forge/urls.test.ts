@@ -1,10 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { branchUrl, commitUrl, effectiveKind, fileUrl, issueUrl, mergeRequestUrl, projectRemote, type ProjectRemote } from './urls';
+import { branchUrl, commitUrl, effectiveKind, fileUrl, issueUrl, mergeRequestUrl, projectRemote, repoUrl, type ProjectRemote } from './urls';
 
 const gitlab: ProjectRemote = { host: 'gitlab.example.com', path: 'group/project', hostKind: 'gitlab' };
 const github: ProjectRemote = { host: 'github.example.com', path: 'owner/repo', hostKind: 'github' };
 const forgejo: ProjectRemote = { host: 'forgejo.example.org', path: 'owner/repo', hostKind: 'forgejo' };
 const generic: ProjectRemote = { host: 'code.example.com', path: 'a/b', hostKind: 'generic' };
+const bitbucket: ProjectRemote = { host: 'bitbucket.example.com:8443', path: 'ORBIT/widget', hostKind: 'bitbucket', baseUrl: 'https://bitbucket.example.com:8443/bitbucket' };
+
+describe('Bitbucket Data Center links', () => {
+  const base = 'https://bitbucket.example.com:8443/bitbucket/projects/ORBIT/repos/widget';
+  it('uses native repository, branch, commit and PR routes, never issue routes', () => {
+    expect(repoUrl(bitbucket)).toBe(base);
+    expect(branchUrl(bitbucket, 'feat/x#1')).toBe(`${base}/browse?at=refs%2Fheads%2Ffeat%2Fx%231`);
+    expect(commitUrl(bitbucket, 'abc1234')).toBe(`${base}/commits/abc1234`);
+    expect(mergeRequestUrl(bitbucket, null, 7)).toBe(`${base}/pull-requests/7`);
+    expect(issueUrl(bitbucket, null, 7)).toBeNull();
+    expect(mergeRequestUrl(bitbucket, '~nova/widget', 8)).toBe('https://bitbucket.example.com:8443/bitbucket/users/nova/repos/widget/pull-requests/8');
+  });
+  it('encodes file paths and refs separately, using native line anchors', () => {
+    expect(fileUrl(bitbucket, 'feat/x#1', 'a dir/file.md', { a: 3, b: 8 }))
+      .toBe(`${base}/browse/a%20dir/file.md?at=feat%2Fx%231#3-8`);
+  });
+  it('normalizes HTTPS clone paths without affecting other providers', () => {
+    const r = projectRemote([{ name: 'origin', host: bitbucket.host, path: 'bitbucket/scm/ORBIT/widget', hostKind: 'bitbucket' }]);
+    expect(r).toEqual(bitbucket);
+    expect(projectRemote([{ name: 'origin', host: 'gitlab.example.com', path: 'scm/group/widget', hostKind: 'gitlab' }])?.path).toBe('scm/group/widget');
+  });
+  it('uses configured context paths for SSH repository identities', () => {
+    const r = projectRemote([{ name: 'origin', host: bitbucket.host, path: bitbucket.path, hostKind: 'bitbucket' }], {}, { [bitbucket.host]: bitbucket.baseUrl! });
+    expect(r).toEqual(bitbucket);
+    expect(repoUrl(r!)).toBe(base);
+    const unknownHost = [{ name: 'origin', host: bitbucket.host, path: bitbucket.path, hostKind: 'generic' as const }];
+    expect(projectRemote(unknownHost, {}, { [bitbucket.host]: bitbucket.baseUrl! })?.hostKind).toBe('bitbucket');
+    expect(projectRemote(unknownHost, { [bitbucket.host]: 'generic' }, { [bitbucket.host]: bitbucket.baseUrl! })?.hostKind).toBe('generic');
+  });
+});
 
 describe('projectRemote', () => {
   it('picks the first remote with a host and path (origin comes first)', () => {

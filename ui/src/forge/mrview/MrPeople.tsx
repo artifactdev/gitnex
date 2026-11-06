@@ -46,7 +46,7 @@ export function MrPeople({ tabId, kind, mr, detail, editLabels, layout = 'cards'
       },
       // GitHub (and Forgejo) keeps a submitted review: only a request still open can be withdrawn
       // (pending, or a Forgejo reviewer who only commented).
-      canRemove: role === 'reviewers' && kind !== 'gitlab'
+      canRemove: role === 'reviewers' && (kind === 'github' || kind === 'forgejo')
         ? (key) => !detail.mr.review.reviews.some((r) => String(r.user.id) === key && r.state !== 'pending' && !r.requested)
         : undefined,
       max,
@@ -61,5 +61,5 @@ export function MrPeople({ tabId, kind, mr, detail, editLabels, layout = 'cards'
       pencil: editLabels && { tip: 'Edit labels', run: editLabels },
     },
   ];
-  return <PeopleCard label="Reviewers, assignees and labels" rows={rows} layout={layout} disabled={disabled} />;
+  return <PeopleCard label={kind === 'bitbucket' ? 'Reviewers' : 'Reviewers, assignees and labels'} rows={kind === 'bitbucket' ? rows.slice(0, 1) : rows} layout={layout} disabled={disabled} />;
 }

@@ -149,5 +149,7 @@ describe("a sidebar MR/PR row's menu", () => {
     expect(writes.toggleMrDraft).toHaveBeenCalledWith('t', 'gitlab', mrOf(12));
     expect(find(menu(mrOf(5, { state: 'draft' })), 'mr.draft').label).toBe('Mark as ready');
     expect(find(menu(mrOf(6, { state: 'merged' })), 'mr.draft')).toBeUndefined();
+    tab('bitbucket', [], 'grace');
+    expect(find(menu(mrOf(12), envOf(), 'bitbucket'), 'mr.draft')).toBeUndefined();
   });
 });

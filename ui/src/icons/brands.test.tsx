@@ -47,6 +47,11 @@ describe("RemoteIcon: a user's fork shows its owner's picture", () => {
 });
 
 describe("Forgejo's mark", () => {
+  it('uses an original Bitbucket mark instead of falling back to GitHub', () => {
+    render(<><ForgeMark kind="bitbucket" /><RemoteIcon kind="bitbucket" host="bitbucket.example.com" remote="origin" /></>);
+    expect(screen.getByRole('img', { name: 'Bitbucket' })).toHaveAttribute('data-host-kind', 'bitbucket');
+    expect(screen.getByLabelText('remote origin')).toHaveAttribute('data-host-kind', 'bitbucket');
+  });
   it('is the remote icon for a Forgejo host, and ForgeMark draws it by kind', () => {
     const { unmount } = render(<RemoteIcon kind="forgejo" host="forgejo.example.org" remote="origin" size={12} />);
     expect(screen.getByLabelText('remote origin').getAttribute('data-host-kind')).toBe('forgejo');

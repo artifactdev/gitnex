@@ -24,7 +24,7 @@ use crate::gravatar::USER_AGENT;
 use crate::time::{retry_after_secs, unix_now};
 use gitnex_core::error::{ErrorDetail, GbError, GbErrorKind};
 use gitnex_core::forge::RateLimitState;
-use gitnex_core::redact::{redact, Secret};
+use gitnex_core::redact::{Secret, redact};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -103,13 +103,17 @@ pub struct HttpResponse {
     pub last_page: Option<String>,
     /// GitHub classic tokens' `X-OAuth-Scopes`.
     pub oauth_scopes: Option<String>,
+    /// Bitbucket's authenticated principal headers, absent for anonymous requests.
+    pub authenticated_username: Option<String>,
+    pub authenticated_user_id: Option<String>,
     /// The answer came with an ETag (its next GET is conditional).
     pub etag: bool,
 }
 
 impl HttpResponse {
     pub fn json<T: serde::de::DeserializeOwned>(&self, host: &str) -> Result<T, GbError> {
-        serde_json::from_slice(&self.body).map_err(|e| GbError::other(format!("{host} sent something GitNex couldn't read: {e}")))
+        serde_json::from_slice(&self.body)
+            .map_err(|e| GbError::other(format!("{host} sent something GitNex couldn't read: {e}")))
     }
 }
 
@@ -126,7 +130,12 @@ pub struct RateHeaders {
 
 /// `get` reads one lowercase header name.
 pub fn rate_headers(get: impl Fn(&str) -> Option<String>, now: i64) -> RateHeaders {
-    let num = |names: [&str; 2]| names.iter().find_map(|n| get(n)).and_then(|v| v.trim().parse::<i64>().ok());
+    let num = |names: [&str; 2]| {
+        names
+            .iter()
+            .find_map(|n| get(n))
+            .and_then(|v| v.trim().parse::<i64>().ok())
+    };
     RateHeaders {
         remaining: num(["x-ratelimit-remaining", "ratelimit-remaining"]).map(|n| n.max(0) as u32),
         reset_at: num(["x-ratelimit-reset", "ratelimit-reset"]),
@@ -139,23 +148,38 @@ pub fn rate_headers(get: impl Fn(&str) -> Option<String>, now: i64) -> RateHeade
 /// A 2xx that spent the last of the budget: nothing more until its reset (GitHub answers the next
 /// one 403, GitLab 429). `None` when some is left or the reset is past.
 pub fn spent_until(h: &RateHeaders, now: i64) -> Option<i64> {
-    (h.remaining == Some(0)).then_some(h.reset_at?).filter(|r| *r > now).map(|r| r.min(now.saturating_add(MAX_LIMIT_WAIT_SECS)))
+    (h.remaining == Some(0))
+        .then_some(h.reset_at?)
+        .filter(|r| *r > now)
+        .map(|r| r.min(now.saturating_add(MAX_LIMIT_WAIT_SECS)))
 }
 
 /// Until when a response means "rate limited": a 429 always; a 403 only with the limit spent
 /// (GitHub's primary limit) or a `Retry-After` (its secondary limits).
 pub fn limited_until(status: u16, h: &RateHeaders, now: i64) -> Option<i64> {
-    let limited = status == 429 || (status == 403 && (h.remaining == Some(0) || h.retry_after_secs.is_some()));
+    let limited = status == 429
+        || (status == 403 && (h.remaining == Some(0) || h.retry_after_secs.is_some()));
     if !limited {
         return None;
     }
-    let wait = h.retry_after_secs.map(|s| s.clamp(1, MAX_LIMIT_WAIT_SECS)).or(h.reset_at.filter(|r| *r > now).map(|r| r.saturating_sub(now).min(MAX_LIMIT_WAIT_SECS))).unwrap_or(DEFAULT_LIMIT_WAIT_SECS);
+    let wait = h
+        .retry_after_secs
+        .map(|s| s.clamp(1, MAX_LIMIT_WAIT_SECS))
+        .or(h
+            .reset_at
+            .filter(|r| *r > now)
+            .map(|r| r.saturating_sub(now).min(MAX_LIMIT_WAIT_SECS)))
+        .unwrap_or(DEFAULT_LIMIT_WAIT_SECS);
     Some(now.saturating_add(wait))
 }
 
 pub fn rate_limited_error(host: &str, until: i64, now: i64) -> GbError {
     let mins = (until.saturating_sub(now).clamp(1, MAX_LIMIT_WAIT_SECS) + 59) / 60;
-    GbError::new(GbErrorKind::RateLimited, format!("{host} rate limit reached: try again in {mins} min")).with_detail(ErrorDetail::RateLimited { until })
+    GbError::new(
+        GbErrorKind::RateLimited,
+        format!("{host} rate limit reached: try again in {mins} min"),
+    )
+    .with_detail(ErrorDetail::RateLimited { until })
 }
 
 pub fn parse_next_link(link: &str) -> Option<String> {
@@ -168,7 +192,12 @@ pub fn parse_link(link: &str, rel: &str) -> Option<String> {
     link.split(',').find_map(|part| {
         let (url, params) = part.split_once(';')?;
         let found = params.split(';').any(|p| p.trim().replace(' ', "") == want);
-        found.then(|| url.trim().trim_start_matches('<').trim_end_matches('>').to_string())
+        found.then(|| {
+            url.trim()
+                .trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_string()
+        })
     })
 }
 
@@ -176,7 +205,9 @@ pub fn parse_link(link: &str, rel: &str) -> Option<String> {
 pub fn encode_component(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
             _ => format!("%{b:02X}"),
         })
         .collect()
@@ -200,45 +231,104 @@ pub fn same_origin(a: &str, b: &str) -> bool {
 /// isn't under `<x>/github`.
 pub fn under(url: &str, base: &str) -> bool {
     let base = base.trim_end_matches('/');
-    same_origin(url, base) && (url == base || url.starts_with(&format!("{base}/")) || url.starts_with(&format!("{base}?")))
+    same_origin(url, base)
+        && (url == base
+            || url.starts_with(&format!("{base}/"))
+            || url.starts_with(&format!("{base}?")))
 }
 
 /// The forge's own words from an error body (`error_description`, `message`, `error`),
 /// redacted and cut to 200 characters.
 pub fn body_message(body: &[u8]) -> Option<String> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let said = ["error_description", "message", "error"].iter().find_map(|k| match &v[*k] {
-        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        // --- 4C T1: GitLab's validation messages come as a list of strings ---
-        serde_json::Value::Array(a) if a.iter().all(|x| x.is_string()) => {
-            let parts: Vec<&str> = a.iter().filter_map(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).collect();
-            if parts.is_empty() { None } else { Some(parts.join("; ")) }
-        }
-        // --- end 4C T1 ---
-        serde_json::Value::Null => None,
-        other if !other.is_string() => Some(other.to_string()),
-        _ => None,
-    })?;
+    let said = ["error_description", "message", "error"]
+        .iter()
+        .find_map(|k| match &v[*k] {
+            serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            // --- 4C T1: GitLab's validation messages come as a list of strings ---
+            serde_json::Value::Array(a) if a.iter().all(|x| x.is_string()) => {
+                let parts: Vec<&str> = a
+                    .iter()
+                    .filter_map(|x| x.as_str())
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("; "))
+                }
+            }
+            // --- end 4C T1 ---
+            serde_json::Value::Null => None,
+            other if !other.is_string() => Some(other.to_string()),
+            _ => None,
+        });
     // --- 4C T1: GitHub's "Validation Failed" says what failed in `errors[].message`, or in
     // `errors[]` itself as plain strings ("User can only have one pending review per pull request") ---
-    let detail: Vec<&str> = v["errors"].as_array().map(|a| a.iter().filter_map(|e| e.as_str().or_else(|| e["message"].as_str())).map(str::trim).filter(|m| !m.is_empty()).collect()).unwrap_or_default();
-    let said = if detail.is_empty() { said } else { format!("{said}: {}", detail.join("; ")) };
+    let detail: Vec<&str> = v["errors"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str().or_else(|| e["message"].as_str()))
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let said = match (said, detail.is_empty()) {
+        (Some(said), true) => said,
+        (Some(said), false) => format!("{said}: {}", detail.join("; ")),
+        (None, false) => detail.join("; "),
+        (None, true) => return None,
+    };
     // --- end 4C T1 ---
     Some(redact(&said).chars().take(200).collect())
 }
 
+fn redact_token_from_json(value: &mut serde_json::Value, token: &str) {
+    match value {
+        serde_json::Value::String(s) => *s = s.replace(token, "[redacted]"),
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| redact_token_from_json(item, token)),
+        serde_json::Value::Object(items) => items
+            .values_mut()
+            .for_each(|item| redact_token_from_json(item, token)),
+        _ => {}
+    }
+}
+
 /// A 403 (the token works but isn't allowed this), as opposed to a 401 (the token is rejected).
 /// Core's, so the hub tells them apart too.
-pub use gitnex_core::forge::{is_forbidden, FORBIDDEN_MARK as REFUSED};
+pub use gitnex_core::forge::{FORBIDDEN_MARK as REFUSED, is_forbidden};
 
 pub fn status_error(host: &str, status: u16, body: &[u8]) -> GbError {
     let said = body_message(body);
     match status {
-        401 => GbError::new(GbErrorKind::AuthFailed, format!("{host} rejected the token: replace it in Settings › Accounts.")),
-        403 => GbError::new(GbErrorKind::AuthFailed, format!("{host}{REFUSED}{}", said.unwrap_or_else(|| "the token isn't allowed to do this".into()))),
+        401 => GbError::new(
+            GbErrorKind::AuthFailed,
+            format!("{host} rejected the token: replace it in Settings › Accounts."),
+        ),
+        403 => GbError::new(
+            GbErrorKind::AuthFailed,
+            format!(
+                "{host}{REFUSED}{}",
+                said.unwrap_or_else(|| "the token isn't allowed to do this".into())
+            ),
+        ),
         404 => GbError::new(GbErrorKind::NotFound, format!("Not found on {host}")),
-        409 | 422 => GbError::new(GbErrorKind::InvalidInput, format!("{host}: {}", said.unwrap_or_else(|| format!("HTTP {status}")))),
-        _ => GbError::other(format!("{host} answered HTTP {status}{}", said.map(|m| format!(": {m}")).unwrap_or_default())),
+        409 | 422 => GbError::new(
+            GbErrorKind::InvalidInput,
+            format!(
+                "{host}: {}",
+                said.unwrap_or_else(|| format!("HTTP {status}"))
+            ),
+        ),
+        _ => GbError::other(format!(
+            "{host} answered HTTP {status}{}",
+            said.map(|m| format!(": {m}")).unwrap_or_default()
+        )),
     }
 }
 
@@ -250,6 +340,8 @@ struct Cached {
     next_page: Option<String>,
     last_page: Option<String>,
     oauth_scopes: Option<String>,
+    authenticated_username: Option<String>,
+    authenticated_user_id: Option<String>,
     /// When the forge last answered it (a 200 or a 304), in ms since the client's `epoch`, and
     /// the write generation then: fresh while both are recent (`FRESH_SECS`, no write since).
     validated_ms: std::sync::atomic::AtomicU64,
@@ -274,7 +366,9 @@ impl EtagCache {
         self.map.insert(url.clone(), Arc::new(c));
         self.order.push_back(url);
         while self.order.len() > ETAG_ENTRIES || self.bytes > ETAG_BYTES {
-            let Some(old) = self.order.pop_front() else { break };
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
             if let Some(c) = self.map.remove(&old) {
                 self.bytes -= c.body.len();
             }
@@ -320,7 +414,10 @@ struct Inner {
 /// What `get_image_within` found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageFetch {
-    Found { content_type: String, bytes: Vec<u8> },
+    Found {
+        content_type: String,
+        bytes: Vec<u8>,
+    },
     /// 404/410: the status.
     Missing(u16),
     /// 401/403: the status.
@@ -374,29 +471,46 @@ impl HttpClient {
     #[cfg(test)]
     fn with_link_rewrite(self, f: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
         let inner = Arc::try_unwrap(self.inner).ok().expect("a fresh client");
-        Self { inner: Arc::new(Inner { link_rewrite: Some(Arc::new(f)), ..inner }) }
+        Self {
+            inner: Arc::new(Inner {
+                link_rewrite: Some(Arc::new(f)),
+                ..inner
+            }),
+        }
     }
 
     /// `FRESH_SECS` replaced (zero: every GET asks the forge).
     pub fn with_fresh_window(self, fresh: Duration) -> Self {
         let inner = Arc::try_unwrap(self.inner).ok().expect("a fresh client");
-        Self { inner: Arc::new(Inner { fresh, ..inner }) }
+        Self {
+            inner: Arc::new(Inner { fresh, ..inner }),
+        }
     }
 
     /// Fresh answers also end when `changes` grows (the harness: its fake forge was reseeded).
     pub fn with_change_counter(self, changes: ChangeCounter) -> Self {
         let inner = Arc::try_unwrap(self.inner).ok().expect("a fresh client");
-        Self { inner: Arc::new(Inner { changes: Some(changes), ..inner }) }
+        Self {
+            inner: Arc::new(Inner {
+                changes: Some(changes),
+                ..inner
+            }),
+        }
     }
 
     fn generation(&self) -> u64 {
-        self.inner.generation.load(std::sync::atomic::Ordering::SeqCst).wrapping_add(self.inner.changes.as_ref().map_or(0, |c| c()))
+        self.inner
+            .generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .wrapping_add(self.inner.changes.as_ref().map_or(0, |c| c()))
     }
 
     /// Nothing cached is fresh any more: the next GET of each asks the forge (a write, or a
     /// test that changed the fake forge).
     pub fn expire_fresh(&self) {
-        self.inner.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// A moment, to ask later whether it's still fresh (`still_fresh`): for answers kept outside
@@ -407,7 +521,9 @@ impl HttpClient {
 
     /// Less than `FRESH_SECS` since `mark`, and no write (or outside change) since.
     pub fn still_fresh(&self, mark: (u64, u64)) -> bool {
-        !self.inner.fresh.is_zero() && mark.0 == self.generation() && self.now_ms().saturating_sub(mark.1) < self.inner.fresh.as_millis() as u64
+        !self.inner.fresh.is_zero()
+            && mark.0 == self.generation()
+            && self.now_ms().saturating_sub(mark.1) < self.inner.fresh.as_millis() as u64
     }
 
     fn now_ms(&self) -> u64 {
@@ -422,7 +538,10 @@ impl HttpClient {
 
     fn is_fresh(&self, c: &Cached) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
-        !self.inner.fresh.is_zero() && c.generation.load(SeqCst) == self.generation() && self.now_ms().saturating_sub(c.validated_ms.load(SeqCst)) < self.inner.fresh.as_millis() as u64
+        !self.inner.fresh.is_zero()
+            && c.generation.load(SeqCst) == self.generation()
+            && self.now_ms().saturating_sub(c.validated_ms.load(SeqCst))
+                < self.inner.fresh.as_millis() as u64
     }
 
     pub fn host(&self) -> &str {
@@ -432,7 +551,11 @@ impl HttpClient {
     /// What this client did since the last call: requests sent, 304s, GETs answered from memory.
     pub fn take_stats(&self) -> gitnex_core::forge::RequestStats {
         use std::sync::atomic::Ordering::SeqCst;
-        gitnex_core::forge::RequestStats { sent: self.inner.sent.swap(0, SeqCst), not_modified: self.inner.not_modified.swap(0, SeqCst), fresh: self.inner.fresh_hits.swap(0, SeqCst) }
+        gitnex_core::forge::RequestStats {
+            sent: self.inner.sent.swap(0, SeqCst),
+            not_modified: self.inner.not_modified.swap(0, SeqCst),
+            fresh: self.inner.fresh_hits.swap(0, SeqCst),
+        }
     }
 
     /// The kept answers whose cache key `wanted` takes (the cross-session cache's), JSON only.
@@ -444,7 +567,14 @@ impl HttpClient {
             .filter(|k| wanted(k))
             .filter_map(|k| {
                 let c = etags.map.get(k)?;
-                Some(gitnex_core::forge::StoredResponse { key: k.clone(), etag: c.etag.clone(), body: String::from_utf8(c.body.to_vec()).ok()?, next_page: c.next_page.clone(), last_page: c.last_page.clone(), poll_interval_secs: c.poll_interval_secs })
+                Some(gitnex_core::forge::StoredResponse {
+                    key: k.clone(),
+                    etag: c.etag.clone(),
+                    body: String::from_utf8(c.body.to_vec()).ok()?,
+                    next_page: c.next_page.clone(),
+                    last_page: c.last_page.clone(),
+                    poll_interval_secs: c.poll_interval_secs,
+                })
             })
             .collect()
     }
@@ -455,10 +585,24 @@ impl HttpClient {
         let mut etags = self.inner.etags.lock().expect("etags poisoned");
         for e in entries {
             let url = e.key.split('\n').next().unwrap_or_default();
-            if !under(url, &self.inner.cfg.api_base) || e.body.len() > MAX_CACHED_BODY || etags.map.contains_key(&e.key) {
+            if !under(url, &self.inner.cfg.api_base)
+                || e.body.len() > MAX_CACHED_BODY
+                || etags.map.contains_key(&e.key)
+            {
                 continue;
             }
-            let c = Cached { etag: e.etag, body: Arc::new(e.body.into_bytes()), poll_interval_secs: e.poll_interval_secs, next_page: e.next_page.filter(|n| under(n, &self.inner.cfg.api_base)), last_page: e.last_page.filter(|n| under(n, &self.inner.cfg.api_base)), oauth_scopes: None, validated_ms: Default::default(), generation: std::sync::atomic::AtomicU64::new(u64::MAX) };
+            let c = Cached {
+                etag: e.etag,
+                body: Arc::new(e.body.into_bytes()),
+                poll_interval_secs: e.poll_interval_secs,
+                next_page: e.next_page.filter(|n| under(n, &self.inner.cfg.api_base)),
+                last_page: e.last_page.filter(|n| under(n, &self.inner.cfg.api_base)),
+                oauth_scopes: None,
+                authenticated_username: None,
+                authenticated_user_id: None,
+                validated_ms: Default::default(),
+                generation: std::sync::atomic::AtomicU64::new(u64::MAX),
+            };
             etags.put(e.key, c);
         }
     }
@@ -466,7 +610,11 @@ impl HttpClient {
     /// `path` (starting with `/`) under the API base, or a full URL (a next page). Anything else
     /// comes back unchanged, and `send` refuses it: a request never leaves the API base.
     pub fn url(&self, path: &str) -> String {
-        if path.starts_with('/') && !path.starts_with("//") { format!("{}{path}", self.inner.cfg.api_base) } else { path.to_string() }
+        if path.starts_with('/') && !path.starts_with("//") {
+            format!("{}{path}", self.inner.cfg.api_base)
+        } else {
+            path.to_string()
+        }
     }
 
     pub fn rate_limit(&self) -> RateLimitState {
@@ -478,9 +626,39 @@ impl HttpClient {
         self.request(Method::Get, path, None, None).await
     }
 
+    /// Ask without an ETag, cached response or redirect when authentication headers matter.
+    pub async fn get_uncached(&self, path: &str) -> Result<HttpResponse, GbError> {
+        let url = self.url(path);
+        if !under(&url, &self.inner.cfg.api_base) {
+            return Err(GbError::other(format!(
+                "GitNex refused to send {}'s token to an address outside its API",
+                self.host()
+            )));
+        }
+        let raw = self
+            .once(Method::Get, &url, None, None, true, MAX_BODY, None)
+            .await?;
+        if is_redirect(raw.status) {
+            return Err(GbError::other(format!(
+                "{} redirected the authentication request; GitNex didn't follow it",
+                self.host()
+            )));
+        }
+        self.inner
+            .sent
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.finish(Method::Get, url, raw, None)
+    }
+
     /// A write: never cached, never conditional.
-    pub async fn send_json(&self, method: Method, path: &str, body: &serde_json::Value) -> Result<HttpResponse, GbError> {
-        self.request(method, path, Some(body.to_string().into_bytes()), None).await
+    pub async fn send_json(
+        &self,
+        method: Method,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<HttpResponse, GbError> {
+        self.request(method, path, Some(body.to_string().into_bytes()), None)
+            .await
     }
 
     /// A DELETE without a body (answered 204 by both forges).
@@ -489,7 +667,11 @@ impl HttpClient {
     }
 
     /// Every page of a list, following `Link: rel="next"` on the API's own origin, at most `max_pages`.
-    pub async fn get_pages(&self, path: &str, max_pages: usize) -> Result<Vec<serde_json::Value>, GbError> {
+    pub async fn get_pages(
+        &self,
+        path: &str,
+        max_pages: usize,
+    ) -> Result<Vec<serde_json::Value>, GbError> {
         self.pages(path, max_pages, None).await
     }
 
@@ -500,11 +682,21 @@ impl HttpClient {
     }
 
     /// `get_pages` with `get_as`'s `Accept`.
-    pub async fn get_pages_as(&self, path: &str, max_pages: usize, accept: &'static str) -> Result<Vec<serde_json::Value>, GbError> {
+    pub async fn get_pages_as(
+        &self,
+        path: &str,
+        max_pages: usize,
+        accept: &'static str,
+    ) -> Result<Vec<serde_json::Value>, GbError> {
         self.pages(path, max_pages, Some(accept)).await
     }
 
-    async fn pages(&self, path: &str, max_pages: usize, accept: Option<&'static str>) -> Result<Vec<serde_json::Value>, GbError> {
+    async fn pages(
+        &self,
+        path: &str,
+        max_pages: usize,
+        accept: Option<&'static str>,
+    ) -> Result<Vec<serde_json::Value>, GbError> {
         let mut out = Vec::new();
         let mut next = Some(path.to_string());
         for _ in 0..max_pages {
@@ -521,20 +713,37 @@ impl HttpClient {
     /// API base; one redirect, followed only when `allowed` accepts its target (never https →
     /// http), else `Elsewhere(<host>)` without asking it; 401/403 are `Forbidden` (a signature
     /// that ran out), 404/410 `Missing`.
-    pub async fn get_image_within(&self, url: &str, own_origin: &str, allowed: &(dyn Fn(&str) -> bool + Sync)) -> Result<ImageFetch, GbError> {
-        self.get_media_within(url, own_origin, allowed, MAX_IMAGE).await
+    pub async fn get_image_within(
+        &self,
+        url: &str,
+        own_origin: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+    ) -> Result<ImageFetch, GbError> {
+        self.get_media_within(url, own_origin, allowed, MAX_IMAGE)
+            .await
     }
 
     /// `get_image_within` with its own size cap (a video's): a larger answer is `TooLarge`.
-    pub async fn get_media_within(&self, url: &str, own_origin: &str, allowed: &(dyn Fn(&str) -> bool + Sync), limit: u64) -> Result<ImageFetch, GbError> {
+    pub async fn get_media_within(
+        &self,
+        url: &str,
+        own_origin: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+        limit: u64,
+    ) -> Result<ImageFetch, GbError> {
         let api = self.inner.cfg.api_base.clone();
         let mut target = url.to_string();
         let mut may_auth = true;
         for hop in 0..2 {
             let auth = may_auth && (under(&target, own_origin) || under(&target, &api));
             may_auth = auth;
-            let raw = match self.once(Method::Get, &target, None, None, auth, limit, None).await {
-                Err(e) if e.message == too_large(self.host(), limit).message => return Ok(ImageFetch::TooLarge),
+            let raw = match self
+                .once(Method::Get, &target, None, None, auth, limit, None)
+                .await
+            {
+                Err(e) if e.message == too_large(self.host(), limit).message => {
+                    return Ok(ImageFetch::TooLarge);
+                }
                 r => r?,
             };
             if auth && under(&target, &api) {
@@ -547,61 +756,99 @@ impl HttpClient {
                 }
                 // --- 5A T3: https → http is "ask" too, never an error ---
                 if !image_redirect_followed(&target, &next, allowed) {
-                    return Ok(ImageFetch::Elsewhere(origin(&next).map(|(_, a)| a).unwrap_or_default()));
+                    return Ok(ImageFetch::Elsewhere(
+                        origin(&next).map(|(_, a)| a).unwrap_or_default(),
+                    ));
                 }
                 // --- end 5A T3 ---
                 target = next;
                 continue;
             }
             return match raw.status {
-                200 => Ok(ImageFetch::Found { content_type: raw.headers.get("content-type").cloned().unwrap_or_default(), bytes: raw.body }),
+                200 => Ok(ImageFetch::Found {
+                    content_type: raw.headers.get("content-type").cloned().unwrap_or_default(),
+                    bytes: raw.body,
+                }),
                 s @ (404 | 410) => Ok(ImageFetch::Missing(s)),
                 s @ (401 | 403) => Ok(ImageFetch::Forbidden(s)),
                 s => Err(status_error(self.host(), s, &raw.body)),
             };
         }
-        Err(GbError::other(format!("{} redirected an image too many times", self.host())))
+        Err(GbError::other(format!(
+            "{} redirected an image too many times",
+            self.host()
+        )))
     }
     // --- end 5A T2 ---
 
     /// An image (`Ok(None)` for a 404), with the token only when `url` is under `own_origin` (a
     /// forge's web base) or the API base. Not ETag-cached: the avatar disk cache keeps what it needs.
     /// One redirect is followed, never from https to http; the token only goes where it's scoped.
-    pub async fn get_image(&self, url: &str, own_origin: &str) -> Result<Option<(String, Vec<u8>)>, GbError> {
+    pub async fn get_image(
+        &self,
+        url: &str,
+        own_origin: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, GbError> {
         let api = self.inner.cfg.api_base.clone();
         let mut target = url.to_string();
         let mut may_auth = true;
         for hop in 0..2 {
             let auth = may_auth && (under(&target, own_origin) || under(&target, &api));
             may_auth = auth;
-            let raw = self.once(Method::Get, &target, None, None, auth, MAX_IMAGE, None).await?;
+            let raw = self
+                .once(Method::Get, &target, None, None, auth, MAX_IMAGE, None)
+                .await?;
             if auth && under(&target, &api) {
                 self.observe(&raw)?;
             }
             if is_redirect(raw.status) && hop == 0 {
                 let next = self.redirect_target(&target, &raw)?;
                 if target.starts_with("https://") && !next.starts_with("https://") {
-                    return Err(GbError::other(format!("{} redirected an image to plain http; GitNex didn't follow it", self.host())));
+                    return Err(GbError::other(format!(
+                        "{} redirected an image to plain http; GitNex didn't follow it",
+                        self.host()
+                    )));
                 }
                 target = next;
                 continue;
             }
             return match raw.status {
-                200 => Ok(Some((raw.headers.get("content-type").cloned().unwrap_or_default(), raw.body))),
+                200 => Ok(Some((
+                    raw.headers.get("content-type").cloned().unwrap_or_default(),
+                    raw.body,
+                ))),
                 404 => Ok(None),
                 s => Err(status_error(self.host(), s, &raw.body)),
             };
         }
-        Err(GbError::other(format!("{} redirected an image too many times", self.host())))
+        Err(GbError::other(format!(
+            "{} redirected an image too many times",
+            self.host()
+        )))
     }
 
     /// A small file (an update's `SHA256SUMS`), never with the token: `url` and every redirect
     /// must pass `allowed`, never from https to http; at most `limit` bytes.
-    pub async fn fetch_within(&self, url: &str, allowed: &(dyn Fn(&str) -> bool + Sync), limit: u64) -> Result<Vec<u8>, GbError> {
+    pub async fn fetch_within(
+        &self,
+        url: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+        limit: u64,
+    ) -> Result<Vec<u8>, GbError> {
         let mut target = url.to_string();
         for _ in 0..=DOWNLOAD_HOPS {
             self.check_download_target(url, &target, allowed)?;
-            let raw = self.once(Method::Get, &target, None, None, false, limit, Some("application/octet-stream")).await?;
+            let raw = self
+                .once(
+                    Method::Get,
+                    &target,
+                    None,
+                    None,
+                    false,
+                    limit,
+                    Some("application/octet-stream"),
+                )
+                .await?;
             if is_redirect(raw.status) {
                 target = self.redirect_target(&target, &raw)?;
                 continue;
@@ -611,13 +858,22 @@ impl HttpClient {
                 s => Err(status_error(self.host(), s, &raw.body)),
             };
         }
-        Err(GbError::other(format!("{} redirected the download too many times", self.host())))
+        Err(GbError::other(format!(
+            "{} redirected the download too many times",
+            self.host()
+        )))
     }
 
     /// Streams `url` into `to.dest`, never with the token, following up to `DOWNLOAD_HOPS`
     /// redirects that `allowed` takes (never https → http). `to.progress` hears the bytes so far;
     /// once `to.cancel` is set it stops (`Cancelled`). On any failure `to.dest` is removed.
-    pub async fn download_within(&self, url: &str, allowed: &(dyn Fn(&str) -> bool + Sync), limit: u64, to: DownloadTo<'_>) -> Result<u64, GbError> {
+    pub async fn download_within(
+        &self,
+        url: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+        limit: u64,
+        to: DownloadTo<'_>,
+    ) -> Result<u64, GbError> {
         let result = self.download_hops(url, allowed, limit, &to).await;
         if result.is_err() {
             let _ = std::fs::remove_file(to.dest);
@@ -625,17 +881,32 @@ impl HttpClient {
         result
     }
 
-    async fn download_hops(&self, url: &str, allowed: &(dyn Fn(&str) -> bool + Sync), limit: u64, to: &DownloadTo<'_>) -> Result<u64, GbError> {
+    async fn download_hops(
+        &self,
+        url: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+        limit: u64,
+        to: &DownloadTo<'_>,
+    ) -> Result<u64, GbError> {
         use std::sync::atomic::Ordering;
         let mut target = url.to_string();
         for _ in 0..=DOWNLOAD_HOPS {
             self.check_download_target(url, &target, allowed)?;
             self.gate(false)?;
-            let permit = self.inner.permits.clone().acquire_owned().await.map_err(|e| GbError::other(e.to_string()))?;
+            let permit = self
+                .inner
+                .permits
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| GbError::other(e.to_string()))?;
             // The blocking read sees the flag between chunks; the cancel itself answers at once.
             let (inner, at, dest) = (self.inner.clone(), target.clone(), to.dest.to_path_buf());
             let received = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let (seen, stop) = (received.clone(), Arc::new(std::sync::atomic::AtomicBool::new(false)));
+            let (seen, stop) = (
+                received.clone(),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            );
             let stopped = stop.clone();
             let mut job = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
@@ -666,54 +937,118 @@ impl HttpClient {
                     (to.progress)(n);
                     return Ok(n);
                 }
-                Hop::Redirect(location) => target = resolve_location(&target, &location).ok_or_else(|| GbError::other(format!("{} sent a redirect GitNex couldn't follow", self.host())))?,
+                Hop::Redirect(location) => {
+                    target = resolve_location(&target, &location).ok_or_else(|| {
+                        GbError::other(format!(
+                            "{} sent a redirect GitNex couldn't follow",
+                            self.host()
+                        ))
+                    })?
+                }
             }
         }
-        Err(GbError::other(format!("{} redirected the download too many times", self.host())))
+        Err(GbError::other(format!(
+            "{} redirected the download too many times",
+            self.host()
+        )))
     }
 
     /// A download's next address: one `allowed` takes, and never plain http after https.
-    fn check_download_target(&self, first: &str, url: &str, allowed: &(dyn Fn(&str) -> bool + Sync)) -> Result<(), GbError> {
+    fn check_download_target(
+        &self,
+        first: &str,
+        url: &str,
+        allowed: &(dyn Fn(&str) -> bool + Sync),
+    ) -> Result<(), GbError> {
         if is_https(first) && !is_https(url) {
-            return Err(GbError::other("The download was redirected to plain http; GitNex didn't follow it"));
+            return Err(GbError::other(
+                "The download was redirected to plain http; GitNex didn't follow it",
+            ));
         }
         if !allowed(url) {
             let host = origin(url).map(|(_, a)| a).unwrap_or_default();
-            return Err(GbError::other(format!("The download was sent to {host}, which GitNex doesn't download updates from")));
+            return Err(GbError::other(format!(
+                "The download was sent to {host}, which GitNex doesn't download updates from"
+            )));
         }
         Ok(())
     }
 
     fn redirect_target(&self, from: &str, raw: &Raw) -> Result<String, GbError> {
-        let loc = raw.headers.get("location").ok_or_else(|| GbError::other(format!("{} redirected the request without saying where", self.host())))?;
-        resolve_location(from, loc).ok_or_else(|| GbError::other(format!("{} sent a redirect GitNex couldn't follow", self.host())))
+        let loc = raw.headers.get("location").ok_or_else(|| {
+            GbError::other(format!(
+                "{} redirected the request without saying where",
+                self.host()
+            ))
+        })?;
+        resolve_location(from, loc).ok_or_else(|| {
+            GbError::other(format!(
+                "{} sent a redirect GitNex couldn't follow",
+                self.host()
+            ))
+        })
     }
 
-    async fn request(&self, method: Method, path: &str, body: Option<Vec<u8>>, accept: Option<&'static str>) -> Result<HttpResponse, GbError> {
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        accept: Option<&'static str>,
+    ) -> Result<HttpResponse, GbError> {
         let url = self.url(path);
         // Another representation (GitHub's `full`) of the same URL has its own ETag and body.
         let key = match accept {
             Some(a) => format!("{url}\n{a}"),
             None => url.clone(),
         };
-        let snapshot = if method == Method::Get { self.inner.etags.lock().expect("etags poisoned").map.get(&key).cloned() } else { None };
+        let snapshot = if method == Method::Get {
+            self.inner
+                .etags
+                .lock()
+                .expect("etags poisoned")
+                .map
+                .get(&key)
+                .cloned()
+        } else {
+            None
+        };
         if let Some(c) = snapshot.as_ref().filter(|c| self.is_fresh(c)) {
-            self.inner.fresh_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(HttpResponse { status: 200, body: c.body.clone(), not_modified: true, poll_interval_secs: c.poll_interval_secs, next_page: c.next_page.clone(), last_page: c.last_page.clone(), oauth_scopes: c.oauth_scopes.clone(), etag: true });
+            self.inner
+                .fresh_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(HttpResponse {
+                status: 200,
+                body: c.body.clone(),
+                not_modified: true,
+                poll_interval_secs: c.poll_interval_secs,
+                next_page: c.next_page.clone(),
+                last_page: c.last_page.clone(),
+                oauth_scopes: c.oauth_scopes.clone(),
+                authenticated_username: c.authenticated_username.clone(),
+                authenticated_user_id: c.authenticated_user_id.clone(),
+                etag: true,
+            });
         }
         if method != Method::Get {
             self.expire_fresh();
         }
         let etag = snapshot.as_ref().map(|c| c.etag.clone());
         let mut raw = self.send(method, &url, body.clone(), etag, accept).await?;
-        self.inner.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .sent
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // A 304 with no copy to answer from (nothing was cached): ask again, unconditionally, once.
         if raw.status == 304 && snapshot.is_none() {
             raw = self.send(method, &url, body, None, accept).await?;
-            self.inner.sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .sent
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if raw.status == 304 {
-            self.inner.not_modified.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .not_modified
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if method != Method::Get {
             // Reads that started before the write's answer cache nothing fresh.
@@ -723,24 +1058,47 @@ impl HttpClient {
     }
 
     /// An API request: refused unless under the API base, then redirects handled by hand.
-    async fn send(&self, method: Method, url: &str, body: Option<Vec<u8>>, etag: Option<String>, accept: Option<&'static str>) -> Result<Raw, GbError> {
+    async fn send(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<Vec<u8>>,
+        etag: Option<String>,
+        accept: Option<&'static str>,
+    ) -> Result<Raw, GbError> {
         if !under(url, &self.inner.cfg.api_base) {
-            return Err(GbError::other(format!("GitNex refused to send {}'s token to an address outside its API", self.host())));
+            return Err(GbError::other(format!(
+                "GitNex refused to send {}'s token to an address outside its API",
+                self.host()
+            )));
         }
-        let raw = self.once(method, url, body, etag, true, MAX_BODY, accept).await?;
+        let raw = self
+            .once(method, url, body, etag, true, MAX_BODY, accept)
+            .await?;
         if !is_redirect(raw.status) {
             return Ok(raw);
         }
         if method != Method::Get {
-            return Err(GbError::other(format!("{} redirected the request; nothing was changed", self.host())));
+            return Err(GbError::other(format!(
+                "{} redirected the request; nothing was changed",
+                self.host()
+            )));
         }
         let target = self.redirect_target(url, &raw)?;
         if !under(&target, &self.inner.cfg.api_base) {
-            return Err(GbError::other(format!("{} redirected the request somewhere else; GitNex didn't follow it", self.host())));
+            return Err(GbError::other(format!(
+                "{} redirected the request somewhere else; GitNex didn't follow it",
+                self.host()
+            )));
         }
-        let again = self.once(Method::Get, &target, None, None, true, MAX_BODY, accept).await?;
+        let again = self
+            .once(Method::Get, &target, None, None, true, MAX_BODY, accept)
+            .await?;
         if is_redirect(again.status) {
-            return Err(GbError::other(format!("{} redirected the request too many times", self.host())));
+            return Err(GbError::other(format!(
+                "{} redirected the request too many times",
+                self.host()
+            )));
         }
         Ok(again)
     }
@@ -748,11 +1106,26 @@ impl HttpClient {
     /// One request, no redirects: fails fast while limited (checked again once a permit is held),
     /// and keeps the permit until the blocking call is done.
     #[allow(clippy::too_many_arguments)]
-    async fn once(&self, method: Method, url: &str, body: Option<Vec<u8>>, etag: Option<String>, auth: bool, limit: u64, accept: Option<&'static str>) -> Result<Raw, GbError> {
+    async fn once(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<Vec<u8>>,
+        etag: Option<String>,
+        auth: bool,
+        limit: u64,
+        accept: Option<&'static str>,
+    ) -> Result<Raw, GbError> {
         // Only the API's own origin: an avatar host that's down says nothing about the forge.
         let api = same_origin(url, &self.inner.cfg.api_base);
         self.gate(api)?;
-        let permit = self.inner.permits.clone().acquire_owned().await.map_err(|e| GbError::other(e.to_string()))?;
+        let permit = self
+            .inner
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| GbError::other(e.to_string()))?;
         self.gate(api)?;
         let (inner, target) = (self.inner.clone(), url.to_string());
         let result = tokio::task::spawn_blocking(move || {
@@ -767,7 +1140,12 @@ impl HttpClient {
                 Ok(_) => *down = None,
                 // Only a connection that couldn't be made: a slow but live API (a read timeout,
                 // an answer cut short) fails that request and leaves the gate open.
-                Err(f) if f.unreachable => *down = Some(((self.inner.clock)().saturating_add(NETWORK_COOLDOWN_SECS), f.error.message.clone())),
+                Err(f) if f.unreachable => {
+                    *down = Some((
+                        (self.inner.clock)().saturating_add(NETWORK_COOLDOWN_SECS),
+                        f.error.message.clone(),
+                    ))
+                }
                 Err(_) => {}
             }
         }
@@ -777,10 +1155,25 @@ impl HttpClient {
     /// Fails fast while rate limited, and (`api`) while the API's origin is unreachable.
     fn gate(&self, api: bool) -> Result<(), GbError> {
         let now = (self.inner.clock)();
-        if let Some(until) = self.inner.rate.lock().expect("rate state poisoned").limited_until.filter(|u| *u > now) {
+        if let Some(until) = self
+            .inner
+            .rate
+            .lock()
+            .expect("rate state poisoned")
+            .limited_until
+            .filter(|u| *u > now)
+        {
             return Err(rate_limited_error(self.host(), until, now));
         }
-        if api && let Some((_, message)) = self.inner.down.lock().expect("network state poisoned").as_ref().filter(|(until, _)| *until > now) {
+        if api
+            && let Some((_, message)) = self
+                .inner
+                .down
+                .lock()
+                .expect("network state poisoned")
+                .as_ref()
+                .filter(|(until, _)| *until > now)
+        {
             return Err(GbError::new(GbErrorKind::Network, message.clone()));
         }
         Ok(())
@@ -798,7 +1191,11 @@ impl HttpClient {
             r.reset_at = rh.reset_at.or(r.reset_at);
             r.limit = rh.limit.or(r.limit);
         }
-        let spent = if core && (200..400).contains(&raw.status) { spent_until(&rh, now) } else { None };
+        let spent = if core && (200..400).contains(&raw.status) {
+            spent_until(&rh, now)
+        } else {
+            None
+        };
         match limited_until(raw.status, &rh, now) {
             Some(until) => {
                 r.limited_until = Some(until);
@@ -813,20 +1210,41 @@ impl HttpClient {
         }
     }
 
-    fn finish(&self, method: Method, key: String, raw: Raw, snapshot: Option<Arc<Cached>>) -> Result<HttpResponse, GbError> {
+    fn finish(
+        &self,
+        method: Method,
+        key: String,
+        raw: Raw,
+        snapshot: Option<Arc<Cached>>,
+    ) -> Result<HttpResponse, GbError> {
         let host = self.host();
         let get = |n: &str| raw.headers.get(n).cloned();
         self.observe(&raw)?;
-        let poll_interval_secs = get("poll-interval").or_else(|| get("x-poll-interval")).and_then(|v| v.trim().parse().ok());
+        let poll_interval_secs = get("poll-interval")
+            .or_else(|| get("x-poll-interval"))
+            .and_then(|v| v.trim().parse().ok());
         #[cfg(test)]
-        let link = get("link").map(|l| self.inner.link_rewrite.as_ref().map(|f| f(&l)).unwrap_or(l));
+        let link =
+            get("link").map(|l| self.inner.link_rewrite.as_ref().map(|f| f(&l)).unwrap_or(l));
         #[cfg(not(test))]
         let link = get("link");
-        let next_page = link.as_deref().and_then(parse_next_link).filter(|n| under(n, &self.inner.cfg.api_base));
-        let last_page = link.as_deref().and_then(|l| parse_link(l, "last")).filter(|n| under(n, &self.inner.cfg.api_base));
+        let next_page = link
+            .as_deref()
+            .and_then(parse_next_link)
+            .filter(|n| under(n, &self.inner.cfg.api_base));
+        let last_page = link
+            .as_deref()
+            .and_then(|l| parse_link(l, "last"))
+            .filter(|n| under(n, &self.inner.cfg.api_base));
         let oauth_scopes = get("x-oauth-scopes");
+        let authenticated_username = get("x-ausername");
+        let authenticated_user_id = get("x-auserid");
         if raw.status == 304 && method == Method::Get {
-            let c = snapshot.ok_or_else(|| GbError::other(format!("{host} answered 304 for a request GitNex has no copy of")))?;
+            let c = snapshot.ok_or_else(|| {
+                GbError::other(format!(
+                    "{host} answered 304 for a request GitNex has no copy of"
+                ))
+            })?;
             {
                 let mut etags = self.inner.etags.lock().expect("etags poisoned");
                 if let Some(pos) = etags.order.iter().position(|u| *u == key) {
@@ -835,10 +1253,39 @@ impl HttpClient {
                 }
             }
             self.validated(&c);
-            return Ok(HttpResponse { status: 200, body: c.body.clone(), not_modified: true, poll_interval_secs: poll_interval_secs.or(c.poll_interval_secs), next_page: c.next_page.clone(), last_page: last_page.or_else(|| c.last_page.clone()), oauth_scopes: oauth_scopes.or_else(|| c.oauth_scopes.clone()), etag: true });
+            return Ok(HttpResponse {
+                status: 200,
+                body: c.body.clone(),
+                not_modified: true,
+                poll_interval_secs: poll_interval_secs.or(c.poll_interval_secs),
+                next_page: c.next_page.clone(),
+                last_page: last_page.or_else(|| c.last_page.clone()),
+                oauth_scopes: oauth_scopes.or_else(|| c.oauth_scopes.clone()),
+                authenticated_username,
+                authenticated_user_id,
+                etag: true,
+            });
         }
         if !(200..300).contains(&raw.status) {
-            return Err(status_error(host, raw.status, &raw.body));
+            let body = if let Some(token) = self
+                .inner
+                .cfg
+                .token
+                .as_ref()
+                .map(Secret::expose)
+                .filter(|s| !s.is_empty())
+            {
+                match serde_json::from_slice::<serde_json::Value>(&raw.body) {
+                    Ok(mut value) => {
+                        redact_token_from_json(&mut value, token);
+                        serde_json::to_vec(&value).unwrap_or_default()
+                    }
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                raw.body.clone()
+            };
+            return Err(status_error(host, raw.status, &body));
         }
         let body = Arc::new(raw.body);
         let etag = get("etag");
@@ -847,19 +1294,45 @@ impl HttpClient {
             && body.len() <= MAX_CACHED_BODY
             && let Some(etag) = etag
         {
-            let c = Cached { etag, body: body.clone(), poll_interval_secs, next_page: next_page.clone(), last_page: last_page.clone(), oauth_scopes: oauth_scopes.clone(), validated_ms: Default::default(), generation: Default::default() };
+            let c = Cached {
+                etag,
+                body: body.clone(),
+                poll_interval_secs,
+                next_page: next_page.clone(),
+                last_page: last_page.clone(),
+                oauth_scopes: oauth_scopes.clone(),
+                authenticated_username: authenticated_username.clone(),
+                authenticated_user_id: authenticated_user_id.clone(),
+                validated_ms: Default::default(),
+                generation: Default::default(),
+            };
             self.validated(&c);
             self.inner.etags.lock().expect("etags poisoned").put(key, c);
         }
         tracing::debug!(target: "gitnex_forge::http", host, method = method.as_str(), status = raw.status, "forge request");
-        Ok(HttpResponse { status: raw.status, body, not_modified: false, poll_interval_secs, next_page, last_page, oauth_scopes, etag: has_etag })
+        Ok(HttpResponse {
+            status: raw.status,
+            body,
+            not_modified: false,
+            poll_interval_secs,
+            next_page,
+            last_page,
+            oauth_scopes,
+            authenticated_username,
+            authenticated_user_id,
+            etag: has_etag,
+        })
     }
 }
 
 /// The forge clients' agent: connect within 10 s, resolve within 5 s, the answer must start within
 /// `response_start`; HTTP errors are answers, redirects are followed by hand, and the user agent is
 /// GitNex's. ureq's TLS (rustls, the system's roots) and proxy (`*_PROXY` variables) defaults.
-fn agent(global: Option<Duration>, response_start: Duration, body: Option<Duration>) -> ureq::Agent {
+fn agent(
+    global: Option<Duration>,
+    response_start: Duration,
+    body: Option<Duration>,
+) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(global)
         .timeout_connect(Some(Duration::from_secs(10)))
@@ -916,19 +1389,31 @@ fn is_redirect(status: u16) -> bool {
 
 // --- 5A T3 ---
 fn is_https(url: &str) -> bool {
-    url.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+    url.get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
 }
 
 /// An answer larger than `limit`: its size isn't read past the cap.
 fn too_large(host: &str, limit: u64) -> GbError {
     let mb = limit / (1024 * 1024);
-    GbError::new(GbErrorKind::Network, if mb > 0 { format!("{host}'s answer is larger than {mb} MB") } else { format!("{host}'s answer is larger than {limit} bytes") })
+    GbError::new(
+        GbErrorKind::Network,
+        if mb > 0 {
+            format!("{host}'s answer is larger than {mb} MB")
+        } else {
+            format!("{host}'s answer is larger than {limit} bytes")
+        },
+    )
 }
 
 /// A Markdown image's redirect from `from` to `next` is followed only when it stays on https (or
 /// started on plain http: the harness) and `allowed` takes it; otherwise `get_image_within` answers
 /// `Elsewhere(<host>)` and the UI offers "Load image from <host>".
-fn image_redirect_followed(from: &str, next: &str, allowed: &(dyn Fn(&str) -> bool + Sync)) -> bool {
+fn image_redirect_followed(
+    from: &str,
+    next: &str,
+    allowed: &(dyn Fn(&str) -> bool + Sync),
+) -> bool {
     (is_https(next) || !is_https(from)) && allowed(next)
 }
 
@@ -936,7 +1421,12 @@ fn image_redirect_followed(from: &str, next: &str, allowed: &(dyn Fn(&str) -> bo
 fn is_sign_in(url: &str) -> bool {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let path = rest.find('/').map_or("", |i| &rest[i..]);
-    let path = path.split(['?', '#']).next().unwrap_or("").trim_end_matches('/').to_ascii_lowercase();
+    let path = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
     path.ends_with("/users/sign_in") || path.ends_with("/login")
 }
 // --- end 5A T3 ---
@@ -949,7 +1439,10 @@ struct Failed {
 
 impl From<GbError> for Box<Failed> {
     fn from(error: GbError) -> Self {
-        Box::new(Failed { error, unreachable: false })
+        Box::new(Failed {
+            error,
+            unreachable: false,
+        })
     }
 }
 
@@ -961,29 +1454,69 @@ fn connect_failed(e: &ureq::Error) -> bool {
     match e {
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Tls(_) => true,
         ureq::Error::Timeout(t) => matches!(t, ureq::Timeout::Resolve | ureq::Timeout::Connect),
-        ureq::Error::Io(io) => matches!(io.kind(), K::ConnectionRefused | K::HostUnreachable | K::NetworkUnreachable | K::AddrNotAvailable | K::InvalidData),
+        ureq::Error::Io(io) => matches!(
+            io.kind(),
+            K::ConnectionRefused
+                | K::HostUnreachable
+                | K::NetworkUnreachable
+                | K::AddrNotAvailable
+                | K::InvalidData
+        ),
         _ => false,
     }
 }
 
 impl Inner {
     /// One download request: a redirect's `Location`, or the body streamed into `dest`.
-    fn download_blocking(&self, url: &str, dest: &std::path::Path, limit: u64, received: &std::sync::atomic::AtomicU64, stop: &std::sync::atomic::AtomicBool) -> Result<Hop, GbError> {
+    fn download_blocking(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        limit: u64,
+        received: &std::sync::atomic::AtomicU64,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<Hop, GbError> {
         use std::io::{Read, Write};
         use std::sync::atomic::Ordering;
         let host = origin(url).map(|(_, a)| a).unwrap_or_default();
-        let req = ureq::http::Request::builder().method("GET").uri(url).header("Accept", "application/octet-stream").body(()).map_err(|e| GbError::other(format!("couldn't build a request to {host}: {e}")))?;
-        let mut resp = self.download_agent.run(req).map_err(|e| GbError::new(GbErrorKind::Network, format!("Couldn't reach {host}: {}", redact(&e.to_string()))))?;
+        let req = ureq::http::Request::builder()
+            .method("GET")
+            .uri(url)
+            .header("Accept", "application/octet-stream")
+            .body(())
+            .map_err(|e| GbError::other(format!("couldn't build a request to {host}: {e}")))?;
+        let mut resp = self.download_agent.run(req).map_err(|e| {
+            GbError::new(
+                GbErrorKind::Network,
+                format!("Couldn't reach {host}: {}", redact(&e.to_string())),
+            )
+        })?;
         let status = resp.status().as_u16();
         if is_redirect(status) {
-            let loc = resp.headers().get("location").and_then(|v| v.to_str().ok()).ok_or_else(|| GbError::other(format!("{host} redirected the download without saying where")))?;
+            let loc = resp
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| {
+                    GbError::other(format!(
+                        "{host} redirected the download without saying where"
+                    ))
+                })?;
             return Ok(Hop::Redirect(loc.to_string()));
         }
         if status != 200 {
-            let body = resp.body_mut().with_config().limit(64 * 1024).read_to_vec().unwrap_or_default();
+            let body = resp
+                .body_mut()
+                .with_config()
+                .limit(64 * 1024)
+                .read_to_vec()
+                .unwrap_or_default();
             return Err(status_error(&host, status, &body));
         }
-        let declared: Option<u64> = resp.headers().get("content-length").and_then(|v| v.to_str().ok()?.trim().parse().ok());
+        let declared: Option<u64> = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()?.trim().parse().ok());
         if declared.is_some_and(|n| n > limit) {
             return Err(too_large(&host, limit));
         }
@@ -993,12 +1526,23 @@ impl Inner {
         let mut total = 0u64;
         loop {
             if stop.load(Ordering::SeqCst) {
-                return Err(GbError::new(GbErrorKind::Cancelled, "The download was cancelled"));
+                return Err(GbError::new(
+                    GbErrorKind::Cancelled,
+                    "The download was cancelled",
+                ));
             }
             let n = match reader.read(&mut buf) {
                 Ok(n) => n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(GbError::new(GbErrorKind::Network, format!("The download from {host} was cut short ({})", redact(&e.to_string())))),
+                Err(e) => {
+                    return Err(GbError::new(
+                        GbErrorKind::Network,
+                        format!(
+                            "The download from {host} was cut short ({})",
+                            redact(&e.to_string())
+                        ),
+                    ));
+                }
             };
             if n == 0 {
                 break;
@@ -1012,9 +1556,20 @@ impl Inner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn send_blocking(&self, method: Method, url: &str, body: Option<Vec<u8>>, if_none_match: Option<String>, auth: bool, limit: u64, accept: Option<&'static str>) -> Result<Raw, Box<Failed>> {
+    fn send_blocking(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<Vec<u8>>,
+        if_none_match: Option<String>,
+        auth: bool,
+        limit: u64,
+        accept: Option<&'static str>,
+    ) -> Result<Raw, Box<Failed>> {
         let host = &self.cfg.host;
-        let mut b = ureq::http::Request::builder().method(method.as_str()).uri(url);
+        let mut b = ureq::http::Request::builder()
+            .method(method.as_str())
+            .uri(url);
         if auth && let Some(t) = &self.cfg.token {
             b = b.header("Authorization", format!("Bearer {}", t.expose()));
         }
@@ -1031,42 +1586,102 @@ impl Inner {
         if let Some(e) = &if_none_match {
             b = b.header("If-None-Match", e.as_str());
         }
-        let bad = |e: ureq::http::Error| GbError::other(format!("couldn't build a request to {host}: {e}"));
-        let unreachable = |e: ureq::Error| Box::new(Failed { unreachable: connect_failed(&e), error: GbError::new(GbErrorKind::Network, format!("Couldn't reach {host}: {}", redact(&e.to_string()))) });
+        let bad = |e: ureq::http::Error| {
+            GbError::other(format!("couldn't build a request to {host}: {e}"))
+        };
+        let unreachable = |e: ureq::Error| {
+            Box::new(Failed {
+                unreachable: connect_failed(&e),
+                error: GbError::new(
+                    GbErrorKind::Network,
+                    format!("Couldn't reach {host}: {}", redact(&e.to_string())),
+                ),
+            })
+        };
         let mut resp = match body {
-            Some(bytes) => self.agent.run(b.header("Content-Type", "application/json").body(bytes).map_err(bad)?).map_err(unreachable)?,
-            None => self.agent.run(b.body(()).map_err(bad)?).map_err(unreachable)?,
+            Some(bytes) => self
+                .agent
+                .run(
+                    b.header("Content-Type", "application/json")
+                        .body(bytes)
+                        .map_err(bad)?,
+                )
+                .map_err(unreachable)?,
+            None => self
+                .agent
+                .run(b.body(()).map_err(bad)?)
+                .map_err(unreachable)?,
         };
         let status = resp.status().as_u16();
-        let headers = resp.headers().iter().filter_map(|(k, v)| Some((k.as_str().to_ascii_lowercase(), v.to_str().ok()?.to_string()))).collect();
-        let declared: Option<u64> = resp.headers().get("content-length").and_then(|v| v.to_str().ok()?.trim().parse().ok());
+        let headers = resp
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.as_str().to_ascii_lowercase(),
+                    v.to_str().ok()?.to_string(),
+                ))
+            })
+            .collect();
+        let declared: Option<u64> = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()?.trim().parse().ok());
         if declared.is_some_and(|n| n > limit) {
-            return Err(Box::new(Failed { unreachable: false, error: too_large(host, limit) }));
+            return Err(Box::new(Failed {
+                unreachable: false,
+                error: too_large(host, limit),
+            }));
         }
         // A 304 or a 204 has no body, whatever its headers say: GitHub labels its 304s
         // `Content-Encoding: gzip`, and unzipping the nothing that follows fails.
         if matches!(status, 204 | 304) {
-            return Ok(Raw { status, body: Vec::new(), headers });
+            return Ok(Raw {
+                status,
+                body: Vec::new(),
+                headers,
+            });
         }
-        let body = resp.body_mut().with_config().limit(limit).read_to_vec().map_err(|e| match e {
-            ureq::Error::BodyExceedsLimit(_) => too_large(host, limit),
-            e => GbError::new(GbErrorKind::Network, format!("Couldn't reach {host}: the answer was cut short ({})", redact(&e.to_string()))),
-        })?;
-        Ok(Raw { status, body, headers })
+        let body = resp
+            .body_mut()
+            .with_config()
+            .limit(limit)
+            .read_to_vec()
+            .map_err(|e| match e {
+                ureq::Error::BodyExceedsLimit(_) => too_large(host, limit),
+                e => GbError::new(
+                    GbErrorKind::Network,
+                    format!(
+                        "Couldn't reach {host}: the answer was cut short ({})",
+                        redact(&e.to_string())
+                    ),
+                ),
+            })?;
+        Ok(Raw {
+            status,
+            body,
+            headers,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_server::{closed_base, Canned, TestServer};
+    use crate::test_server::{Canned, TestServer, closed_base};
 
     const TOKEN: &str = "glpat-FAKE-test-token";
     const NOW: i64 = 1_791_115_200;
 
     fn client(base: &str) -> HttpClient {
         HttpClient::with_clock(
-            ClientConfig { host: "gitlab.example.com".into(), api_base: format!("{base}/api/v4"), token: Some(Secret::new(TOKEN)), headers: vec![("Accept", "application/json")], timeout: Duration::from_secs(5) },
+            ClientConfig {
+                host: "gitlab.example.com".into(),
+                api_base: format!("{base}/api/v4"),
+                token: Some(Secret::new(TOKEN)),
+                headers: vec![("Accept", "application/json")],
+                timeout: Duration::from_secs(5),
+            },
             Arc::new(|| NOW),
         )
         .with_fresh_window(Duration::ZERO)
@@ -1077,11 +1692,26 @@ mod tests {
         let s = TestServer::start(|_, _| Canned::json(401, r#"{"message":"401 Unauthorized"}"#));
         let e = client(&s.base).get("/user").await.unwrap_err();
         assert_eq!(e.kind, GbErrorKind::AuthFailed);
-        assert_eq!(e.message, "gitlab.example.com rejected the token: replace it in Settings › Accounts.");
+        assert_eq!(
+            e.message,
+            "gitlab.example.com rejected the token: replace it in Settings › Accounts."
+        );
         let head = s.heads.lock().unwrap()[0].clone();
         assert!(head.starts_with("get /api/v4/user http/1.1"), "{head}");
-        assert!(head.contains(&format!("authorization: bearer {}", TOKEN.to_ascii_lowercase())), "{head}");
-        assert!(head.contains(&format!("user-agent: {}", crate::gravatar::USER_AGENT.to_ascii_lowercase())), "{head}");
+        assert!(
+            head.contains(&format!(
+                "authorization: bearer {}",
+                TOKEN.to_ascii_lowercase()
+            )),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!(
+                "user-agent: {}",
+                crate::gravatar::USER_AGENT.to_ascii_lowercase()
+            )),
+            "{head}"
+        );
         assert!(!format!("{e:?}").contains(TOKEN));
     }
 
@@ -1089,7 +1719,13 @@ mod tests {
     async fn a_write_sends_its_json_body_and_a_read_none() {
         let s = TestServer::start(|_, _| Canned::json(200, "{}"));
         let c = client(&s.base);
-        c.send_json(Method::Post, "/projects/1/merge_requests/12/draft_notes", &serde_json::json!({"note": "Why?"})).await.unwrap();
+        c.send_json(
+            Method::Post,
+            "/projects/1/merge_requests/12/draft_notes",
+            &serde_json::json!({"note": "Why?"}),
+        )
+        .await
+        .unwrap();
         c.get("/user").await.unwrap();
         assert_eq!(*s.bodies.lock().unwrap(), [r#"{"note":"Why?"}"#, ""]);
     }
@@ -1100,7 +1736,14 @@ mod tests {
     async fn a_304_labelled_gzip_with_no_body_answers_from_the_cache() {
         let s = TestServer::start(|n, _| match n {
             0 => Canned::json(200, r#"{"a":1}"#).header("ETag", "W/\"v1\""),
-            _ => Canned { status: 304, headers: vec![("Content-Encoding".into(), "gzip".into()), ("ETag".into(), "W/\"v1\"".into())], body: Vec::new() },
+            _ => Canned {
+                status: 304,
+                headers: vec![
+                    ("Content-Encoding".into(), "gzip".into()),
+                    ("ETag".into(), "W/\"v1\"".into()),
+                ],
+                body: Vec::new(),
+            },
         });
         let c = client(&s.base);
         assert!(!c.get("/repos/o/r/releases").await.unwrap().not_modified);
@@ -1119,15 +1762,32 @@ mod tests {
         let s = TestServer::start(move |n, _| {
             let api = format!("{}/api/v4", b.lock().unwrap());
             match n {
-                0 => Canned::json(200, "[1]").header("ETag", "\"v1\"").header("Link", &format!("<{api}/t?page=2>; rel=\"next\", <{api}/t?page=3>; rel=\"last\"")),
-                1 => Canned { status: 304, headers: vec![("ETag".into(), "\"v1\"".into())], body: Vec::new() },
-                _ => Canned { status: 304, headers: vec![("ETag".into(), "\"v1\"".into()), ("Link".into(), format!("<{api}/t?page=4>; rel=\"last\""))], body: Vec::new() },
+                0 => Canned::json(200, "[1]").header("ETag", "\"v1\"").header(
+                    "Link",
+                    &format!("<{api}/t?page=2>; rel=\"next\", <{api}/t?page=3>; rel=\"last\""),
+                ),
+                1 => Canned {
+                    status: 304,
+                    headers: vec![("ETag".into(), "\"v1\"".into())],
+                    body: Vec::new(),
+                },
+                _ => Canned {
+                    status: 304,
+                    headers: vec![
+                        ("ETag".into(), "\"v1\"".into()),
+                        ("Link".into(), format!("<{api}/t?page=4>; rel=\"last\"")),
+                    ],
+                    body: Vec::new(),
+                },
             }
         });
         *base.lock().unwrap() = s.base.clone();
         let api = format!("{}/api/v4", s.base);
         let first = client(&s.base);
-        assert_eq!(first.get("/t").await.unwrap().last_page, Some(format!("{api}/t?page=3")));
+        assert_eq!(
+            first.get("/t").await.unwrap().last_page,
+            Some(format!("{api}/t?page=3"))
+        );
         let kept = first.export(|_| true);
         assert_eq!(kept[0].last_page, Some(format!("{api}/t?page=3")));
 
@@ -1135,42 +1795,89 @@ mod tests {
         after.import(kept);
         let again = after.get("/t").await.unwrap();
         assert!(again.not_modified);
-        assert_eq!((again.next_page, again.last_page), (Some(format!("{api}/t?page=2")), Some(format!("{api}/t?page=3"))));
-        assert_eq!(after.get("/t").await.unwrap().last_page, Some(format!("{api}/t?page=4")), "the 304's own Link");
+        assert_eq!(
+            (again.next_page, again.last_page),
+            (
+                Some(format!("{api}/t?page=2")),
+                Some(format!("{api}/t?page=3"))
+            )
+        );
+        assert_eq!(
+            after.get("/t").await.unwrap().last_page,
+            Some(format!("{api}/t?page=4")),
+            "the 304's own Link"
+        );
     }
 
     #[tokio::test]
     async fn a_get_answered_moments_ago_answers_again_without_a_request_until_a_write() {
         let s = TestServer::start(|_, _| Canned::json(200, r#"{"a":1}"#).header("ETag", "\"v1\""));
         let c = client(&s.base).with_fresh_window(Duration::from_secs(60));
-        assert!(!c.get("/projects/1/merge_requests").await.unwrap().not_modified);
+        assert!(
+            !c.get("/projects/1/merge_requests")
+                .await
+                .unwrap()
+                .not_modified
+        );
         let again = c.get("/projects/1/merge_requests").await.unwrap();
         assert!(again.not_modified && again.etag);
-        assert_eq!(s.hits(), 1, "the poll's second read of the list costs nothing");
-        c.send_json(Method::Post, "/projects/1/merge_requests/1/notes", &serde_json::json!({"body": "x"})).await.unwrap();
+        assert_eq!(
+            s.hits(),
+            1,
+            "the poll's second read of the list costs nothing"
+        );
+        c.send_json(
+            Method::Post,
+            "/projects/1/merge_requests/1/notes",
+            &serde_json::json!({"body": "x"}),
+        )
+        .await
+        .unwrap();
         c.get("/projects/1/merge_requests").await.unwrap();
         assert_eq!(s.hits(), 3, "a write ends it: the read after asks");
         c.expire_fresh();
         c.get("/projects/1/merge_requests").await.unwrap();
         assert_eq!(s.hits(), 4);
         let st = c.take_stats();
-        assert_eq!((st.sent, st.not_modified, st.fresh), (4, 0, 1), "the poll's debug line counts");
+        assert_eq!(
+            (st.sent, st.not_modified, st.fresh),
+            (4, 0, 1),
+            "the poll's debug line counts"
+        );
         assert_eq!(c.take_stats(), Default::default(), "and starts again");
     }
 
     #[tokio::test]
     async fn the_core_budget_is_kept_and_a_spent_one_waits_for_its_reset() {
         let s = TestServer::start(|n, _| match n {
-            0 => Canned::json(200, "[]").header("x-ratelimit-limit", "5000").header("x-ratelimit-remaining", "100").header("x-ratelimit-reset", &(NOW + 900).to_string()).header("x-ratelimit-resource", "core"),
-            1 => Canned::json(200, "{}").header("x-ratelimit-limit", "5000").header("x-ratelimit-remaining", "3").header("x-ratelimit-resource", "graphql"),
-            _ => Canned::json(200, "[]").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", &(NOW + 600).to_string()),
+            0 => Canned::json(200, "[]")
+                .header("x-ratelimit-limit", "5000")
+                .header("x-ratelimit-remaining", "100")
+                .header("x-ratelimit-reset", &(NOW + 900).to_string())
+                .header("x-ratelimit-resource", "core"),
+            1 => Canned::json(200, "{}")
+                .header("x-ratelimit-limit", "5000")
+                .header("x-ratelimit-remaining", "3")
+                .header("x-ratelimit-resource", "graphql"),
+            _ => Canned::json(200, "[]")
+                .header("x-ratelimit-remaining", "0")
+                .header("x-ratelimit-reset", &(NOW + 600).to_string()),
         });
         let c = client(&s.base);
         c.get("/a").await.unwrap();
-        c.send_json(Method::Post, "/graphql", &serde_json::json!({})).await.unwrap();
+        c.send_json(Method::Post, "/graphql", &serde_json::json!({}))
+            .await
+            .unwrap();
         let r = c.rate_limit();
-        assert_eq!((r.remaining, r.limit, r.reset_at, r.limited_until), (Some(100), Some(5000), Some(NOW + 900), None), "GraphQL's budget is its own");
-        assert!(c.get("/b").await.is_ok(), "the answer that spent the last request is good");
+        assert_eq!(
+            (r.remaining, r.limit, r.reset_at, r.limited_until),
+            (Some(100), Some(5000), Some(NOW + 900), None),
+            "GraphQL's budget is its own"
+        );
+        assert!(
+            c.get("/b").await.is_ok(),
+            "the answer that spent the last request is good"
+        );
         assert_eq!(c.rate_limit().limited_until, Some(NOW + 600));
         let e = c.get("/c").await.unwrap_err();
         assert_eq!(e.kind, GbErrorKind::RateLimited);
@@ -1180,8 +1887,14 @@ mod tests {
     #[tokio::test]
     async fn an_etag_hit_returns_the_cached_body_as_not_modified() {
         let s = TestServer::start(|n, head| {
-            if n == 0 { Canned::json(200, r#"{"a":1}"#).header("ETag", "\"v1\"").header("Poll-Interval", "30") }
-            else { assert!(head.contains("if-none-match: \"v1\""), "{head}"); Canned::json(304, "") }
+            if n == 0 {
+                Canned::json(200, r#"{"a":1}"#)
+                    .header("ETag", "\"v1\"")
+                    .header("Poll-Interval", "30")
+            } else {
+                assert!(head.contains("if-none-match: \"v1\""), "{head}");
+                Canned::json(304, "")
+            }
         });
         let c = client(&s.base);
         let first = c.get("/projects/1").await.unwrap();
@@ -1196,12 +1909,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_429_limits_until_retry_after_and_fails_fast_without_a_request() {
-        let s = TestServer::start(|_, _| Canned::json(429, r#"{"message":"Too Many Requests"}"#).header("Retry-After", "120"));
+        let s = TestServer::start(|_, _| {
+            Canned::json(429, r#"{"message":"Too Many Requests"}"#).header("Retry-After", "120")
+        });
         let c = client(&s.base);
         let e = c.get("/user").await.unwrap_err();
         assert_eq!(e.kind, GbErrorKind::RateLimited);
-        assert_eq!(e.message, "gitlab.example.com rate limit reached: try again in 2 min");
-        assert_eq!(e.detail, Some(ErrorDetail::RateLimited { until: NOW + 120 }));
+        assert_eq!(
+            e.message,
+            "gitlab.example.com rate limit reached: try again in 2 min"
+        );
+        assert_eq!(
+            e.detail,
+            Some(ErrorDetail::RateLimited { until: NOW + 120 })
+        );
         let again = c.get("/projects/1").await.unwrap_err();
         assert_eq!(again.kind, GbErrorKind::RateLimited);
         assert_eq!(s.hits(), 1, "no request while limited");
@@ -1213,42 +1934,115 @@ mod tests {
         let s = TestServer::start(|_, _| Canned::json(200, "{}"));
         let c = client(&s.base);
         c.inner.rate.lock().unwrap().limited_until = Some(NOW + 120);
-        let raw = Raw { status: 200, body: vec![], headers: HashMap::new() };
+        let raw = Raw {
+            status: 200,
+            body: vec![],
+            headers: HashMap::new(),
+        };
         c.observe(&raw).unwrap();
-        assert_eq!(c.rate_limit().limited_until, Some(NOW + 120), "not over yet");
+        assert_eq!(
+            c.rate_limit().limited_until,
+            Some(NOW + 120),
+            "not over yet"
+        );
         c.inner.rate.lock().unwrap().limited_until = Some(NOW - 1);
         c.observe(&raw).unwrap();
-        assert_eq!(c.rate_limit().limited_until, None, "an expired limit is cleared");
+        assert_eq!(
+            c.rate_limit().limited_until,
+            None,
+            "an expired limit is cleared"
+        );
     }
 
     #[test]
     fn github_primary_and_secondary_limits_are_403s_that_say_so() {
-        let spent = RateHeaders { remaining: Some(0), reset_at: Some(NOW + 600), ..Default::default() };
+        let spent = RateHeaders {
+            remaining: Some(0),
+            reset_at: Some(NOW + 600),
+            ..Default::default()
+        };
         assert_eq!(limited_until(403, &spent, NOW), Some(NOW + 600));
-        let secondary = RateHeaders { remaining: Some(4000), retry_after_secs: Some(60), ..Default::default() };
+        let secondary = RateHeaders {
+            remaining: Some(4000),
+            retry_after_secs: Some(60),
+            ..Default::default()
+        };
         assert_eq!(limited_until(403, &secondary, NOW), Some(NOW + 60));
-        assert_eq!(limited_until(403, &RateHeaders { remaining: Some(10), ..Default::default() }, NOW), None, "a plain 403 is a permission problem");
-        assert_eq!(limited_until(429, &RateHeaders::default(), NOW), Some(NOW + DEFAULT_LIMIT_WAIT_SECS));
-        let h = rate_headers(|n| match n { "ratelimit-remaining" => Some("7".into()), "ratelimit-reset" => Some((NOW + 30).to_string()), _ => None }, NOW);
-        assert_eq!(h, RateHeaders { remaining: Some(7), reset_at: Some(NOW + 30), ..Default::default() });
+        assert_eq!(
+            limited_until(
+                403,
+                &RateHeaders {
+                    remaining: Some(10),
+                    ..Default::default()
+                },
+                NOW
+            ),
+            None,
+            "a plain 403 is a permission problem"
+        );
+        assert_eq!(
+            limited_until(429, &RateHeaders::default(), NOW),
+            Some(NOW + DEFAULT_LIMIT_WAIT_SECS)
+        );
+        let h = rate_headers(
+            |n| match n {
+                "ratelimit-remaining" => Some("7".into()),
+                "ratelimit-reset" => Some((NOW + 30).to_string()),
+                _ => None,
+            },
+            NOW,
+        );
+        assert_eq!(
+            h,
+            RateHeaders {
+                remaining: Some(7),
+                reset_at: Some(NOW + 30),
+                ..Default::default()
+            }
+        );
         assert_eq!(spent_until(&h, NOW), None);
-        let gone = RateHeaders { remaining: Some(0), reset_at: Some(NOW + 30), ..Default::default() };
+        let gone = RateHeaders {
+            remaining: Some(0),
+            reset_at: Some(NOW + 30),
+            ..Default::default()
+        };
         assert_eq!(spent_until(&gone, NOW), Some(NOW + 30));
-        assert_eq!(spent_until(&RateHeaders { reset_at: Some(NOW - 1), ..gone }, NOW), None);
+        assert_eq!(
+            spent_until(
+                &RateHeaders {
+                    reset_at: Some(NOW - 1),
+                    ..gone
+                },
+                NOW
+            ),
+            None
+        );
     }
 
     #[tokio::test]
     async fn get_pages_follows_same_origin_next_links_up_to_the_cap() {
         let s = TestServer::start(move |n, _| match n {
-            0 => Canned::json(200, "[1,2]").header("Link", "<BASE/api/v4/forks?page=2>; rel=\"next\""),
-            1 => Canned::json(200, "[3]").header("Link", "<https://evil.example/api/v4/forks?page=3>; rel=\"next\""),
+            0 => Canned::json(200, "[1,2]")
+                .header("Link", "<BASE/api/v4/forks?page=2>; rel=\"next\""),
+            1 => Canned::json(200, "[3]").header(
+                "Link",
+                "<https://evil.example/api/v4/forks?page=3>; rel=\"next\"",
+            ),
             _ => Canned::json(200, "[99]"),
         });
         // The canned Link header names the server by placeholder; the client resolves it below.
         let base = s.base.clone();
         let fixed = client(&s.base).with_link_rewrite(move |l: &str| l.replace("BASE", &base));
         let all = fixed.get_pages("/forks", 5).await.unwrap();
-        assert_eq!(all, vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)], "the cross-origin next link isn't followed");
+        assert_eq!(
+            all,
+            vec![
+                serde_json::json!(1),
+                serde_json::json!(2),
+                serde_json::json!(3)
+            ],
+            "the cross-origin next link isn't followed"
+        );
         assert_eq!(s.hits(), 2);
     }
 
@@ -1256,7 +2050,11 @@ mod tests {
     async fn an_unreachable_host_is_a_network_error() {
         let e = client(&closed_base()).get("/user").await.unwrap_err();
         assert_eq!(e.kind, GbErrorKind::Network);
-        assert!(e.message.starts_with("Couldn't reach gitlab.example.com: "), "{}", e.message);
+        assert!(
+            e.message.starts_with("Couldn't reach gitlab.example.com: "),
+            "{}",
+            e.message
+        );
     }
 
     #[tokio::test]
@@ -1265,21 +2063,35 @@ mod tests {
         let now = Arc::new(std::sync::atomic::AtomicI64::new(NOW));
         let clock = now.clone();
         let c = HttpClient::with_clock(
-            ClientConfig { host: "gitlab.example.com".into(), api_base: format!("{base}/api/v4"), token: Some(Secret::new(TOKEN)), headers: vec![], timeout: Duration::from_secs(5) },
+            ClientConfig {
+                host: "gitlab.example.com".into(),
+                api_base: format!("{base}/api/v4"),
+                token: Some(Secret::new(TOKEN)),
+                headers: vec![],
+                timeout: Duration::from_secs(5),
+            },
             Arc::new(move || clock.load(std::sync::atomic::Ordering::SeqCst)),
         );
         let first = c.get("/user").await.unwrap_err();
         assert_eq!(first.kind, GbErrorKind::Network);
         // The port answers now, but the gate is closed: nothing is sent.
-        let s = TestServer::start_at(base.trim_start_matches("http://"), |_, _| Canned::json(200, "{}"));
+        let s = TestServer::start_at(base.trim_start_matches("http://"), |_, _| {
+            Canned::json(200, "{}")
+        });
         let started = std::time::Instant::now();
         for _ in 0..3 {
             let again = c.get("/projects/1").await.unwrap_err();
-            assert_eq!((again.kind, again.message.as_str()), (GbErrorKind::Network, first.message.as_str()));
+            assert_eq!(
+                (again.kind, again.message.as_str()),
+                (GbErrorKind::Network, first.message.as_str())
+            );
         }
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(s.hits(), 0, "no request while the forge is taken as down");
-        now.store(NOW + NETWORK_COOLDOWN_SECS + 1, std::sync::atomic::Ordering::SeqCst);
+        now.store(
+            NOW + NETWORK_COOLDOWN_SECS + 1,
+            std::sync::atomic::Ordering::SeqCst,
+        );
         c.get("/user").await.unwrap();
         assert_eq!(s.hits(), 1);
         now.store(NOW, std::sync::atomic::Ordering::SeqCst);
@@ -1315,33 +2127,78 @@ mod tests {
             }
         });
         let c = HttpClient::with_clock(
-            ClientConfig { host: "gitlab.example.com".into(), api_base: format!("{base}/api/v4"), token: Some(Secret::new(TOKEN)), headers: vec![], timeout: Duration::from_millis(300) },
+            ClientConfig {
+                host: "gitlab.example.com".into(),
+                api_base: format!("{base}/api/v4"),
+                token: Some(Secret::new(TOKEN)),
+                headers: vec![],
+                timeout: Duration::from_millis(300),
+            },
             Arc::new(|| NOW),
         );
         let stalled = c.get("/user").await.unwrap_err();
         assert_eq!(stalled.kind, GbErrorKind::Network);
         let cut = c.get("/user").await.unwrap_err();
         assert_eq!(cut.kind, GbErrorKind::Network);
-        assert!(cut.message.contains("the answer was cut short"), "{}", cut.message);
+        assert!(
+            cut.message.contains("the answer was cut short"),
+            "{}",
+            cut.message
+        );
         c.get("/user").await.unwrap();
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3, "every request was sent: the gate stayed open");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "every request was sent: the gate stayed open"
+        );
     }
 
     #[tokio::test]
     async fn get_image_sends_the_token_only_under_its_own_bases() {
-        let s = TestServer::start(|_, _| Canned { status: 200, headers: vec![("Content-Type".into(), "image/png".into())], body: b"\x89PNGx".to_vec() });
+        let s = TestServer::start(|_, _| Canned {
+            status: 200,
+            headers: vec![("Content-Type".into(), "image/png".into())],
+            body: b"\x89PNGx".to_vec(),
+        });
         let c = client(&s.base);
         let web = format!("{}/web", s.base);
-        let (ct, bytes) = c.get_image(&format!("{web}/uploads/a.png"), &web).await.unwrap().unwrap();
-        assert_eq!((ct.as_str(), bytes.as_slice()), ("image/png", b"\x89PNGx".as_slice()));
-        c.get_image(&format!("{}/web-avatars/a.png", s.base), &web).await.unwrap();
+        let (ct, bytes) = c
+            .get_image(&format!("{web}/uploads/a.png"), &web)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (ct.as_str(), bytes.as_slice()),
+            ("image/png", b"\x89PNGx".as_slice())
+        );
+        c.get_image(&format!("{}/web-avatars/a.png", s.base), &web)
+            .await
+            .unwrap();
         let heads = s.heads.lock().unwrap().clone();
-        assert!(heads[0].contains("authorization: bearer"), "under the web base");
-        assert!(!heads[1].contains("authorization"), "same host, another base: no token");
-        let other = TestServer::start(|_, _| Canned { status: 200, headers: vec![("Content-Type".into(), "image/png".into())], body: b"\x89PNGy".to_vec() });
-        c.get_image(&format!("{}/a.png", other.base), &web).await.unwrap();
-        assert!(!other.heads.lock().unwrap()[0].contains("authorization"), "another origin never gets the token");
-        assert!(under("https://h/api/v4/x", "https://h/api/v4") && !under("https://h/api/v40", "https://h/api/v4"));
+        assert!(
+            heads[0].contains("authorization: bearer"),
+            "under the web base"
+        );
+        assert!(
+            !heads[1].contains("authorization"),
+            "same host, another base: no token"
+        );
+        let other = TestServer::start(|_, _| Canned {
+            status: 200,
+            headers: vec![("Content-Type".into(), "image/png".into())],
+            body: b"\x89PNGy".to_vec(),
+        });
+        c.get_image(&format!("{}/a.png", other.base), &web)
+            .await
+            .unwrap();
+        assert!(
+            !other.heads.lock().unwrap()[0].contains("authorization"),
+            "another origin never gets the token"
+        );
+        assert!(
+            under("https://h/api/v4/x", "https://h/api/v4")
+                && !under("https://h/api/v40", "https://h/api/v4")
+        );
     }
 
     #[tokio::test]
@@ -1367,21 +2224,39 @@ mod tests {
         });
         let c = client(&s.base);
         let e = c.get("/a").await.unwrap_err();
-        assert_eq!(e.detail, Some(ErrorDetail::RateLimited { until: NOW + 3600 }));
+        assert_eq!(
+            e.detail,
+            Some(ErrorDetail::RateLimited { until: NOW + 3600 })
+        );
         let c2 = client(&s.base);
         let e = c2.get("/a").await.unwrap_err();
-        assert_eq!(e.detail, Some(ErrorDetail::RateLimited { until: NOW + 3600 }));
+        assert_eq!(
+            e.detail,
+            Some(ErrorDetail::RateLimited { until: NOW + 3600 })
+        );
     }
 
     #[tokio::test]
     async fn a_same_api_redirect_keeps_auth_and_others_are_refused() {
         let s = TestServer::start(|_, head| {
-            if head.starts_with("get /api/v4/old ") { Canned::json(302, "").header("Location", "/api/v4/new") }
-            else if head.starts_with("get /api/v4/away ") { Canned::json(302, "").header("Location", "http://127.0.0.1:1/x") }
-            else { assert!(head.contains("authorization: bearer"), "{head}"); Canned::json(200, r#"{"n":1}"#) }
+            if head.starts_with("get /api/v4/old ") {
+                Canned::json(302, "").header("Location", "/api/v4/new")
+            } else if head.starts_with("get /api/v4/away ") {
+                Canned::json(302, "").header("Location", "http://127.0.0.1:1/x")
+            } else {
+                assert!(head.contains("authorization: bearer"), "{head}");
+                Canned::json(200, r#"{"n":1}"#)
+            }
         });
         let c = client(&s.base);
-        assert_eq!(c.get("/old").await.unwrap().json::<serde_json::Value>("h").unwrap()["n"], 1);
+        assert_eq!(
+            c.get("/old")
+                .await
+                .unwrap()
+                .json::<serde_json::Value>("h")
+                .unwrap()["n"],
+            1
+        );
         let e = c.get("/away").await.unwrap_err();
         assert!(e.message.contains("redirected"), "{}", e.message);
     }
@@ -1390,18 +2265,32 @@ mod tests {
     async fn a_write_never_follows_a_redirect() {
         let s = TestServer::start(|_, _| Canned::json(307, "").header("Location", "/api/v4/else"));
         let c = client(&s.base);
-        let e = c.send_json(Method::Post, "/x", &serde_json::json!({})).await.unwrap_err();
-        assert_eq!(e.message, "gitlab.example.com redirected the request; nothing was changed");
+        let e = c
+            .send_json(Method::Post, "/x", &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.message,
+            "gitlab.example.com redirected the request; nothing was changed"
+        );
         assert_eq!(s.hits(), 1);
     }
 
     #[tokio::test]
     async fn an_image_redirect_from_a_third_party_never_gains_the_token() {
-        let s = TestServer::start(|_, _| Canned { status: 200, headers: vec![("Content-Type".into(), "image/png".into())], body: b"\x89PNGz".to_vec() });
+        let s = TestServer::start(|_, _| Canned {
+            status: 200,
+            headers: vec![("Content-Type".into(), "image/png".into())],
+            body: b"\x89PNGz".to_vec(),
+        });
         let target = format!("{}/api/v4/a.png", s.base);
-        let other = TestServer::start(move |_, _| Canned::json(302, "").header("Location", &target));
+        let other =
+            TestServer::start(move |_, _| Canned::json(302, "").header("Location", &target));
         let c = client(&s.base);
-        let got = c.get_image(&format!("{}/a.png", other.base), &format!("{}/web", s.base)).await.unwrap();
+        let got = c
+            .get_image(&format!("{}/a.png", other.base), &format!("{}/web", s.base))
+            .await
+            .unwrap();
         assert!(got.is_some());
         assert!(!s.heads.lock().unwrap()[0].contains("authorization"));
     }
@@ -1409,7 +2298,12 @@ mod tests {
     #[tokio::test]
     async fn a_304_without_a_copy_asks_again_unconditionally_once() {
         let s = TestServer::start(|n, head| {
-            if n == 0 { Canned::json(304, "") } else { assert!(!head.contains("if-none-match"), "{head}"); Canned::json(200, r#"{"a":2}"#) }
+            if n == 0 {
+                Canned::json(304, "")
+            } else {
+                assert!(!head.contains("if-none-match"), "{head}");
+                Canned::json(200, r#"{"a":2}"#)
+            }
         });
         let r = client(&s.base).get("/x").await.unwrap();
         assert!(!r.not_modified);
@@ -1419,7 +2313,18 @@ mod tests {
 
     #[test]
     fn the_etag_cache_is_lru_and_byte_bounded() {
-        let mk = |n: usize| Cached { etag: "e".into(), body: Arc::new(vec![0; n]), poll_interval_secs: None, next_page: None, last_page: None, oauth_scopes: None, validated_ms: Default::default(), generation: Default::default() };
+        let mk = |n: usize| Cached {
+            etag: "e".into(),
+            body: Arc::new(vec![0; n]),
+            poll_interval_secs: None,
+            next_page: None,
+            last_page: None,
+            oauth_scopes: None,
+            authenticated_username: None,
+            authenticated_user_id: None,
+            validated_ms: Default::default(),
+            generation: Default::default(),
+        };
         let mut c = EtagCache::default();
         c.put("a".into(), mk(1));
         c.put("b".into(), mk(1));
@@ -1435,24 +2340,72 @@ mod tests {
 
     #[test]
     fn pure_helpers() {
-        assert_eq!(parse_next_link(r#"<https://h/api?page=2>; rel="next", <https://h/api?page=9>; rel="last""#).as_deref(), Some("https://h/api?page=2"));
-        assert_eq!(parse_link(r#"<https://h/api?page=2>; rel="next", <https://h/api?page=9>; rel="last""#, "last").as_deref(), Some("https://h/api?page=9"));
-        assert_eq!(parse_next_link(r#"<https://h/api?page=1>; rel="prev""#), None);
-        assert_eq!(encode_component("group/sub project@x"), "group%2Fsub%20project%40x");
+        assert_eq!(
+            parse_next_link(
+                r#"<https://h/api?page=2>; rel="next", <https://h/api?page=9>; rel="last""#
+            )
+            .as_deref(),
+            Some("https://h/api?page=2")
+        );
+        assert_eq!(
+            parse_link(
+                r#"<https://h/api?page=2>; rel="next", <https://h/api?page=9>; rel="last""#,
+                "last"
+            )
+            .as_deref(),
+            Some("https://h/api?page=9")
+        );
+        assert_eq!(
+            parse_next_link(r#"<https://h/api?page=1>; rel="prev""#),
+            None
+        );
+        assert_eq!(
+            encode_component("group/sub project@x"),
+            "group%2Fsub%20project%40x"
+        );
         assert_eq!(encode_component("a-b_c.d~e"), "a-b_c.d~e");
-        assert!(same_origin("https://GitLab.example.com/x", "https://gitlab.example.com"));
-        assert!(!same_origin("https://gitlab.example.com:8443/x", "https://gitlab.example.com"));
-        assert!(!same_origin("https://u@gitlab.example.com/x", "https://gitlab.example.com"));
-        assert_eq!(body_message(format!(r#"{{"message":"token glpat-{} is bad"}}"#, "a".repeat(21)).as_bytes()).as_deref(), Some("token *** is bad"));
-        assert_eq!(body_message(br#"{"error":"insufficient_scope","error_description":"needs api"}"#).as_deref(), Some("needs api"));
+        assert!(same_origin(
+            "https://GitLab.example.com/x",
+            "https://gitlab.example.com"
+        ));
+        assert!(!same_origin(
+            "https://gitlab.example.com:8443/x",
+            "https://gitlab.example.com"
+        ));
+        assert!(!same_origin(
+            "https://u@gitlab.example.com/x",
+            "https://gitlab.example.com"
+        ));
+        assert_eq!(
+            body_message(
+                format!(r#"{{"message":"token glpat-{} is bad"}}"#, "a".repeat(21)).as_bytes()
+            )
+            .as_deref(),
+            Some("token *** is bad")
+        );
+        assert_eq!(
+            body_message(br#"{"error":"insufficient_scope","error_description":"needs api"}"#)
+                .as_deref(),
+            Some("needs api")
+        );
         assert_eq!(status_error("h", 404, b"").kind, GbErrorKind::NotFound);
-        assert_eq!(status_error("h", 422, br#"{"message":"Branch exists"}"#).message, "h: Branch exists");
-        assert_eq!(status_error("h", 403, br#"{"message":"insufficient_scope"}"#).message, "h refused: insufficient_scope");
+        assert_eq!(
+            status_error("h", 422, br#"{"message":"Branch exists"}"#).message,
+            "h: Branch exists"
+        );
+        assert_eq!(
+            status_error("h", 403, br#"{"message":"insufficient_scope"}"#).message,
+            "h refused: insufficient_scope"
+        );
         assert_eq!(status_error("h", 502, b"").message, "h answered HTTP 502");
     }
     // --- 4C T1 ---
     #[test]
     fn body_messages_join_gitlab_lists_and_githubs_validation_errors() {
+        assert_eq!(
+            body_message(br#"{"errors":[{"message":"Version is stale"}]}"#).as_deref(),
+            Some("Version is stale")
+        );
         assert_eq!(
             body_message(br#"{"message": ["Another open merge request already exists for this source branch: !1"]}"#).as_deref(),
             Some("Another open merge request already exists for this source branch: !1")
@@ -1468,7 +2421,28 @@ mod tests {
             body_message(br#"{"message": "Unprocessable Entity", "errors": ["User can only have one pending review per pull request"]}"#).as_deref(),
             Some("Unprocessable Entity: User can only have one pending review per pull request")
         );
-        assert_eq!(status_error("gitlab.example.com", 409, br#"{"message": ["a", "b"]}"#).message, "gitlab.example.com: a; b");
+        assert_eq!(
+            status_error("gitlab.example.com", 409, br#"{"message": ["a", "b"]}"#).message,
+            "gitlab.example.com: a; b"
+        );
+    }
+
+    #[tokio::test]
+    async fn arbitrary_token_is_not_repeated_in_error_messages() {
+        let token = "opaque\"example-token";
+        let json =
+            serde_json::json!({"errors": [{"message": format!("Refused: {token}")}]}).to_string();
+        let server = TestServer::start(move |_, _| Canned::json(409, &json));
+        let c = HttpClient::new(ClientConfig {
+            host: "bitbucket.example.com".into(),
+            api_base: server.base.clone(),
+            token: Some(Secret::new(token)),
+            headers: vec![],
+            timeout: Duration::from_secs(5),
+        });
+        let err = c.get("/test").await.unwrap_err();
+        assert!(!err.message.contains(token));
+        assert!(err.message.contains("[redacted]"));
     }
     // --- end 4C T1 ---
     // --- 5A T2 ---
@@ -1482,7 +2456,10 @@ mod tests {
                     Canned::json(200, r#"{"v":"plain"}"#).header("ETag", "\"p\"")
                 }
                 1 => {
-                    assert!(full && !head.contains("if-none-match"), "another representation: not the plain copy's ETag: {head}");
+                    assert!(
+                        full && !head.contains("if-none-match"),
+                        "another representation: not the plain copy's ETag: {head}"
+                    );
                     Canned::json(200, r#"{"v":"full"}"#).header("ETag", "\"f\"")
                 }
                 _ => {
@@ -1494,36 +2471,92 @@ mod tests {
         let c = client(&s.base);
         let v = |r: HttpResponse| r.json::<serde_json::Value>("h").unwrap()["v"].clone();
         assert_eq!(v(c.get("/x").await.unwrap()), "plain");
-        assert_eq!(v(c.get_as("/x", "application/vnd.github.full+json").await.unwrap()), "full");
-        let again = c.get_as("/x", "application/vnd.github.full+json").await.unwrap();
+        assert_eq!(
+            v(c.get_as("/x", "application/vnd.github.full+json")
+                .await
+                .unwrap()),
+            "full"
+        );
+        let again = c
+            .get_as("/x", "application/vnd.github.full+json")
+            .await
+            .unwrap();
         assert!(again.not_modified);
         assert_eq!(v(again), "full");
     }
 
     #[tokio::test]
     async fn get_image_within_rechecks_a_redirect_and_tells_forbidden_from_missing() {
-        let other = TestServer::start(|_, _| Canned { status: 200, headers: vec![("Content-Type".into(), "image/png".into())], body: b"\x89PNGz".to_vec() });
+        let other = TestServer::start(|_, _| Canned {
+            status: 200,
+            headers: vec![("Content-Type".into(), "image/png".into())],
+            body: b"\x89PNGz".to_vec(),
+        });
         let to = format!("{}/elsewhere.png", other.base);
         let s = TestServer::start(move |n, _| match n {
-            0 => Canned { status: 302, headers: vec![("Location".into(), to.clone())], body: Vec::new() },
+            0 => Canned {
+                status: 302,
+                headers: vec![("Location".into(), to.clone())],
+                body: Vec::new(),
+            },
             1 => Canned::json(403, r#"{"message":"expired"}"#),
-            3 => Canned { status: 302, headers: vec![("Location".into(), "/web/users/sign_in".into())], body: Vec::new() },
+            3 => Canned {
+                status: 302,
+                headers: vec![("Location".into(), "/web/users/sign_in".into())],
+                body: Vec::new(),
+            },
             _ => Canned::json(404, r#"{"message":"404 Not Found"}"#),
         });
         let c = client(&s.base);
         let web = format!("{}/web", s.base);
         let only_web = |u: &str| under(u, &web);
         let host = other.base.trim_start_matches("http://").to_string();
-        assert_eq!(c.get_image_within(&format!("{web}/a.png"), &web, &only_web).await.unwrap(), ImageFetch::Elsewhere(host));
-        assert_eq!(other.hits(), 0, "the address off the allowlist was never asked");
-        assert_eq!(c.get_image_within(&format!("{web}/b.png"), &web, &only_web).await.unwrap(), ImageFetch::Forbidden(403));
-        assert_eq!(c.get_image_within(&format!("{web}/c.png"), &web, &only_web).await.unwrap(), ImageFetch::Missing(404));
-        assert_eq!(c.get_image_within(&format!("{web}/e.png"), &web, &only_web).await.unwrap(), ImageFetch::SignIn);
+        assert_eq!(
+            c.get_image_within(&format!("{web}/a.png"), &web, &only_web)
+                .await
+                .unwrap(),
+            ImageFetch::Elsewhere(host)
+        );
+        assert_eq!(
+            other.hits(),
+            0,
+            "the address off the allowlist was never asked"
+        );
+        assert_eq!(
+            c.get_image_within(&format!("{web}/b.png"), &web, &only_web)
+                .await
+                .unwrap(),
+            ImageFetch::Forbidden(403)
+        );
+        assert_eq!(
+            c.get_image_within(&format!("{web}/c.png"), &web, &only_web)
+                .await
+                .unwrap(),
+            ImageFetch::Missing(404)
+        );
+        assert_eq!(
+            c.get_image_within(&format!("{web}/e.png"), &web, &only_web)
+                .await
+                .unwrap(),
+            ImageFetch::SignIn
+        );
         assert_eq!(s.hits(), 4, "the sign-in page isn't fetched");
         let anywhere = |_: &str| true;
-        let direct = c.get_image_within(&format!("{}/d.png", other.base), &web, &anywhere).await.unwrap();
-        assert_eq!(direct, ImageFetch::Found { content_type: "image/png".into(), bytes: b"\x89PNGz".to_vec() });
-        assert!(!other.heads.lock().unwrap()[0].contains("authorization"), "another origin never gets the token");
+        let direct = c
+            .get_image_within(&format!("{}/d.png", other.base), &web, &anywhere)
+            .await
+            .unwrap();
+        assert_eq!(
+            direct,
+            ImageFetch::Found {
+                content_type: "image/png".into(),
+                bytes: b"\x89PNGz".to_vec()
+            }
+        );
+        assert!(
+            !other.heads.lock().unwrap()[0].contains("authorization"),
+            "another origin never gets the token"
+        );
     }
     // --- end 5A T2 ---
 
@@ -1532,11 +2565,37 @@ mod tests {
     fn an_image_redirect_to_plain_http_is_asked_like_one_off_the_allowlist() {
         let anywhere = |_: &str| true;
         let nowhere = |_: &str| false;
-        assert!(!image_redirect_followed("https://github.com/a.png", "http://github.com/a.png", &anywhere), "https → http: ask, even on an allowed host");
-        assert!(!image_redirect_followed("HTTPS://github.com/a.png", "http://cdn.example.org/a.png", &anywhere));
-        assert!(image_redirect_followed("https://github.com/a.png", "HTTPS://raw.githubusercontent.com/a.png", &anywhere));
-        assert!(image_redirect_followed("http://127.0.0.1:9/a.png", "http://127.0.0.1:9/b.png", &anywhere), "the harness's plain http");
-        assert!(!image_redirect_followed("https://github.com/a.png", "https://cdn.example.org/a.png", &nowhere));
+        assert!(
+            !image_redirect_followed(
+                "https://github.com/a.png",
+                "http://github.com/a.png",
+                &anywhere
+            ),
+            "https → http: ask, even on an allowed host"
+        );
+        assert!(!image_redirect_followed(
+            "HTTPS://github.com/a.png",
+            "http://cdn.example.org/a.png",
+            &anywhere
+        ));
+        assert!(image_redirect_followed(
+            "https://github.com/a.png",
+            "HTTPS://raw.githubusercontent.com/a.png",
+            &anywhere
+        ));
+        assert!(
+            image_redirect_followed(
+                "http://127.0.0.1:9/a.png",
+                "http://127.0.0.1:9/b.png",
+                &anywhere
+            ),
+            "the harness's plain http"
+        );
+        assert!(!image_redirect_followed(
+            "https://github.com/a.png",
+            "https://cdn.example.org/a.png",
+            &nowhere
+        ));
     }
     // --- end 5A T3 ---
 }

@@ -5,6 +5,7 @@
 //! worktrees never collide. 4B–4D add their routes as match arms in `gitlab::route` and
 //! `github::route`, and their seed fields with `#[serde(default)]`.
 
+pub mod bitbucket;
 pub mod forgejo;
 pub mod github;
 // --- 4C T2 ---
@@ -19,11 +20,11 @@ pub mod gitlab_mrs;
 // --- end 4B T2 ---
 pub mod releases;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -160,20 +161,20 @@ pub struct GitHubSeed {
     pub tokens: Vec<FakeToken>,
     pub repos: Vec<FakeProject>,
     // --- 4B: pull request seed fields go here ---
-      // --- 4B T4 ---
-      /// Pull requests of the seed's repositories (`github_pulls.rs`).
-      pub pulls: Vec<github_pulls::FakePull>,
-      /// Users who appear in pull requests without a token of their own.
-      pub users: Vec<FakeUser>,
-      // --- end 4B T4 ---
-      // --- 4C T2 ---
-      /// `/assignees`: who can be assigned or asked to review.
-      pub assignees: Vec<FakeUser>,
-      pub labels: Vec<FakeLabel>,
-      pub files: BTreeMap<String, BTreeMap<String, String>>,
-      /// Pull requests created through the API, with their reviewers, assignees and labels.
-      pub created: Vec<Value>,
-      // --- end 4C T2 ---
+    // --- 4B T4 ---
+    /// Pull requests of the seed's repositories (`github_pulls.rs`).
+    pub pulls: Vec<github_pulls::FakePull>,
+    /// Users who appear in pull requests without a token of their own.
+    pub users: Vec<FakeUser>,
+    // --- end 4B T4 ---
+    // --- 4C T2 ---
+    /// `/assignees`: who can be assigned or asked to review.
+    pub assignees: Vec<FakeUser>,
+    pub labels: Vec<FakeLabel>,
+    pub files: BTreeMap<String, BTreeMap<String, String>>,
+    /// Pull requests created through the API, with their reviewers, assignees and labels.
+    pub created: Vec<Value>,
+    // --- end 4C T2 ---
     // --- GitHub commit-author avatars ---
     /// Lowercase commit-author email → the account GitHub linked it to (`None`: commits with no
     /// linked account). `/commits?author=` answers one commit for a listed email, none otherwise.
@@ -187,7 +188,7 @@ pub struct GitHubSeed {
     pub releases: Vec<releases::FakeRelease>,
     /// A release download waits this long between 64 KiB chunks (a test sees it downloading).
     pub download_chunk_delay_ms: u64,
-  }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -196,6 +197,7 @@ pub struct ForgeSeed {
     pub github: GitHubSeed,
     /// `forgejo.rs`.
     pub forgejo: forgejo::ForgejoSeed,
+    pub bitbucket: bitbucket::BitbucketSeed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,7 +250,9 @@ pub struct ForgeState {
 impl ForgeState {
     /// `(remaining, reset)` for the rate-limit headers, out of `limit`.
     pub fn rate_headers(&self, limit: u64) -> (String, String) {
-        let (remaining, reset) = self.rate.unwrap_or((limit.saturating_sub(self.served), 4_102_444_800));
+        let (remaining, reset) = self
+            .rate
+            .unwrap_or((limit.saturating_sub(self.served), 4_102_444_800));
         (remaining.to_string(), reset.to_string())
     }
 }
@@ -278,34 +282,78 @@ pub struct Reply {
 
 impl Reply {
     pub fn json(v: Value) -> Self {
-        Self { status: 200, headers: Vec::new(), body: v.to_string().into_bytes(), content_type: "application/json" }
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: v.to_string().into_bytes(),
+            content_type: "application/json",
+        }
     }
 
     pub fn status(status: u16, v: Value) -> Self {
-        Self { status, ..Self::json(v) }
+        Self {
+            status,
+            ..Self::json(v)
+        }
     }
 
     /// A 204: done, nothing to say (a DELETE).
     pub fn no_content() -> Self {
-        Self { status: 204, headers: Vec::new(), body: Vec::new(), content_type: "application/json" }
+        Self {
+            status: 204,
+            headers: Vec::new(),
+            body: Vec::new(),
+            content_type: "application/json",
+        }
     }
 
     pub fn png() -> Self {
-        Self { status: 200, headers: Vec::new(), body: FAKE_PNG.to_vec(), content_type: "image/png" }
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: FAKE_PNG.to_vec(),
+            content_type: "image/png",
+        }
     }
     /// A project upload at its web address: GitLab answers with the file's own type.
     pub fn upload(file: &str) -> Self {
-        let content_type = if file.ends_with(".webm") { "video/webm" } else if file.ends_with(".mp4") { "video/mp4" } else { "image/png" };
-        Self { status: 200, headers: Vec::new(), body: upload_bytes(file).to_vec(), content_type }
+        let content_type = if file.ends_with(".webm") {
+            "video/webm"
+        } else if file.ends_with(".mp4") {
+            "video/mp4"
+        } else {
+            "image/png"
+        };
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: upload_bytes(file).to_vec(),
+            content_type,
+        }
     }
 
     /// A file as GitLab's API sends one: an `application/octet-stream` attachment.
     pub fn attachment(name: &str, body: &[u8]) -> Self {
-        Self { status: 200, headers: Vec::new(), body: body.to_vec(), content_type: "application/octet-stream" }.header("Content-Disposition", &format!("attachment; filename=\"{name}\""))
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_vec(),
+            content_type: "application/octet-stream",
+        }
+        .header(
+            "Content-Disposition",
+            &format!("attachment; filename=\"{name}\""),
+        )
     }
 
     pub fn redirect(to: &str) -> Self {
-        Self { status: 302, headers: Vec::new(), body: Vec::new(), content_type: "text/html" }.header("Location", to)
+        Self {
+            status: 302,
+            headers: Vec::new(),
+            body: Vec::new(),
+            content_type: "text/html",
+        }
+        .header("Location", to)
     }
 
     pub fn header(mut self, k: &str, v: &str) -> Self {
@@ -316,12 +364,32 @@ impl Reply {
     /// `items` paged by the request's `per_page` (default 20) and `page` (default 1), with a
     /// `Link: <url?per_page=N&page=P+1>; rel="next"` while more remain. `url` is absolute, without a query.
     pub fn page(items: Vec<Value>, r: &FakeRequest, url: &str) -> Self {
-        let per = r.query.get("per_page").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(20);
-        let page = r.query.get("page").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(1);
+        let per = r
+            .query
+            .get("per_page")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(20);
+        let page = r
+            .query
+            .get("page")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1);
         let start = (page - 1).saturating_mul(per);
         let slice: Vec<Value> = items.iter().skip(start).take(per).cloned().collect();
         let reply = Self::json(Value::Array(slice));
-        if start.saturating_add(per) < items.len() { reply.header("Link", &format!("<{url}?per_page={per}&page={}>; rel=\"next\"", page.saturating_add(1))) } else { reply }
+        if start.saturating_add(per) < items.len() {
+            reply.header(
+                "Link",
+                &format!(
+                    "<{url}?per_page={per}&page={}>; rel=\"next\"",
+                    page.saturating_add(1)
+                ),
+            )
+        } else {
+            reply
+        }
     }
 
     /// A 200 JSON answer gets an ETag; a request that sent the same one gets a 304.
@@ -335,7 +403,12 @@ impl Reply {
         let weak = |t: &str| t.trim().trim_start_matches("W/").to_string();
         let ours = weak(&tag);
         if if_none_match.is_some_and(|h| h.trim() == "*" || h.split(',').any(|t| weak(t) == ours)) {
-            return Self { status: 304, body: Vec::new(), ..self }.header("ETag", &tag);
+            return Self {
+                status: 304,
+                body: Vec::new(),
+                ..self
+            }
+            .header("ETag", &tag);
         }
         self.header("ETag", &tag)
     }
@@ -350,7 +423,8 @@ impl IntoResponse for Reply {
         for (k, v) in &self.headers {
             b = b.header(k.as_str(), v.as_str());
         }
-        b.body(axum::body::Body::from(self.body)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        b.body(axum::body::Body::from(self.body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
     }
 }
 
@@ -362,7 +436,9 @@ fn decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%'
-            && let Some(b) = s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())
+            && let Some(b) = s
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
         {
             out.push(b);
             i += 3;
@@ -378,7 +454,14 @@ fn decode(s: &str) -> String {
 fn redact_query(q: &str) -> String {
     q.split('&')
         .map(|p| match p.split_once('=') {
-            Some((k, _)) if matches!(decode(k).as_str(), "private_token" | "access_token" | "token") => format!("{k}=***"),
+            Some((k, _))
+                if matches!(
+                    decode(k).as_str(),
+                    "private_token" | "access_token" | "token"
+                ) =>
+            {
+                format!("{k}=***")
+            }
             _ => p.to_string(),
         })
         .collect::<Vec<_>>()
@@ -386,7 +469,11 @@ fn redact_query(q: &str) -> String {
 }
 
 fn parse_query(q: &str) -> BTreeMap<String, String> {
-    q.split('&').filter(|p| !p.is_empty()).map(|p| p.split_once('=').unwrap_or((p, ""))).map(|(k, v)| (decode(&k.replace('+', " ")), decode(&v.replace('+', " ")))).collect()
+    q.split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.split_once('=').unwrap_or((p, "")))
+        .map(|(k, v)| (decode(&k.replace('+', " ")), decode(&v.replace('+', " "))))
+        .collect()
 }
 
 /// Days-old RFC 3339 times for the seed.
@@ -395,23 +482,68 @@ fn at(day: &str) -> String {
 }
 
 pub fn default_seed(base: &str) -> ForgeSeed {
-    let ada = FakeUser { id: 7, username: "ada".into(), name: "Ada Lovelace".into(), email: Some("ada@example.com".into()), avatar_url: Some(format!("{base}/gitlab/uploads/ada.png")) };
-    let grace = FakeUser { id: 8, username: "grace".into(), name: "Grace Hopper".into(), email: Some("grace@example.com".into()), avatar_url: None };
-    let octocat = FakeUser { id: 583231, username: "octocat".into(), name: "The Octocat".into(), email: Some("octocat@github.example".into()), avatar_url: Some(format!("{base}/github-avatars/u/583231")) };
-    let project = |id, path: &str, fork_of: Option<&str>, day: &str| FakeProject { id, path: path.into(), default_branch: Some("main".into()), fork_of: fork_of.map(str::to_string), updated_at: at(day), settings: Value::Null, ..Default::default() };
+    let ada = FakeUser {
+        id: 7,
+        username: "ada".into(),
+        name: "Ada Lovelace".into(),
+        email: Some("ada@example.com".into()),
+        avatar_url: Some(format!("{base}/gitlab/uploads/ada.png")),
+    };
+    let grace = FakeUser {
+        id: 8,
+        username: "grace".into(),
+        name: "Grace Hopper".into(),
+        email: Some("grace@example.com".into()),
+        avatar_url: None,
+    };
+    let octocat = FakeUser {
+        id: 583231,
+        username: "octocat".into(),
+        name: "The Octocat".into(),
+        email: Some("octocat@github.example".into()),
+        avatar_url: Some(format!("{base}/github-avatars/u/583231")),
+    };
+    let project = |id, path: &str, fork_of: Option<&str>, day: &str| FakeProject {
+        id,
+        path: path.into(),
+        default_branch: Some("main".into()),
+        fork_of: fork_of.map(str::to_string),
+        updated_at: at(day),
+        settings: Value::Null,
+        ..Default::default()
+    };
     ForgeSeed {
         gitlab: GitLabSeed {
             version: "18.9.1-ee".into(),
             tokens: vec![
-                FakeToken { token: GITLAB_TOKEN.into(), user: ada, scopes: vec!["api".into(), "read_user".into()], fine_grained: false },
-                FakeToken { token: GITLAB_READONLY_TOKEN.into(), user: grace, scopes: vec!["read_api".into()], fine_grained: false },
+                FakeToken {
+                    token: GITLAB_TOKEN.into(),
+                    user: ada,
+                    scopes: vec!["api".into(), "read_user".into()],
+                    fine_grained: false,
+                },
+                FakeToken {
+                    token: GITLAB_READONLY_TOKEN.into(),
+                    user: grace,
+                    scopes: vec!["read_api".into()],
+                    fine_grained: false,
+                },
             ],
             projects: vec![
                 project(42, "group/project", None, "2026-10-04"),
                 project(77, "alice/project", Some("group/project"), "2026-10-03"),
                 project(78, "ada/project", Some("group/project"), "2026-09-01"),
             ],
-            avatars: BTreeMap::from([("ada@example.com".to_string(), format!("{base}/gitlab/uploads/ada.png")), ("grace@example.com".to_string(), "https://secure.gravatar.com/avatar/0123".to_string())]),
+            avatars: BTreeMap::from([
+                (
+                    "ada@example.com".to_string(),
+                    format!("{base}/gitlab/uploads/ada.png"),
+                ),
+                (
+                    "grace@example.com".to_string(),
+                    "https://secure.gravatar.com/avatar/0123".to_string(),
+                ),
+            ]),
             // --- 4B T2 ---
             merge_requests: gitlab_mrs::default_mrs(),
             users: gitlab_mrs::default_users(),
@@ -423,7 +555,9 @@ pub fn default_seed(base: &str) -> ForgeSeed {
             created: Vec::new(),
             // --- end 4C T2 ---
             // --- 5A T3 ---
-            uploads: ["shot.png", "clip.webm", "screen.mp4", "screen-hevc.mp4"].map(|f| format!("group/project/{UPLOAD_SECRET}/{f}")).to_vec(),
+            uploads: ["shot.png", "clip.webm", "screen.mp4", "screen-hevc.mp4"]
+                .map(|f| format!("group/project/{UPLOAD_SECRET}/{f}"))
+                .to_vec(),
             no_uploads_api: false,
             private_uploads: false,
             old_graphql: false,
@@ -432,21 +566,39 @@ pub fn default_seed(base: &str) -> ForgeSeed {
         },
         github: GitHubSeed {
             tokens: vec![
-                FakeToken { token: GITHUB_TOKEN.into(), user: octocat.clone(), scopes: vec!["repo".into(), "read:user".into()], fine_grained: false },
-                FakeToken { token: GITHUB_FINE_TOKEN.into(), user: octocat.clone(), scopes: vec![], fine_grained: true },
-                FakeToken { token: GITHUB_READONLY_TOKEN.into(), user: octocat, scopes: vec!["read:user".into()], fine_grained: false },
+                FakeToken {
+                    token: GITHUB_TOKEN.into(),
+                    user: octocat.clone(),
+                    scopes: vec!["repo".into(), "read:user".into()],
+                    fine_grained: false,
+                },
+                FakeToken {
+                    token: GITHUB_FINE_TOKEN.into(),
+                    user: octocat.clone(),
+                    scopes: vec![],
+                    fine_grained: true,
+                },
+                FakeToken {
+                    token: GITHUB_READONLY_TOKEN.into(),
+                    user: octocat,
+                    scopes: vec!["read:user".into()],
+                    fine_grained: false,
+                },
             ],
-            repos: vec![project(501, "octo-org/widget", None, "2026-10-04"), project(502, "octocat/widget", Some("octo-org/widget"), "2026-10-02")],
-              // --- 4B T4 ---
-              pulls: github_pulls::default_pulls(),
-              users: github_pulls::default_users(),
-              // --- end 4B T4 ---
-              // --- 4C T2 ---
-              assignees: create::seed_github_assignees(base),
-              labels: create::seed_github_labels(),
-              files: BTreeMap::new(),
-              created: Vec::new(),
-              // --- end 4C T2 ---
+            repos: vec![
+                project(501, "octo-org/widget", None, "2026-10-04"),
+                project(502, "octocat/widget", Some("octo-org/widget"), "2026-10-02"),
+            ],
+            // --- 4B T4 ---
+            pulls: github_pulls::default_pulls(),
+            users: github_pulls::default_users(),
+            // --- end 4B T4 ---
+            // --- 4C T2 ---
+            assignees: create::seed_github_assignees(base),
+            labels: create::seed_github_labels(),
+            files: BTreeMap::new(),
+            created: Vec::new(),
+            // --- end 4C T2 ---
             // --- GitHub commit-author avatars ---
             commit_authors: github::seed_commit_authors(base),
             // --- end GitHub commit-author avatars ---
@@ -455,8 +607,9 @@ pub fn default_seed(base: &str) -> ForgeSeed {
             // --- end 5A T3 ---
             releases: Vec::new(),
             download_chunk_delay_ms: 0,
-          },
+        },
         forgejo: forgejo::default_seed(base),
+        bitbucket: bitbucket::default_seed(base),
     }
 }
 
@@ -475,16 +628,38 @@ pub struct FakeForge {
 
 impl FakeForge {
     pub async fn start() -> Arc<Self> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind the fake forge");
-        let base = format!("http://{}", listener.local_addr().expect("the fake forge's address"));
-        let state = Arc::new(Mutex::new(ForgeState { seed: default_seed(&base), scripts: Vec::new(), requests: Vec::new(), served: 0, delay_ms: 0, in_flight: 0, peak_in_flight: 0, gitlab_etags_off: false, rate: None }));
-        let app = Router::new().fallback(handle).with_state(Shared { state: state.clone(), base: base.clone() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the fake forge");
+        let base = format!(
+            "http://{}",
+            listener.local_addr().expect("the fake forge's address")
+        );
+        let state = Arc::new(Mutex::new(ForgeState {
+            seed: default_seed(&base),
+            scripts: Vec::new(),
+            requests: Vec::new(),
+            served: 0,
+            delay_ms: 0,
+            in_flight: 0,
+            peak_in_flight: 0,
+            gitlab_etags_off: false,
+            rate: None,
+        }));
+        let app = Router::new().fallback(handle).with_state(Shared {
+            state: state.clone(),
+            base: base.clone(),
+        });
         tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
                 tracing::error!("fake forge stopped: {e}");
             }
         });
-        Arc::new(Self { base, state, changes: Arc::default() })
+        Arc::new(Self {
+            base,
+            state,
+            changes: Arc::default(),
+        })
     }
 
     pub fn base_url(&self) -> &str {
@@ -507,6 +682,12 @@ impl FakeForge {
     }
     pub fn forgejo_api(&self) -> String {
         format!("{}/forgejo/api/v1", self.base)
+    }
+    pub fn bitbucket_web(&self) -> String {
+        format!("{}/bitbucket", self.base)
+    }
+    pub fn bitbucket_api(&self) -> String {
+        format!("{}/bitbucket/rest/api/1.0", self.base)
     }
     pub fn github_avatars(&self) -> String {
         format!("{}/github-avatars", self.base)
@@ -552,7 +733,8 @@ impl FakeForge {
     }
 
     fn changed(&self) {
-        self.changes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.changes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// For `Forge::with_change_counter`: grows whenever a test changes the fake.
@@ -637,13 +819,21 @@ impl Drop for InFlight {
     }
 }
 
-async fn handle(State(s): State<Shared>, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
+async fn handle(
+    State(s): State<Shared>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let path = uri.path().to_string();
     let query = uri.query().unwrap_or("").to_string();
     let (forge, rest) = if let Some(r) = path.strip_prefix("/gitlab") {
         ("gitlab", r)
     } else if let Some(r) = path.strip_prefix("/forgejo") {
         ("forgejo", r)
+    } else if let Some(r) = path.strip_prefix("/bitbucket") {
+        ("bitbucket", r)
     } else if let Some(r) = path.strip_prefix("/github-avatars") {
         ("github-avatars", r)
     } else if let Some(r) = path.strip_prefix("/github-releases") {
@@ -658,23 +848,47 @@ async fn handle(State(s): State<Shared>, method: Method, uri: Uri, headers: Head
     } else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let header = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let header = |n: &str| {
+        headers
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
     let (_in_flight, delay) = InFlight::start(&s.state);
     if delay > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
     }
-    let bearer = header("authorization").and_then(|a| a.strip_prefix("Bearer ").map(str::to_string));
+    let bearer =
+        header("authorization").and_then(|a| a.strip_prefix("Bearer ").map(str::to_string));
     let mut st = s.state.lock().expect("fake forge poisoned");
     let tokens = match forge {
         "gitlab" => &st.seed.gitlab.tokens,
         "forgejo" => &st.seed.forgejo.tokens,
+        "bitbucket" => &st.seed.bitbucket.tokens,
         _ => &st.seed.github.tokens,
     };
-    let token = bearer.as_deref().and_then(|b| tokens.iter().find(|t| t.token == b)).cloned();
-    st.requests.push(RecordedRequest { forge: forge.into(), method: method.to_string(), path: rest.to_string(), query: redact_query(&query), authorized: token.is_some(), if_none_match: header("if-none-match"), user_agent: header("user-agent"), status: 0 });
+    let token = bearer
+        .as_deref()
+        .and_then(|b| tokens.iter().find(|t| t.token == b))
+        .cloned();
+    st.requests.push(RecordedRequest {
+        forge: forge.into(),
+        method: method.to_string(),
+        path: rest.to_string(),
+        query: redact_query(&query),
+        authorized: token.is_some(),
+        if_none_match: header("if-none-match"),
+        user_agent: header("user-agent"),
+        status: 0,
+    });
     let logged = st.requests.len() - 1;
     st.served += 1;
-    if let Some(i) = st.scripts.iter().position(|x| x.forge == forge && x.method.eq_ignore_ascii_case(method.as_str()) && x.path == rest && x.times > 0) {
+    if let Some(i) = st.scripts.iter().position(|x| {
+        x.forge == forge
+            && x.method.eq_ignore_ascii_case(method.as_str())
+            && x.path == rest
+            && x.times > 0
+    }) {
         let x = &mut st.scripts[i];
         x.times -= 1;
         let mut reply = Reply::status(x.status, x.body.clone());
@@ -693,17 +907,35 @@ async fn handle(State(s): State<Shared>, method: Method, uri: Uri, headers: Head
             None => StatusCode::NOT_FOUND.into_response(),
         };
     }
-    let req = FakeRequest { method: method.as_str(), path: rest, segments: rest.split('/').filter(|p| !p.is_empty()).map(decode).collect(), query: parse_query(&query), token, body: &body, base: &s.base, accept: header("accept") };
+    let req = FakeRequest {
+        method: method.as_str(),
+        path: rest,
+        segments: rest
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .map(decode)
+            .collect(),
+        query: parse_query(&query),
+        token,
+        body: &body,
+        base: &s.base,
+        accept: header("accept"),
+    };
     let reply = match forge {
         "gitlab" => gitlab::route(&mut st, &req),
         "github" => github::route(&mut st, &req),
         "forgejo" => forgejo::route(&mut st, &req),
+        "bitbucket" => bitbucket::route(&mut st, &req),
         // --- 5A T3 ---
         "github-images" => github_pulls::image(&st, &req),
         "github-releases" => releases::download(&req),
         _ => github::avatar(&req),
     };
-    let reply = if forge == "gitlab" && st.gitlab_etags_off { reply } else { reply.with_etag(header("if-none-match").as_deref()) };
+    let reply = if forge == "gitlab" && st.gitlab_etags_off {
+        reply
+    } else {
+        reply.with_etag(header("if-none-match").as_deref())
+    };
     st.requests[logged].status = reply.status;
     drop(st);
     reply.into_response()
@@ -712,14 +944,20 @@ async fn handle(State(s): State<Shared>, method: Method, uri: Uri, headers: Head
 /// A release asset's bytes in 64 KiB chunks, `delay_ms` apart.
 fn stream_object(bytes: Vec<u8>, delay_ms: u64) -> Response {
     let len = bytes.len();
-    let chunks: Vec<Bytes> = bytes.chunks(64 * 1024).map(Bytes::copy_from_slice).collect();
-    let stream = futures_util::stream::unfold((chunks.into_iter(), true), move |(mut rest, first)| async move {
-        let next = rest.next()?;
-        if !first && delay_ms > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        }
-        Some((Ok::<Bytes, std::io::Error>(next), (rest, false)))
-    });
+    let chunks: Vec<Bytes> = bytes
+        .chunks(64 * 1024)
+        .map(Bytes::copy_from_slice)
+        .collect();
+    let stream = futures_util::stream::unfold(
+        (chunks.into_iter(), true),
+        move |(mut rest, first)| async move {
+            let next = rest.next()?;
+            if !first && delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            Some((Ok::<Bytes, std::io::Error>(next), (rest, false)))
+        },
+    );
     Response::builder()
         .status(200)
         .header("content-type", "application/octet-stream")

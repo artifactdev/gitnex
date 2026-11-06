@@ -7,6 +7,15 @@ const GH = { host: 'github.com', project: 'octo-org/dock', forge: 'github' } as 
 const FJ = { host: 'forgejo.example.org', project: 'harbor/dock', forge: 'forgejo' } as const;
 
 describe('classify', () => {
+  it('reads Bitbucket native pages and query refs under context paths', () => {
+    const root = 'https://code.example.com:8443/bitbucket/projects/ORBIT/repos/widget';
+    const at = { host: 'code.example.com:8443', project: 'ORBIT/widget', forge: 'bitbucket', webUrl: root };
+    expect(classify(`${root}/pull-requests/7/overview`)).toMatchObject({ kind: 'mr', number: 7, at });
+    expect(classify(`${root}/commits/${SHA}`)).toMatchObject({ kind: 'forgeCommit', sha: SHA, at });
+    expect(classify(`${root}/browse/src/a%20b.ts?at=refs%2Fheads%2Ffeat%2Fx#3-8`)).toMatchObject({ kind: 'forgeFile', refPath: ['feat/x', 'src', 'a b.ts'], lines: { start: 3, end: 8 }, at });
+    expect(classify('https://code.example.com/bitbucket/users/nova/repos/widget/pull-requests/8')).toMatchObject({ kind: 'mr', number: 8, at: { project: '~nova/widget', forge: 'bitbucket' } });
+    expect(classify('~nova/widget#8')).toMatchObject({ kind: 'mr', number: 8, project: '~nova/widget' });
+  });
   it('reads commit hashes of 7 to 40 hex characters, trimmed', () => {
     expect(classify('  3f2a9c1\n')).toEqual({ kind: 'commit', sha: '3f2a9c1', ref: '3f2a9c1', loose: false });
     expect(classify('1234567')).toMatchObject({ kind: 'commit', loose: true });

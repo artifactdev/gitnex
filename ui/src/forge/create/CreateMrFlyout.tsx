@@ -188,7 +188,8 @@ export function CreateMrFlyout({ tabId, props: { branch }, close: closeFrame }: 
   // Pushed elsewhere than the source (another remote, or the target branch itself): ask where.
   const pushElsewhere = !!pushed && (pushed.remote !== draft.sourceRemote || pushed.branch !== sourceBranch);
   const pushNote = createBlocked({ draft, sourceBranch, onRemote, sourceProject: ctx.sourceProject, targetProject: ctx.project.path });
-  const blocked = loading ? 'Loading…' : pushNote;
+  const unsupported = kind === 'bitbucket' && (draft.draft || draft.assignees.length > 0 || draft.labels.length > 0);
+  const blocked = loading ? 'Loading…' : unsupported ? 'Clear the saved draft status, assignees and labels: these options are not supported by this Bitbucket integration.' : pushNote;
   const squash = squashToggle(ctx.settings);
   const targets = (sidebar?.remotes.find((g) => g.name === draft.targetRemote)?.branches ?? []).map((b) => b.name).filter((n) => n !== 'HEAD');
   const remoteOptions = choices.map((r) => [r, r] as const);
@@ -243,7 +244,9 @@ export function CreateMrFlyout({ tabId, props: { branch }, close: closeFrame }: 
     void api.openUrl(url);
     if (withoutDescription) {
       void copyText(draft.description);
-      useToast.getState().show(`The description is too long for the link: it's on the clipboard to paste on ${forgeName(kind)}${withoutMore ? '; the labels or title were trimmed too' : ''}`);
+      useToast.getState().show(kind === 'bitbucket'
+        ? "The description is on the clipboard to paste in Bitbucket. Set the title and source repository there."
+        : `The description is too long for the link: it's on the clipboard to paste on ${forgeName(kind)}${withoutMore ? '; the labels or title were trimmed too' : ''}`);
     }
   };
   const discard = discardSaved;
@@ -309,7 +312,7 @@ export function CreateMrFlyout({ tabId, props: { branch }, close: closeFrame }: 
       )
       : null;
   const fromFirstCommit = !!ctx.firstCommit?.summary && draft.title === ctx.firstCommit.summary;
-  const createLabel = draft.draft ? `Create draft ${noun}` : `Create ${noun}`;
+  const createLabel = draft.draft && kind !== 'bitbucket' ? `Create draft ${noun}` : `Create ${noun}`;
   const heading = (
     <>
       <span className="create-mr-mark" data-kind={kind}><ForgeMark kind={kind} size={16} /></span>
@@ -333,7 +336,7 @@ export function CreateMrFlyout({ tabId, props: { branch }, close: closeFrame }: 
         <span className="create-mr-spacer" />
         <span className="create-mr-split">
           <button type="button" className="create-mr-primary" disabled={!!blocked || busy} onClick={() => { void submit(); }}>{busy ? 'Creating…' : createLabel}</button>
-          <button type="button" className="create-mr-caret" aria-label="More create options" aria-haspopup="menu" disabled={!!blocked || busy} {...pressOpener(createMenu)}><ChevronDown size={13} aria-hidden /></button>
+          {kind !== 'bitbucket' && <button type="button" className="create-mr-caret" aria-label="More create options" aria-haspopup="menu" disabled={!!blocked || busy} {...pressOpener(createMenu)}><ChevronDown size={13} aria-hidden /></button>}
         </span>
       </div>
     </div>
@@ -375,7 +378,9 @@ export function CreateMrFlyout({ tabId, props: { branch }, close: closeFrame }: 
             />
           </div>
           {/* --- end 5A T9 --- */}
-          <PeopleCard rows={people} disabled={busy} />
+          <PeopleCard rows={kind === 'bitbucket' ? people.slice(0, 1) : people} disabled={busy} />
+          {kind === 'bitbucket' && <p className="create-mr-hint">This Bitbucket integration supports reviewers, but not draft pull requests, assignees or labels.</p>}
+          {unsupported && <button type="button" className="create-mr-ghost" onClick={() => update({ ...draft, draft: false, assignees: [], labels: [] })}>Clear unsupported options</button>}
           {kind === 'gitlab' && (
             <div className="create-mr-field">
               <span className="create-mr-label">When merged</span>

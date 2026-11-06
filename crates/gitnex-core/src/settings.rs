@@ -184,7 +184,13 @@ pub struct AppSettings {
 
 /// All, All collapsed and Mine, each in the cycle.
 fn default_builtin_presets() -> Vec<gitnex_graph::PresetSlot> {
-    ["all", "all-collapsed", "mine"].into_iter().map(|id| gitnex_graph::PresetSlot { id: id.into(), in_cycle: true }).collect()
+    ["all", "all-collapsed", "mine"]
+        .into_iter()
+        .map(|id| gitnex_graph::PresetSlot {
+            id: id.into(),
+            in_cycle: true,
+        })
+        .collect()
 }
 
 /// A theme the user made (Settings › Theme): a built-in base plus the colours they set.
@@ -373,9 +379,13 @@ pub struct RecentRepo {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(export)]
 pub enum EditorChoice {
-    Opener { id: String },
+    Opener {
+        id: String,
+    },
     /// A command template with `{file}`, `{line}` and `{repo}`.
-    Custom { template: String },
+    Custom {
+        template: String,
+    },
 }
 
 /// Pinned trunk per repo (spec §8.2). Absent means `auto` (the default trunk).
@@ -518,6 +528,10 @@ pub struct Profile {
     pub ai_commit: Option<crate::ai::AiCommitSettings>,
     /// Host → forge type override (spec §14.4).
     pub host_overrides: BTreeMap<String, HostKind>,
+    /// Account-owned Bitbucket installation URLs, keyed by HTTPS authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bitbucket_bases: Option<BTreeMap<String, String>>,
     pub sidebar_width: u32,
     pub sidebar_narrow: bool,
     /// Sidebar panel id → its height in px when last resized (the weights the expanded panels share).
@@ -562,6 +576,7 @@ impl Default for Profile {
             git_email: None,
             ai_commit: None,
             host_overrides: BTreeMap::new(),
+            bitbucket_bases: Some(BTreeMap::new()),
             sidebar_width: 240,
             sidebar_narrow: false,
             sidebar_panels: BTreeMap::new(),
@@ -581,13 +596,21 @@ impl Profile {
     /// suggested `<home>/repos` when it exists. An explicit (even empty) list is left alone.
     pub fn migrate_repos_folders(&mut self, home: Option<&std::path::Path>) {
         if self.repos_folders.is_none() {
-            let first = self.repos_folder.clone().or_else(|| crate::scan::suggest_repos_folder(home));
+            let first = self
+                .repos_folder
+                .clone()
+                .or_else(|| crate::scan::suggest_repos_folder(home));
             self.repos_folders = Some(first.into_iter().collect());
         }
     }
 
     pub fn new(id: &str, name: &str, color: &str) -> Self {
-        Self { id: id.into(), name: name.into(), color: color.into(), ..Default::default() }
+        Self {
+            id: id.into(),
+            name: name.into(),
+            color: color.into(),
+            ..Default::default()
+        }
     }
 }
 
@@ -609,7 +632,13 @@ pub struct ProfileMeta {
 
 impl From<&Profile> for ProfileMeta {
     fn from(p: &Profile) -> Self {
-        Self { id: p.id.clone(), name: p.name.clone(), color: p.color.clone(), git_name: p.git_name.clone(), git_email: p.git_email.clone() }
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            color: p.color.clone(),
+            git_name: p.git_name.clone(),
+            git_email: p.git_email.clone(),
+        }
     }
 }
 
@@ -638,18 +667,29 @@ struct Inner {
 
 impl Inner {
     fn fresh() -> Self {
-        let mut inner = Inner { dirty_settings: true, ..Default::default() };
+        let mut inner = Inner {
+            dirty_settings: true,
+            ..Default::default()
+        };
         inner.ensure_default();
         inner
     }
 
     fn ensure_default(&mut self) {
         if self.profiles.is_empty() {
-            self.profiles.insert(DEFAULT_PROFILE_ID.into(), Profile::new(DEFAULT_PROFILE_ID, "Default", "#4d88ff"));
+            self.profiles.insert(
+                DEFAULT_PROFILE_ID.into(),
+                Profile::new(DEFAULT_PROFILE_ID, "Default", "#4d88ff"),
+            );
             self.dirty_profiles.insert(DEFAULT_PROFILE_ID.into());
         }
         if !self.profiles.contains_key(&self.settings.active_profile) {
-            self.settings.active_profile = self.profiles.keys().next().cloned().expect("at least one profile");
+            self.settings.active_profile = self
+                .profiles
+                .keys()
+                .next()
+                .cloned()
+                .expect("at least one profile");
             self.dirty_settings = true;
         }
     }
@@ -674,15 +714,25 @@ pub struct SettingsStore {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Renames an unusable file to `<name>.<tag>-<unix>` so the user's data is never lost.
 fn set_aside(path: &Path, tag: &str) {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let dest = path.with_file_name(format!("{name}.{tag}-{}", now_secs()));
     match std::fs::rename(path, &dest) {
-        Ok(()) => tracing::warn!("set aside unusable settings file {} as {}", path.display(), dest.display()),
+        Ok(()) => tracing::warn!(
+            "set aside unusable settings file {} as {}",
+            path.display(),
+            dest.display()
+        ),
         Err(e) => tracing::warn!("could not set aside {}: {e}", path.display()),
     }
 }
@@ -701,7 +751,10 @@ fn load_json<T: DeserializeOwned>(path: &Path, supported: u32) -> Loaded<T> {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
         Err(e) => {
-            tracing::warn!("cannot read {}: {e}; using defaults and leaving it untouched until restart", path.display());
+            tracing::warn!(
+                "cannot read {}: {e}; using defaults and leaving it untouched until restart",
+                path.display()
+            );
             return Loaded::Unreadable;
         }
     };
@@ -727,14 +780,24 @@ fn load_json<T: DeserializeOwned>(path: &Path, supported: u32) -> Loaded<T> {
 }
 
 fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), GbError> {
-    let dir = path.parent().ok_or_else(|| GbError::other("settings path has no parent"))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| GbError::other("settings path has no parent"))?;
     std::fs::create_dir_all(dir)?;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     // A unique name per write (pid + counter): two instances (or two stores) on one directory
     // never share a temp inode, so a rename always installs one writer's complete JSON.
     static SEQ: AtomicU32 = AtomicU32::new(0);
-    let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
-    let json = serde_json::to_vec_pretty(value).map_err(|e| GbError::other(format!("serialize settings: {e}")))?;
+    let tmp = dir.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let json = serde_json::to_vec_pretty(value)
+        .map_err(|e| GbError::other(format!("serialize settings: {e}")))?;
     let written = (|| -> Result<(), GbError> {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(&json)?;
@@ -761,7 +824,11 @@ fn slug(name: &str) -> String {
         }
     }
     let out: String = out.trim_end_matches('-').chars().take(24).collect();
-    if out.is_empty() { "profile".into() } else { out }
+    if out.is_empty() {
+        "profile".into()
+    } else {
+        out
+    }
 }
 
 fn trim_profile(p: &mut Profile) {
@@ -776,7 +843,13 @@ fn trim_profile(p: &mut Profile) {
     if p.recent.len() > MAX_RECENT {
         let pinned: Vec<RecentRepo> = p.recent.iter().filter(|r| r.pinned).cloned().collect();
         let room = MAX_RECENT.saturating_sub(pinned.len());
-        let mut kept: Vec<RecentRepo> = p.recent.iter().filter(|r| !r.pinned).take(room).cloned().collect();
+        let mut kept: Vec<RecentRepo> = p
+            .recent
+            .iter()
+            .filter(|r| !r.pinned)
+            .take(room)
+            .cloned()
+            .collect();
         kept.extend(pinned);
         kept.sort_by_key(|r| std::cmp::Reverse(r.opened_at));
         p.recent = kept;
@@ -785,7 +858,12 @@ fn trim_profile(p: &mut Profile) {
 
 impl SettingsStore {
     fn with(root: Option<PathBuf>, inner: Inner) -> Arc<Self> {
-        Arc::new(Self { root, inner: Mutex::new(inner), writing: Mutex::new(()), save_failures: AtomicU32::new(0) })
+        Arc::new(Self {
+            root,
+            inner: Mutex::new(inner),
+            writing: Mutex::new(()),
+            save_failures: AtomicU32::new(0),
+        })
     }
 
     /// Never touches the disk (the default for `Api::new`).
@@ -795,18 +873,29 @@ impl SettingsStore {
 
     pub fn open(root: impl Into<PathBuf>) -> Arc<Self> {
         let root = root.into();
-        let mut inner = match load_json::<AppSettings>(&root.join("settings.json"), SETTINGS_VERSION) {
-            Loaded::Found(mut settings) => {
-                let migrate = settings.version < SETTINGS_VERSION;
-                if migrate {
-                    settings.push_follow_tags = true;
-                    settings.version = SETTINGS_VERSION;
+        let mut inner =
+            match load_json::<AppSettings>(&root.join("settings.json"), SETTINGS_VERSION) {
+                Loaded::Found(mut settings) => {
+                    let migrate = settings.version < SETTINGS_VERSION;
+                    if migrate {
+                        settings.push_follow_tags = true;
+                        settings.version = SETTINGS_VERSION;
+                    }
+                    Inner {
+                        settings,
+                        dirty_settings: migrate,
+                        ..Default::default()
+                    }
                 }
-                Inner { settings, dirty_settings: migrate, ..Default::default() }
-            }
-            Loaded::Absent => Inner { dirty_settings: true, ..Default::default() },
-            Loaded::Unreadable => Inner { settings_locked: true, ..Default::default() },
-        };
+                Loaded::Absent => Inner {
+                    dirty_settings: true,
+                    ..Default::default()
+                },
+                Loaded::Unreadable => Inner {
+                    settings_locked: true,
+                    ..Default::default()
+                },
+            };
         if let Ok(dir) = std::fs::read_dir(root.join("profiles")) {
             for entry in dir.flatten() {
                 // The directory name is the id; trust it over the file's content.
@@ -885,10 +974,29 @@ impl SettingsStore {
         {
             let mut g = self.lock();
             if !g.profiles.contains_key(&profile.id) {
-                return Err(GbError::new(GbErrorKind::InvalidInput, format!("unknown profile {}", profile.id)));
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("unknown profile {}", profile.id),
+                ));
             }
             // --- 4A T5: the store's accounts, not the UI's copy ---
-            profile.forge_accounts = g.profiles.get(&profile.id).map(|p| p.forge_accounts.clone()).unwrap_or_default();
+            profile.forge_accounts = g
+                .profiles
+                .get(&profile.id)
+                .map(|p| p.forge_accounts.clone())
+                .unwrap_or_default();
+            profile.bitbucket_bases = g
+                .profiles
+                .get(&profile.id)
+                .and_then(|p| p.bitbucket_bases.clone());
+            if let Some(bases) = &profile.bitbucket_bases {
+                for host in bases.keys() {
+                    profile
+                        .host_overrides
+                        .entry(host.clone())
+                        .or_insert(HostKind::Bitbucket);
+                }
+            }
             // --- end 4A T5 ---
             g.dirty_profiles.insert(profile.id.clone());
             g.profiles.insert(profile.id.clone(), profile);
@@ -897,7 +1005,11 @@ impl SettingsStore {
         Ok(())
     }
 
-    pub fn create_profile(self: &Arc<Self>, name: &str, color: &str) -> Result<ProfileMeta, GbError> {
+    pub fn create_profile(
+        self: &Arc<Self>,
+        name: &str,
+        color: &str,
+    ) -> Result<ProfileMeta, GbError> {
         // An empty name is allowed: the switcher then shows just the profile's colour.
         let name = name.trim();
         let id = format!("{}-{}", slug(name), random_hex(3));
@@ -917,7 +1029,10 @@ impl SettingsStore {
         let state = {
             let mut g = self.lock();
             if !g.profiles.contains_key(id) {
-                return Err(GbError::new(GbErrorKind::InvalidInput, format!("unknown profile {id}")));
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("unknown profile {id}"),
+                ));
             }
             g.settings.active_profile = id.to_string();
             g.dirty_settings = true;
@@ -931,10 +1046,16 @@ impl SettingsStore {
         let left = {
             let mut g = self.lock();
             if g.settings.active_profile == id {
-                return Err(GbError::new(GbErrorKind::InvalidInput, "Switch to another profile before deleting this one"));
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    "Switch to another profile before deleting this one",
+                ));
             }
             if g.profiles.len() <= 1 || !g.profiles.contains_key(id) {
-                return Err(GbError::new(GbErrorKind::InvalidInput, "That profile can't be deleted"));
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    "That profile can't be deleted",
+                ));
             }
             g.profiles.remove(id);
             g.dirty_profiles.remove(id);
@@ -952,21 +1073,54 @@ impl SettingsStore {
     }
 
     pub fn forge_accounts(&self, profile: &str) -> Vec<crate::forge::accounts::ForgeAccount> {
-        self.lock().profiles.get(profile).map(|p| p.forge_accounts.clone()).unwrap_or_default()
+        self.lock()
+            .profiles
+            .get(profile)
+            .map(|p| p.forge_accounts.clone())
+            .unwrap_or_default()
     }
 
-    pub fn set_forge_accounts(self: &Arc<Self>, profile: &str, accounts: Vec<crate::forge::accounts::ForgeAccount>) -> Result<(), GbError> {
+    pub fn set_forge_accounts(
+        self: &Arc<Self>,
+        profile: &str,
+        accounts: Vec<crate::forge::accounts::ForgeAccount>,
+    ) -> Result<(), GbError> {
         self.update_forge_accounts(profile, |a| *a = accounts)
     }
 
     /// Reads, changes and schedules the save of `profile`'s accounts under one lock: two
     /// changes at once both land. `change` runs under the store's lock, so it mustn't call the
     /// store.
-    pub fn update_forge_accounts<R>(self: &Arc<Self>, profile: &str, change: impl FnOnce(&mut Vec<crate::forge::accounts::ForgeAccount>) -> R) -> Result<R, GbError> {
+    pub fn update_forge_accounts<R>(
+        self: &Arc<Self>,
+        profile: &str,
+        change: impl FnOnce(&mut Vec<crate::forge::accounts::ForgeAccount>) -> R,
+    ) -> Result<R, GbError> {
         let r = {
             let mut g = self.lock();
-            let p = g.profiles.get_mut(profile).ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, format!("unknown profile {profile}")))?;
+            let p = g.profiles.get_mut(profile).ok_or_else(|| {
+                GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("unknown profile {profile}"),
+                )
+            })?;
             let r = change(&mut p.forge_accounts);
+            let bases: BTreeMap<_, _> = p
+                .forge_accounts
+                .iter()
+                .filter(|a| a.kind == crate::forge::ForgeKind::Bitbucket)
+                .filter_map(|a| {
+                    a.base_url
+                        .as_ref()
+                        .map(|base| (a.host.clone(), base.clone()))
+                })
+                .collect();
+            for host in bases.keys() {
+                p.host_overrides
+                    .entry(host.clone())
+                    .or_insert(HostKind::Bitbucket);
+            }
+            p.bitbucket_bases = Some(bases);
             g.dirty_profiles.insert(profile.to_string());
             r
         };
@@ -999,13 +1153,24 @@ impl SettingsStore {
         let (settings, profiles, deleted) = {
             let mut g = self.lock();
             g.flush_scheduled = false;
-            let settings = std::mem::take(&mut g.dirty_settings).then(|| g.settings.clone()).filter(|_| !g.settings_locked);
+            let settings = std::mem::take(&mut g.dirty_settings)
+                .then(|| g.settings.clone())
+                .filter(|_| !g.settings_locked);
             let ids = std::mem::take(&mut g.dirty_profiles);
-            let profiles: Vec<Profile> = ids.iter().filter(|id| !g.locked_profiles.contains(*id)).filter_map(|id| g.profiles.get(id).cloned()).collect();
-            let deleted: BTreeSet<String> = std::mem::take(&mut g.deleted).into_iter().filter(|id| !g.locked_profiles.contains(id)).collect();
+            let profiles: Vec<Profile> = ids
+                .iter()
+                .filter(|id| !g.locked_profiles.contains(*id))
+                .filter_map(|id| g.profiles.get(id).cloned())
+                .collect();
+            let deleted: BTreeSet<String> = std::mem::take(&mut g.deleted)
+                .into_iter()
+                .filter(|id| !g.locked_profiles.contains(id))
+                .collect();
             (settings, profiles, deleted)
         };
-        let Some(root) = &self.root else { return Ok(()) };
+        let Some(root) = &self.root else {
+            return Ok(());
+        };
         let mut first_err = None;
         if let Some(s) = settings
             && let Err(e) = write_atomic(&root.join("settings.json"), &s)
@@ -1014,7 +1179,9 @@ impl SettingsStore {
             first_err.get_or_insert(e);
         }
         for p in profiles {
-            if let Err(e) = write_atomic(&root.join("profiles").join(&p.id).join("profile.json"), &p) {
+            if let Err(e) =
+                write_atomic(&root.join("profiles").join(&p.id).join("profile.json"), &p)
+            {
                 self.lock().dirty_profiles.insert(p.id.clone());
                 first_err.get_or_insert(e);
             }
@@ -1069,17 +1236,20 @@ impl SettingsStore {
                     tokio::time::sleep(delay).await;
                     // Blocking file I/O (fsync): off the async workers.
                     let flusher = me.clone();
-                    let failed = match tokio::task::spawn_blocking(move || flusher.flush_now()).await {
-                        Ok(Ok(())) => return,
-                        Ok(Err(e)) => e.to_string(),
-                        Err(e) => e.to_string(),
-                    };
+                    let failed =
+                        match tokio::task::spawn_blocking(move || flusher.flush_now()).await {
+                            Ok(Ok(())) => return,
+                            Ok(Err(e)) => e.to_string(),
+                            Err(e) => e.to_string(),
+                        };
                     if attempt < MAX_SAVE_RETRIES {
                         let next = retry_delay(attempt);
                         tracing::warn!("saving settings failed: {failed}; retrying in {next:?}");
                         me.schedule_in(next, attempt + 1);
                     } else {
-                        tracing::warn!("saving settings failed: {failed}; giving up until the next change");
+                        tracing::warn!(
+                            "saving settings failed: {failed}; giving up until the next change"
+                        );
                     }
                 });
             }
@@ -1099,9 +1269,15 @@ mod tests {
 
     #[test]
     fn a_tab_keeps_its_active_worktree_and_old_tabs_have_none() {
-        let t: TabState = serde_json::from_value(serde_json::json!({"id": "t", "kind": "repo", "path": "/r", "alias": null})).unwrap();
+        let t: TabState = serde_json::from_value(
+            serde_json::json!({"id": "t", "kind": "repo", "path": "/r", "alias": null}),
+        )
+        .unwrap();
         assert_eq!(t.worktree, None);
-        let t = TabState { worktree: Some("/r-x".into()), ..t };
+        let t = TabState {
+            worktree: Some("/r-x".into()),
+            ..t
+        };
         assert_eq!(serde_json::to_value(&t).unwrap()["worktree"], "/r-x");
     }
 
@@ -1120,7 +1296,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::open(dir.path());
         let mut p = store.active_profile();
-        let scope = FileScope { id: "s1".into(), name: "Tests".into(), tint: "green".into(), patterns: vec!["**/tests/**".into(), "!**/tests/fixtures/**".into()], start_collapsed: true };
+        let scope = FileScope {
+            id: "s1".into(),
+            name: "Tests".into(),
+            tint: "green".into(),
+            patterns: vec!["**/tests/**".into(), "!**/tests/fixtures/**".into()],
+            start_collapsed: true,
+        };
         p.file_colours.insert("/r/.git".into(), vec![scope.clone()]);
         store.save_profile(p).unwrap();
         store.flush_now().unwrap();
@@ -1141,13 +1323,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::open(dir.path());
         let mut p = store.active_profile();
-        p.tabs = ["t1", "t2"].iter().map(|id| TabState { id: (*id).into(), path: Some(format!("/r/{id}")), ..Default::default() }).collect();
-        p.tab_groups = vec![TabGroup { id: "g1".into(), name: "Backend".into(), color: "blue".into(), collapsed: true, tabs: vec!["t1".into(), "t2".into()] }];
+        p.tabs = ["t1", "t2"]
+            .iter()
+            .map(|id| TabState {
+                id: (*id).into(),
+                path: Some(format!("/r/{id}")),
+                ..Default::default()
+            })
+            .collect();
+        p.tab_groups = vec![TabGroup {
+            id: "g1".into(),
+            name: "Backend".into(),
+            color: "blue".into(),
+            collapsed: true,
+            tabs: vec!["t1".into(), "t2".into()],
+        }];
         p.saved_groups = vec![SavedTabGroup {
             id: "g2".into(),
             name: String::new(),
             color: "red".into(),
-            tabs: vec![SavedTab { path: "/r/a".into(), alias: Some("A".into()), worktree: None }],
+            tabs: vec![SavedTab {
+                path: "/r/a".into(),
+                alias: Some("A".into()),
+                worktree: None,
+            }],
         }];
         store.save_profile(p.clone()).unwrap();
         store.flush_now().unwrap();
@@ -1163,7 +1362,11 @@ mod tests {
     fn debug_logging_defaults_off_for_older_files() {
         let mut v = serde_json::to_value(AppSettings::default()).unwrap();
         v.as_object_mut().unwrap().remove("debugLogging");
-        assert!(!serde_json::from_value::<AppSettings>(v).unwrap().debug_logging);
+        assert!(
+            !serde_json::from_value::<AppSettings>(v)
+                .unwrap()
+                .debug_logging
+        );
     }
 
     fn read(p: &Path) -> serde_json::Value {
@@ -1194,7 +1397,8 @@ mod tests {
             std::thread::spawn(move || {
                 for _ in 0..400 {
                     if let Ok(bytes) = std::fs::read(&path) {
-                        serde_json::from_slice::<serde_json::Value>(&bytes).expect("settings.json is always valid JSON");
+                        serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .expect("settings.json is always valid JSON");
                     }
                 }
             })
@@ -1204,8 +1408,15 @@ mod tests {
         }
         reader.join().unwrap();
         read(&path);
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
-        assert!(leftovers.is_empty(), "no temp file is left behind: {leftovers:?}");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp file is left behind: {leftovers:?}"
+        );
     }
 
     #[test]
@@ -1218,7 +1429,10 @@ mod tests {
         assert_eq!(st.settings.active_profile, DEFAULT_PROFILE_ID);
         assert_eq!(st.settings.fetch_interval_secs, 60);
         assert_eq!(st.settings.commit_limit, 2000);
-        assert_eq!(st.settings.commit_limit as usize, crate::snapshot::DEFAULT_COMMIT_LIMIT);
+        assert_eq!(
+            st.settings.commit_limit as usize,
+            crate::snapshot::DEFAULT_COMMIT_LIMIT
+        );
         assert!(st.settings.prune);
     }
 
@@ -1229,7 +1443,13 @@ mod tests {
             width: 1400.0,
             height: 860.0,
             maximized: true,
-            monitor: Some(MonitorIdentity { name: Some("DP-1".into()), x: 1920.0, y: 0.0, width: 2560.0, height: 1440.0 }),
+            monitor: Some(MonitorIdentity {
+                name: Some("DP-1".into()),
+                x: 1920.0,
+                y: 0.0,
+                width: 2560.0,
+                height: 1440.0,
+            }),
         }
     }
 
@@ -1252,11 +1472,22 @@ mod tests {
         let json = read(&dir.path().join("settings.json"));
         assert_eq!(json["window"]["width"], 1400.0);
         assert_eq!(json["window"]["monitor"]["name"], "DP-1");
-        assert_eq!(SettingsStore::open(dir.path()).state().settings.window, Some(geometry()));
+        assert_eq!(
+            SettingsStore::open(dir.path()).state().settings.window,
+            Some(geometry())
+        );
 
         // Wayland: no position, no monitor name; partial objects fill in from defaults.
-        let partial: WindowGeometry = serde_json::from_str(r#"{"width":900,"height":600}"#).unwrap();
-        assert_eq!(partial, WindowGeometry { width: 900.0, height: 600.0, ..Default::default() });
+        let partial: WindowGeometry =
+            serde_json::from_str(r#"{"width":900,"height":600}"#).unwrap();
+        assert_eq!(
+            partial,
+            WindowGeometry {
+                width: 900.0,
+                height: 600.0,
+                ..Default::default()
+            }
+        );
     }
 
     /// The UI's settings carry the geometry it loaded at startup; saving them must not undo a
@@ -1286,7 +1517,22 @@ mod tests {
         p.right_panel_width = Some(420);
         p.git_name = Some("Ada Lovelace".into());
         p.git_email = Some("ada@example.com".into());
-        p.repos.insert("/r".into(), RepoSettings { columns: Some(ColumnPrefsDto { labels: 200, graph: None, author: 160, date: 170, sha: 90, message: Some(333) }), branch_update: Some(crate::forge::BranchUpdate::Merge), forge_account: Some("gitlab.example.com#42".into()), ..Default::default() });
+        p.repos.insert(
+            "/r".into(),
+            RepoSettings {
+                columns: Some(ColumnPrefsDto {
+                    labels: 200,
+                    graph: None,
+                    author: 160,
+                    date: 170,
+                    sha: 90,
+                    message: Some(333),
+                }),
+                branch_update: Some(crate::forge::BranchUpdate::Merge),
+                forge_account: Some("gitlab.example.com#42".into()),
+                ..Default::default()
+            },
+        );
         p.repos.insert("/s".into(), RepoSettings::default());
         store.save_profile(p).unwrap();
         store.flush_now().unwrap();
@@ -1301,17 +1547,46 @@ mod tests {
         assert_eq!(profile["repos"]["/r"]["columns"]["sha"], 90);
         assert_eq!(profile["repos"]["/r"]["columns"]["message"], 333);
         assert_eq!(profile["repos"]["/r"]["branchUpdate"], "merge");
-        assert_eq!(profile["repos"]["/r"]["forgeAccount"], "gitlab.example.com#42");
-        assert_eq!(profile["repos"]["/s"].get("branchUpdate"), None, "none chosen: not written");
-        assert_eq!(profile["repos"]["/s"].get("forgeAccount"), None, "automatic: not written");
+        assert_eq!(
+            profile["repos"]["/r"]["forgeAccount"],
+            "gitlab.example.com#42"
+        );
+        assert_eq!(
+            profile["repos"]["/s"].get("branchUpdate"),
+            None,
+            "none chosen: not written"
+        );
+        assert_eq!(
+            profile["repos"]["/s"].get("forgeAccount"),
+            None,
+            "automatic: not written"
+        );
         let again = SettingsStore::open(dir.path()).state();
         assert_eq!(again.settings.commit_limit, 500);
         assert_eq!(again.profile.repos_folder.as_deref(), Some("/home/u/repos"));
         assert_eq!(again.profile.right_panel_width, Some(420));
-        assert_eq!((again.profile.git_name.as_deref(), again.profile.git_email.as_deref()), (Some("Ada Lovelace"), Some("ada@example.com")));
-        assert_eq!(again.profile.repos["/r"].columns.as_ref().unwrap().sha, 90, "a saved SHA width survives a reload");
-        assert_eq!(again.profile.repos["/r"].branch_update, Some(crate::forge::BranchUpdate::Merge), "the merge panel's last update way survives a reload");
-        assert_eq!(again.profile.repos["/r"].forge_account.as_deref(), Some("gitlab.example.com#42"), "the repository's forge account survives a reload");
+        assert_eq!(
+            (
+                again.profile.git_name.as_deref(),
+                again.profile.git_email.as_deref()
+            ),
+            (Some("Ada Lovelace"), Some("ada@example.com"))
+        );
+        assert_eq!(
+            again.profile.repos["/r"].columns.as_ref().unwrap().sha,
+            90,
+            "a saved SHA width survives a reload"
+        );
+        assert_eq!(
+            again.profile.repos["/r"].branch_update,
+            Some(crate::forge::BranchUpdate::Merge),
+            "the merge panel's last update way survives a reload"
+        );
+        assert_eq!(
+            again.profile.repos["/r"].forge_account.as_deref(),
+            Some("gitlab.example.com#42"),
+            "the repository's forge account survives a reload"
+        );
     }
 
     #[test]
@@ -1321,22 +1596,49 @@ mod tests {
         std::fs::create_dir(home.path().join("repos")).unwrap();
         let store = SettingsStore::open(dir.path());
         let mut p = store.active_profile();
-        assert_eq!(p.repos_folders, None, "an existing profile has no folders yet");
+        assert_eq!(
+            p.repos_folders, None,
+            "an existing profile has no folders yet"
+        );
         p.migrate_repos_folders(Some(home.path()));
-        assert_eq!(p.repos_folders, Some(vec![home.path().join("repos").display().to_string()]));
+        assert_eq!(
+            p.repos_folders,
+            Some(vec![home.path().join("repos").display().to_string()])
+        );
         p.repos_folders = Some(vec!["/a".into(), "/b".into()]);
         p.migrate_repos_folders(Some(home.path()));
-        assert_eq!(p.repos_folders.as_deref(), Some(&["/a".to_string(), "/b".to_string()][..]), "set lists are kept");
+        assert_eq!(
+            p.repos_folders.as_deref(),
+            Some(&["/a".to_string(), "/b".to_string()][..]),
+            "set lists are kept"
+        );
         p.repos_folders = Some(vec![]);
         p.migrate_repos_folders(Some(home.path()));
-        assert_eq!(p.repos_folders, Some(vec![]), "a deliberately emptied list stays empty");
+        assert_eq!(
+            p.repos_folders,
+            Some(vec![]),
+            "a deliberately emptied list stays empty"
+        );
         p.repos_folders = Some(vec!["/a".into(), "/b".into()]);
         store.save_profile(p).unwrap();
         store.flush_now().unwrap();
-        assert_eq!(SettingsStore::open(dir.path()).state().profile.repos_folders, Some(vec!["/a".into(), "/b".into()]));
-        let mut q = Profile { repos_folder: Some("/clone".into()), ..Default::default() };
+        assert_eq!(
+            SettingsStore::open(dir.path())
+                .state()
+                .profile
+                .repos_folders,
+            Some(vec!["/a".into(), "/b".into()])
+        );
+        let mut q = Profile {
+            repos_folder: Some("/clone".into()),
+            ..Default::default()
+        };
         q.migrate_repos_folders(Some(home.path()));
-        assert_eq!(q.repos_folders, Some(vec!["/clone".into()]), "the default clone folder wins");
+        assert_eq!(
+            q.repos_folders,
+            Some(vec!["/clone".into()]),
+            "the default clone folder wins"
+        );
         let mut none = Profile::default();
         none.migrate_repos_folders(None);
         assert_eq!(none.repos_folders, Some(vec![]));
@@ -1351,7 +1653,10 @@ mod tests {
         store.save_settings(s.clone());
         s.commit_limit = 130;
         store.save_settings(s);
-        assert!(!dir.path().join("settings.json").exists(), "nothing written before the debounce elapses");
+        assert!(
+            !dir.path().join("settings.json").exists(),
+            "nothing written before the debounce elapses"
+        );
         // A sleep, not `advance`: the paused clock jumps to each pending timer in turn, so the
         // store's debounce timer (armed when its task first runs) fires first.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1375,8 +1680,17 @@ mod tests {
         std::fs::write(dir.path().join("settings.json"), b"{ not json").unwrap();
         let st = SettingsStore::open(dir.path()).state();
         assert_eq!(st.settings.commit_limit, 2000);
-        let aside: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("settings.json.corrupt-")).collect();
-        assert_eq!(aside.len(), 1, "the unreadable file is kept, not overwritten");
+        let aside: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("settings.json.corrupt-"))
+            .collect();
+        assert_eq!(
+            aside.len(),
+            1,
+            "the unreadable file is kept, not overwritten"
+        );
     }
 
     #[test]
@@ -1397,10 +1711,17 @@ mod tests {
         });
         std::fs::write(pdir.join("profile.json"), serde_json::to_vec(&old).unwrap()).unwrap();
         let store = SettingsStore::open(dir.path());
-        let ids: Vec<String> = store.forge_accounts(DEFAULT_PROFILE_ID).into_iter().map(|a| a.id).collect();
+        let ids: Vec<String> = store
+            .forge_accounts(DEFAULT_PROFILE_ID)
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
         assert_eq!(ids, ["gitlab.example.com", "gitlab.example.com#8"]);
         store.flush_now().unwrap();
-        assert_eq!(read(&pdir.join("profile.json"))["forgeAccounts"][1]["id"], "gitlab.example.com#8");
+        assert_eq!(
+            read(&pdir.join("profile.json"))["forgeAccounts"][1]["id"],
+            "gitlab.example.com#8"
+        );
     }
 
     #[test]
@@ -1408,10 +1729,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pdir = dir.path().join("profiles/default");
         std::fs::create_dir_all(&pdir).unwrap();
-        std::fs::write(pdir.join("profile.json"), br#"{"version": 1, "tabs": "not a list"}"#).unwrap();
+        std::fs::write(
+            pdir.join("profile.json"),
+            br#"{"version": 1, "tabs": "not a list"}"#,
+        )
+        .unwrap();
         let st = SettingsStore::open(dir.path()).state();
         assert_eq!(st.profile.id, DEFAULT_PROFILE_ID);
-        assert!(std::fs::read_dir(&pdir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("profile.json.corrupt-")));
+        assert!(std::fs::read_dir(&pdir).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("profile.json.corrupt-")
+        }));
     }
 
     /// A file that exists but can't be read (EACCES here; EIO alike) is never written over: the
@@ -1436,7 +1765,10 @@ mod tests {
         }
         let store = SettingsStore::open(dir.path());
         let st = store.state();
-        assert_eq!(st.settings.commit_limit, 2000, "defaults stand in for the unreadable file");
+        assert_eq!(
+            st.settings.commit_limit, 2000,
+            "defaults stand in for the unreadable file"
+        );
         let mut s = st.settings;
         s.commit_limit = 700;
         store.save_settings(s);
@@ -1446,10 +1778,29 @@ mod tests {
         store.flush_now().unwrap();
         lock(&settings, 0o644);
         lock(&profile, 0o644);
-        assert_eq!(read(&settings)["commitLimit"], 500, "the user's settings file is untouched");
-        assert_eq!(read(&profile)["name"], "Mine", "the user's profile file is untouched");
-        let names: Vec<String> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        assert_eq!(names.iter().filter(|n| n.starts_with("settings.json")).count(), 1, "{names:?}");
+        assert_eq!(
+            read(&settings)["commitLimit"],
+            500,
+            "the user's settings file is untouched"
+        );
+        assert_eq!(
+            read(&profile)["name"],
+            "Mine",
+            "the user's profile file is untouched"
+        );
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.starts_with("settings.json"))
+                .count(),
+            1,
+            "{names:?}"
+        );
     }
 
     /// A failed flush retries by itself, backing off, and gives up after `MAX_SAVE_RETRIES`
@@ -1508,13 +1859,18 @@ mod tests {
     fn old_settings_get_push_tags_turned_on_once_and_saved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, br#"{"version": 1, "commitLimit": 500, "pushFollowTags": false}"#).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"version": 1, "commitLimit": 500, "pushFollowTags": false}"#,
+        )
+        .unwrap();
         let store = SettingsStore::open(dir.path());
         let st = store.state();
         assert!(st.settings.push_follow_tags);
         assert_eq!(st.settings.commit_limit, 500);
         store.flush_now().unwrap();
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["version"], 2);
         assert_eq!(saved["pushFollowTags"], true);
     }
@@ -1522,17 +1878,34 @@ mod tests {
     #[test]
     fn current_version_keeps_push_tags_off() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("settings.json"), br#"{"version": 2, "pushFollowTags": false}"#).unwrap();
-        assert!(!SettingsStore::open(dir.path()).state().settings.push_follow_tags);
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version": 2, "pushFollowTags": false}"#,
+        )
+        .unwrap();
+        assert!(
+            !SettingsStore::open(dir.path())
+                .state()
+                .settings
+                .push_follow_tags
+        );
     }
 
     #[test]
     fn newer_version_is_set_aside() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("settings.json"), br#"{"version": 99, "commitLimit": 500}"#).unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version": 99, "commitLimit": 500}"#,
+        )
+        .unwrap();
         let st = SettingsStore::open(dir.path()).state();
         assert_eq!(st.settings.commit_limit, 2000);
-        assert!(std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("settings.json.v99-")));
+        assert!(std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("settings.json.v99-")
+        }));
     }
 
     #[test]
@@ -1540,7 +1913,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // `zoom` and `diffMode` are unknown here: those view preferences stay in the UI's
         // localStorage (ruling R4).
-        std::fs::write(dir.path().join("settings.json"), br#"{"version": 1, "commitLimit": 500, "zoom": 150, "someFutureField": true}"#).unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            br#"{"version": 1, "commitLimit": 500, "zoom": 150, "someFutureField": true}"#,
+        )
+        .unwrap();
         let st = SettingsStore::open(dir.path()).state();
         assert_eq!(st.settings.commit_limit, 500);
         assert_eq!(st.settings.theme, "default-dark");
@@ -1555,16 +1932,21 @@ mod tests {
         assert_eq!(s.theme, "default-dark");
 
         let mut s = AppSettings::default();
-        s.graph_color_overrides.insert("nord".into(), vec![Some("#123456".into()), None]);
+        s.graph_color_overrides
+            .insert("nord".into(), vec![Some("#123456".into()), None]);
         let back: AppSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-        assert_eq!(back.graph_color_overrides["nord"], vec![Some("#123456".to_string()), None]);
+        assert_eq!(
+            back.graph_color_overrides["nord"],
+            vec![Some("#123456".to_string()), None]
+        );
     }
 
     /// A settings file from before the editor display settings loads with their defaults; set,
     /// they round-trip under their camelCase names.
     #[test]
     fn editor_settings_default_for_older_files_and_round_trip() {
-        let old = r#"{"version":2,"activeProfile":"default","theme":"default-dark","editorFontSize":15}"#;
+        let old =
+            r#"{"version":2,"activeProfile":"default","theme":"default-dark","editorFontSize":15}"#;
         let s: AppSettings = serde_json::from_str(old).unwrap();
         assert_eq!(s.editor_font_size, 15);
         assert_eq!(s.editor_font_family, "");
@@ -1574,7 +1956,13 @@ mod tests {
         assert_eq!(s.editor_whitespace, EditorWhitespace::None);
         assert!(s.editor_minimap);
         assert!(!s.editor_sticky_scroll);
-        assert_eq!(AppSettings { editor_font_size: 13, ..s }, AppSettings::default());
+        assert_eq!(
+            AppSettings {
+                editor_font_size: 13,
+                ..s
+            },
+            AppSettings::default()
+        );
 
         let s = AppSettings {
             editor_font_family: "'Fira Code', monospace".into(),
@@ -1596,14 +1984,21 @@ mod tests {
     /// font at 13 px and 1.55, no line cap, the platform's UI font); set, they round-trip.
     #[test]
     fn font_settings_default_for_older_files_and_round_trip() {
-        let old = r#"{"version":2,"activeProfile":"default","theme":"default-dark","editorFontSize":15}"#;
+        let old =
+            r#"{"version":2,"activeProfile":"default","theme":"default-dark","editorFontSize":15}"#;
         let s: AppSettings = serde_json::from_str(old).unwrap();
         assert_eq!(s.reading_font_family, "");
         assert_eq!(s.reading_font_size, 13);
         assert_eq!(s.reading_line_height, 1.55);
         assert_eq!(s.reading_line_width, 0);
         assert_eq!(s.ui_font_family, "");
-        assert_eq!(AppSettings { editor_font_size: 13, ..s }, AppSettings::default());
+        assert_eq!(
+            AppSettings {
+                editor_font_size: 13,
+                ..s
+            },
+            AppSettings::default()
+        );
 
         let s = AppSettings {
             reading_font_family: "'Noto Serif', serif".into(),
@@ -1628,7 +2023,10 @@ mod tests {
         let s: AppSettings = serde_json::from_value(v).unwrap();
         assert!(!s.relative_dates);
 
-        let s = AppSettings { relative_dates: true, ..AppSettings::default() };
+        let s = AppSettings {
+            relative_dates: true,
+            ..AppSettings::default()
+        };
         let back: AppSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert!(back.relative_dates);
     }
@@ -1646,7 +2044,10 @@ mod tests {
         v["customThemes"] = serde_json::Value::Array(vec![theme.clone()]);
         let s: AppSettings = serde_json::from_value(v).unwrap();
         let t = &s.custom_themes[0];
-        assert_eq!((t.id.as_str(), t.name.as_str(), t.base.as_str()), ("custom-0a1b2c3d", "Nord (Custom)", "nord"));
+        assert_eq!(
+            (t.id.as_str(), t.name.as_str(), t.base.as_str()),
+            ("custom-0a1b2c3d", "Nord (Custom)", "nord")
+        );
         assert_eq!(t.colors["app-bg0"], "#2e3440");
         assert_eq!(serde_json::to_value(&s).unwrap()["customThemes"][0], theme);
     }
@@ -1655,7 +2056,13 @@ mod tests {
     fn closed_tabs_are_capped_keeping_the_newest() {
         let store = SettingsStore::in_memory();
         let mut p = store.active_profile();
-        p.closed_tabs = (0..25).map(|i| ClosedTab { path: format!("/r/{i}"), alias: None, index: 0 }).collect();
+        p.closed_tabs = (0..25)
+            .map(|i| ClosedTab {
+                path: format!("/r/{i}"),
+                alias: None,
+                index: 0,
+            })
+            .collect();
         store.save_profile(p).unwrap();
         let p = store.active_profile();
         assert_eq!(p.closed_tabs.len(), MAX_CLOSED_TABS);
@@ -1667,11 +2074,21 @@ mod tests {
     fn recent_repos_keep_pinned_and_cap_the_rest() {
         let store = SettingsStore::in_memory();
         let mut p = store.active_profile();
-        p.recent = (0..60).map(|i| RecentRepo { path: format!("/r/{i}"), name: format!("r{i}"), pinned: i == 59, opened_at: 1000 - i }).collect();
+        p.recent = (0..60)
+            .map(|i| RecentRepo {
+                path: format!("/r/{i}"),
+                name: format!("r{i}"),
+                pinned: i == 59,
+                opened_at: 1000 - i,
+            })
+            .collect();
         store.save_profile(p).unwrap();
         let p = store.active_profile();
         assert_eq!(p.recent.len(), MAX_RECENT);
-        assert!(p.recent.iter().any(|r| r.path == "/r/59" && r.pinned), "pinned entries survive the cap");
+        assert!(
+            p.recent.iter().any(|r| r.path == "/r/59" && r.pinned),
+            "pinned entries survive the cap"
+        );
     }
 
     #[test]
@@ -1682,11 +2099,18 @@ mod tests {
         let st = store.switch_profile(&work.id).unwrap();
         assert_eq!(st.profile.id, work.id);
         assert_eq!(st.settings.active_profile, work.id);
-        assert_eq!(store.delete_profile(&work.id).unwrap_err().kind, GbErrorKind::InvalidInput, "can't delete the active profile");
+        assert_eq!(
+            store.delete_profile(&work.id).unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "can't delete the active profile"
+        );
         store.switch_profile(DEFAULT_PROFILE_ID).unwrap();
         let left = store.delete_profile(&work.id).unwrap();
         assert_eq!(left.len(), 1);
-        assert_eq!(store.delete_profile(DEFAULT_PROFILE_ID).unwrap_err().kind, GbErrorKind::InvalidInput);
+        assert_eq!(
+            store.delete_profile(DEFAULT_PROFILE_ID).unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
         assert!(store.switch_profile("nope").is_err());
     }
 
@@ -1708,7 +2132,10 @@ mod tests {
     fn saving_an_unknown_profile_is_rejected() {
         let store = SettingsStore::in_memory();
         let p = Profile::new("ghost", "Ghost", "#000");
-        assert_eq!(store.save_profile(p).unwrap_err().kind, GbErrorKind::InvalidInput);
+        assert_eq!(
+            store.save_profile(p).unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
     }
 
     #[test]
@@ -1726,7 +2153,13 @@ mod tests {
         let store = SettingsStore::open(dir.path());
         let meta = store.create_profile("Temp", "#123456").unwrap();
         store.flush_now().unwrap();
-        assert!(dir.path().join("profiles").join(&meta.id).join("profile.json").exists());
+        assert!(
+            dir.path()
+                .join("profiles")
+                .join(&meta.id)
+                .join("profile.json")
+                .exists()
+        );
         store.delete_profile(&meta.id).unwrap();
         store.flush_now().unwrap();
         assert!(!dir.path().join("profiles").join(&meta.id).exists());
@@ -1748,17 +2181,49 @@ mod tests {
 
     #[test]
     fn ts_shapes_are_camel_case() {
-        assert!(serde_json::to_value(FileScope { start_collapsed: true, ..Default::default() }).unwrap().get("startCollapsed").is_some());
-        assert_eq!(serde_json::to_value(Profile::default()).unwrap()["fileColours"], serde_json::json!({}));
-        let v = serde_json::to_value(PinSetting::Ref { name: "refs/remotes/origin/main".into() }).unwrap();
-        assert_eq!(v, serde_json::json!({"kind": "ref", "name": "refs/remotes/origin/main"}));
-        assert_eq!(serde_json::to_value(PinSetting::Off).unwrap(), serde_json::json!({"kind": "off"}));
-        assert_eq!(serde_json::to_value(DateFormat::Ymd24h).unwrap(), "ymd24h");
-        assert_eq!(serde_json::to_value(DateFormat::DmyDot24h).unwrap(), "dmydot24h");
-        // The editor setting is a 1B opener id (from `listOpeners`) or a custom template (R5).
-        assert_eq!(serde_json::to_value(EditorChoice::Opener { id: "jetbrains-phpstorm".into() }).unwrap(), serde_json::json!({"kind": "opener", "id": "jetbrains-phpstorm"}));
+        assert!(
+            serde_json::to_value(FileScope {
+                start_collapsed: true,
+                ..Default::default()
+            })
+            .unwrap()
+            .get("startCollapsed")
+            .is_some()
+        );
         assert_eq!(
-            serde_json::to_value(EditorChoice::Custom { template: "subl {file}:{line}".into() }).unwrap(),
+            serde_json::to_value(Profile::default()).unwrap()["fileColours"],
+            serde_json::json!({})
+        );
+        let v = serde_json::to_value(PinSetting::Ref {
+            name: "refs/remotes/origin/main".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"kind": "ref", "name": "refs/remotes/origin/main"})
+        );
+        assert_eq!(
+            serde_json::to_value(PinSetting::Off).unwrap(),
+            serde_json::json!({"kind": "off"})
+        );
+        assert_eq!(serde_json::to_value(DateFormat::Ymd24h).unwrap(), "ymd24h");
+        assert_eq!(
+            serde_json::to_value(DateFormat::DmyDot24h).unwrap(),
+            "dmydot24h"
+        );
+        // The editor setting is a 1B opener id (from `listOpeners`) or a custom template (R5).
+        assert_eq!(
+            serde_json::to_value(EditorChoice::Opener {
+                id: "jetbrains-phpstorm".into()
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "opener", "id": "jetbrains-phpstorm"})
+        );
+        assert_eq!(
+            serde_json::to_value(EditorChoice::Custom {
+                template: "subl {file}:{line}".into()
+            })
+            .unwrap(),
             serde_json::json!({"kind": "custom", "template": "subl {file}:{line}"})
         );
     }
@@ -1767,30 +2232,65 @@ mod tests {
     #[test]
     fn the_sync_button_defaults_to_fetch_all() {
         assert_eq!(AppSettings::default().sync_button, SyncButtonMode::FetchAll);
-        let s: AppSettings = serde_json::from_value(serde_json::json!({"version": SETTINGS_VERSION})).unwrap();
+        let s: AppSettings =
+            serde_json::from_value(serde_json::json!({"version": SETTINGS_VERSION})).unwrap();
         assert_eq!(s.sync_button, SyncButtonMode::FetchAll);
-        assert_eq!(serde_json::to_value(SyncButtonMode::PullFfOrMerge).unwrap(), "pullFfOrMerge");
+        assert_eq!(
+            serde_json::to_value(SyncButtonMode::PullFfOrMerge).unwrap(),
+            "pullFfOrMerge"
+        );
     }
 
     // --- branch presets ---
     #[test]
     fn presets_settings_default_and_round_trip() {
-        use gitnex_graph::{Author, BranchPicks, BranchPreset, CollapsePlacement, Matcher, PresetAction, PresetScope, Rule};
+        use gitnex_graph::{
+            Author, BranchPicks, BranchPreset, CollapsePlacement, Matcher, PresetAction,
+            PresetScope, Rule,
+        };
         let s = AppSettings::default();
-        assert_eq!(s.builtin_presets.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["all", "all-collapsed", "mine"]);
+        assert_eq!(
+            s.builtin_presets
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["all", "all-collapsed", "mine"]
+        );
         assert!(s.builtin_presets.iter().all(|p| p.in_cycle));
         assert!(s.collapse_hover_open);
         assert_eq!(s.collapse_placement, CollapsePlacement::KeepDateOrder);
-        let old: AppSettings = serde_json::from_value(serde_json::json!({"version": SETTINGS_VERSION})).unwrap();
-        assert_eq!((old.builtin_presets, old.collapse_hover_open), (s.builtin_presets.clone(), true), "a file from before presets gets the defaults");
-        assert!(serde_json::to_value(&s).unwrap().get("branchPresets").is_none(), "no presets: not written");
+        let old: AppSettings =
+            serde_json::from_value(serde_json::json!({"version": SETTINGS_VERSION})).unwrap();
+        assert_eq!(
+            (old.builtin_presets, old.collapse_hover_open),
+            (s.builtin_presets.clone(), true),
+            "a file from before presets gets the defaults"
+        );
+        assert!(
+            serde_json::to_value(&s)
+                .unwrap()
+                .get("branchPresets")
+                .is_none(),
+            "no presets: not written"
+        );
 
         let preset = |id: &str| BranchPreset {
             id: id.into(),
             name: "Mine, others folded".into(),
             color: "green".into(),
             scope: PresetScope::Repo,
-            rules: vec![Rule { action: PresetAction::Show, matcher: Matcher::CommitsBy { author: Author::Me } }, Rule { action: PresetAction::Collapse, matcher: Matcher::NameMatches { patterns: "feature/*".into() } }],
+            rules: vec![
+                Rule {
+                    action: PresetAction::Show,
+                    matcher: Matcher::CommitsBy { author: Author::Me },
+                },
+                Rule {
+                    action: PresetAction::Collapse,
+                    matcher: Matcher::NameMatches {
+                        patterns: "feature/*".into(),
+                    },
+                },
+            ],
             otherwise: PresetAction::Hide,
             fold_merged: true,
             ghost_lines: false,
@@ -1801,23 +2301,51 @@ mod tests {
             branch_preset: Some("custom".into()),
             branch_presets: vec![preset("p1")],
             custom_preset: Some(preset("custom")),
-            branch_picks: [("custom".to_string(), BranchPicks { shown: vec!["spike/x".into()], hidden: vec!["bot/y".into()], ..Default::default() })].into(),
+            branch_picks: [(
+                "custom".to_string(),
+                BranchPicks {
+                    shown: vec!["spike/x".into()],
+                    hidden: vec!["bot/y".into()],
+                    ..Default::default()
+                },
+            )]
+            .into(),
             trunk_patterns: vec!["release/*".into()],
             ..Default::default()
         };
         let mut p = Profile::new("default", "Default", "#4d88ff");
         p.repos.insert("/r".into(), repo);
         let json = serde_json::to_value(&p).unwrap();
-        assert_eq!(json["repos"]["/r"]["branchPicks"]["custom"]["hidden"], serde_json::json!(["bot/y"]));
-        assert_eq!(json["repos"]["/r"]["customPreset"]["rules"][0]["matcher"], serde_json::json!({"kind": "commitsBy", "author": {"kind": "me"}}));
+        assert_eq!(
+            json["repos"]["/r"]["branchPicks"]["custom"]["hidden"],
+            serde_json::json!(["bot/y"])
+        );
+        assert_eq!(
+            json["repos"]["/r"]["customPreset"]["rules"][0]["matcher"],
+            serde_json::json!({"kind": "commitsBy", "author": {"kind": "me"}})
+        );
         assert_eq!(serde_json::from_value::<Profile>(json).unwrap(), p);
         let mut old = serde_json::to_value(preset("p2")).unwrap();
         old.as_object_mut().unwrap().remove("ghostPicks");
-        assert!(!serde_json::from_value::<BranchPreset>(old).unwrap().ghost_picks, "a preset from before the option: off");
+        assert!(
+            !serde_json::from_value::<BranchPreset>(old)
+                .unwrap()
+                .ghost_picks,
+            "a preset from before the option: off"
+        );
 
         let plain = serde_json::to_value(RepoSettings::default()).unwrap();
-        for key in ["branchPreset", "branchPresets", "customPreset", "branchPicks", "trunkPatterns"] {
-            assert!(plain.get(key).is_none(), "{key} written for a repository without presets");
+        for key in [
+            "branchPreset",
+            "branchPresets",
+            "customPreset",
+            "branchPicks",
+            "trunkPatterns",
+        ] {
+            assert!(
+                plain.get(key).is_none(),
+                "{key} written for a repository without presets"
+            );
         }
     }
     // --- end branch presets ---

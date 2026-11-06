@@ -15,12 +15,19 @@ const WIP_MARK = /^\s*(wip:|\[wip\])/i;
  * branches, title (a draft as its `Draft: ` prefix) and description, opened on the source project
  * for a fork; GitHub the compare range, title, body, labels and assignees; Forgejo the compare
  * range, title (a draft as its `WIP: ` prefix) and body. Reviewers, GitHub's draft and Forgejo's
- * labels and assignees don't travel. Past `MAX_URL_LENGTH` the description is left out
+ * labels and assignees don't travel. Bitbucket carries branches only within one repository;
+ * a fork opens the creation page without implying a source repository. Past `MAX_URL_LENGTH` the description is left out
  * (`withoutDescription`).
  */
 export function newMrUrl(target: ForgeProject, source: { project: string; branch: string }, d: MrDraft): { url: string; withoutDescription: boolean; withoutMore?: boolean } {
   const fork = source.project !== target.path;
   const build = (description: string, labels = d.labels, titleText = d.title): string => {
+    if (target.kind === 'bitbucket') {
+      if (fork) return `${target.webUrl}/pull-requests?create`;
+      return `${target.webUrl}/pull-requests?create&${query([
+        ['sourceBranch', source.branch], ['targetBranch', d.targetBranch],
+      ])}`;
+    }
     if (target.kind === 'gitlab') {
       const base = fork && target.webUrl.endsWith(target.path) ? `${target.webUrl.slice(0, -target.path.length)}${segments(source.project)}` : target.webUrl;
       const title = d.draft && !DRAFT_MARK.test(titleText) && titleText ? `Draft: ${titleText.trim()}` : titleText.trim();
@@ -42,6 +49,10 @@ export function newMrUrl(target: ForgeProject, source: { project: string; branch
       ['expand', '1'], ['title', titleText.trim()], ['body', description], ['labels', labels.join(',')], ['assignees', d.assignees.map((u) => u.username).join(',')],
     ])}`;
   };
+  if (target.kind === 'bitbucket') {
+    const url = build('');
+    return { url: url.length <= MAX_URL_LENGTH ? url : `${target.webUrl}/pull-requests?create`, withoutDescription: d.description !== '', withoutMore: true };
+  }
   const full = build(d.description);
   if (full.length <= MAX_URL_LENGTH || !d.description) return { url: full, withoutDescription: false };
   const noDesc = build('');

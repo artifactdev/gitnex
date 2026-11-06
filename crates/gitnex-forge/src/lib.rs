@@ -13,12 +13,12 @@ pub mod http;
 pub mod images;
 // --- end 5A T2 ---
 pub mod known_names;
-pub mod time;
 pub mod pipelines;
-/// GitNex's own releases (the update check).
-pub mod updates;
 #[cfg(test)]
 pub(crate) mod test_server;
+pub mod time;
+/// GitNex's own releases (the update check).
+pub mod updates;
 /// The contract these implement (core's, re-exported for callers of this crate).
 pub use gitnex_core::forge;
 // --- end 4A T2 ---
@@ -33,3 +33,4 @@ pub mod forgejo;
 pub mod connector;
 pub mod detect;
 // --- end 4A T10 ---
+pub mod bitbucket;

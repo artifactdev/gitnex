@@ -61,7 +61,7 @@ function Form({ req }: { req: Req }) {
     busy.current = true;
     close();
     useToast.getState().show(`Creating the stack's ${noun}s…`, { sticky: true });
-    const report = await runCreateStack(ctx, target, view, plans, Object.fromEntries(plans.map((p) => [p.branch, titleOf(p)])), draft);
+    const report = await runCreateStack(ctx, target, view, plans, Object.fromEntries(plans.map((p) => [p.branch, titleOf(p)])), kind === 'bitbucket' ? false : draft);
     const s = createSummary(report, kind);
     useToast.getState().show(s.message, { error: s.error, tone: s.warning && !s.error ? 'warning' : undefined, detail: s.detail });
   };
@@ -97,7 +97,7 @@ function Form({ req }: { req: Req }) {
               </li>
             ))}
           </ol>
-          {plans.some((p) => p.kind === 'create') && (
+          {kind !== 'bitbucket' && plans.some((p) => p.kind === 'create') && (
             <label className="modal-check">
               <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Create as drafts
             </label>

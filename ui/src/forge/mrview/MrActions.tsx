@@ -19,7 +19,7 @@ import { registerKeyHints } from '../../shortcuts/hints';
 import { forgeName, mrRef } from '../labels';
 import { useForge } from '../mrStore';
 import { EditMr } from './EditMr';
-import { forgeWrite, setMrSubscribed, toggleMrDraft } from './writes';
+import { forgeWrite, putMr, setMrSubscribed, toggleMrDraft } from './writes';
 import { isPending, pendingLabel } from '../review/pending';
 import { resumeReview, submitReview, useReview } from '../review/session';
 import { PendingReview } from './PendingReview';
@@ -176,6 +176,7 @@ export interface MrActionsState {
   toReview(): void;
   /** Arms in place; approves on the second click. */
   approve(): void;
+  closeAction?: { label: string; run(): void };
   /** The ⋯ menu's rows. */
   rows(): MenuRow[];
 }
@@ -211,10 +212,20 @@ export function useMrActions(tabId: string, kind: ForgeKind, mr: ForgeMr, detail
     await toggleMrDraft(tabId, kind, mr);
     setBusy(null);
   };
+  const toggleClosed = async () => {
+    if (busy !== null) return;
+    const closed = mr.state !== 'closed';
+    const action = closed ? 'Decline' : 'Reopen';
+    if (!(await confirmAction({ title: `${action} ${ref}?`, confirmLabel: action, arm: `Click again to ${action.toLowerCase()} ${ref}`, danger: closed }))) return;
+    setBusy('draft');
+    const out = await forgeWrite(tabId, `Couldn't ${action.toLowerCase()} ${ref}`, (repo) => api.forgeSetClosed(repo, mr.number, closed));
+    setBusy(null);
+    if (out) putMr(tabId, out.value);
+  };
   // The forge's notifications for the token's user; unknown (the forge didn't say): no row.
   const subscribed = detail?.subscribed ?? null;
   const rows = (): MenuRow[] => [
-    ...(live ? [{ kind: 'action' as const, id: 'mr.draft', label: mr.state === 'draft' ? 'Mark as ready' : 'Mark as draft', icon: mr.state === 'draft' ? GitPullRequest : GitPullRequestDraft, tooltip: mr.state === 'draft' ? `Mark ${ref} as ready for review` : `Mark ${ref} as a draft`, run: () => void toggleDraft() }] : []),
+    ...(live && kind !== 'bitbucket' ? [{ kind: 'action' as const, id: 'mr.draft', label: mr.state === 'draft' ? 'Mark as ready' : 'Mark as draft', icon: mr.state === 'draft' ? GitPullRequest : GitPullRequestDraft, tooltip: mr.state === 'draft' ? `Mark ${ref} as ready for review` : `Mark ${ref} as a draft`, run: () => void toggleDraft() }] : []),
     ...(subscribed === null ? [] : [{
       kind: 'action' as const, id: 'mr.subscribe', label: subscribed ? 'Unsubscribe' : 'Subscribe', icon: subscribed ? BellOff : Bell,
       tooltip: subscribed ? `Stop getting ${forgeName(kind)}'s notifications about ${ref}` : `Get ${forgeName(kind)}'s notifications about ${ref} (email and in-app)`,
@@ -224,7 +235,8 @@ export function useMrActions(tabId: string, kind: ForgeKind, mr: ForgeMr, detail
   ];
   // Ctrl+Shift+A (`keyActions.ts`), while the button would take a click.
   useLend('mr.approve', tabId, live && !approvedByMe && busy === null ? () => void approve() : null);
-  return { mode, setMode, editFocus, busy, live, approvedByMe, pending, reviewAsk, toReview, approve: () => void approve(), rows };
+  const closeAction = kind === 'bitbucket' && (live || mr.state === 'closed') ? { label: live ? 'Decline pull request' : 'Reopen pull request', run: () => void toggleClosed() } : undefined;
+  return { mode, setMode, editFocus, busy, live, approvedByMe, pending, reviewAsk, toReview, approve: () => void approve(), closeAction, rows };
 }
 
 /** Approve (a green check) and Review… (an orange bubble with a caret): small icon buttons at the
@@ -259,6 +271,7 @@ export function StatusActions({ actions: a, children }: { actions: MrActionsStat
   return (
     <span className="mr-actions" role="group" aria-label="Actions">
       {children}
+      {a.closeAction && <button type="button" className="mr-button" disabled={a.busy !== null} onClick={a.closeAction.run}>{a.closeAction.label}</button>}
       {a.live && <button type="button" className="mr-button" aria-expanded={a.mode === 'edit'} disabled={a.busy !== null} onClick={() => a.setMode(a.mode === 'edit' ? 'none' : 'edit')}><Pencil size={13} aria-hidden /> Edit</button>}
       <button ref={more} type="button" className="mr-button icon" aria-label="More actions" aria-haspopup="menu" disabled={a.busy !== null} {...pressOpener((el) => openMenuAt(el, a.rows(), undefined, a.rows, 'More actions'))}><EllipsisVertical size={14} aria-hidden /></button>
     </span>

@@ -49,6 +49,16 @@ function env(over: Partial<GotoEnv> = {}, tabs: GotoTab[] = [harbor, lighthouse]
 const go = (text: string, e = env()) => resolveGoto(classify(text), e);
 
 describe('resolveGoto: commits', () => {
+  it('resolves Bitbucket PRs by their full installation context, including cross-project short references', async () => {
+    const root = 'https://code.example.com:8443/bitbucket';
+    const b: GotoTab = { ...harbor, forge: { kind: 'bitbucket', path: 'ORBIT/widget', webUrl: `${root}/projects/ORBIT/repos/widget` }, remotes: [{ host: 'code.example.com:8443', path: 'bitbucket/scm/ORBIT/widget' }] };
+    const other: GotoTab = { ...b, tabId: 'other', active: false, forge: { kind: 'bitbucket', path: '~nova/widget', webUrl: `${root}/users/nova/repos/widget` } };
+    const e = env({}, [b, other]);
+    expect(await go(`${b.forge!.webUrl}/pull-requests/7`, e)).toMatchObject({ kind: 'mr', tabId: 't1', forge: 'bitbucket', number: 7 });
+    expect(await go('#7', e)).toMatchObject({ kind: 'mr', url: `${b.forge!.webUrl}/pull-requests/7` });
+    expect(await go('~nova/widget#8', e)).toMatchObject({ kind: 'mr', tabId: 'other', url: `${other.forge!.webUrl}/pull-requests/8` });
+    expect(await go('https://code.example.com:8443/different/projects/ORBIT/repos/widget/pull-requests/7', e)).toMatchObject({ kind: 'toast' });
+  });
   it('finds a commit in the active repository first, then in the other tabs', async () => {
     expect(await go(SHA.slice(0, 7))).toEqual({ kind: 'commit', tabId: 't1', sha: SHA, limit: null, missing: null });
     expect(await go(OTHER.slice(0, 9))).toMatchObject({ kind: 'commit', tabId: 't2', sha: OTHER });
@@ -136,7 +146,7 @@ describe('resolveGoto: MRs and forge pages', () => {
     expect(await go('#12')).toEqual({ kind: 'none' });
     expect(await go('harbor/tools/dock!3')).toMatchObject({ kind: 'mr', number: 3 });
     expect(await go('harbor/other!12')).toEqual({ kind: 'toast', message: "!12 belongs to harbor/other, which isn't open here", url: 'https://gitlab.example.test/harbor/other/-/merge_requests/12' });
-    expect(await go('!12', env({}, [{ ...lighthouse, active: true }]))).toMatchObject({ kind: 'toast', message: 'lighthouse has no GitLab, GitHub or Forgejo project for !12' });
+    expect(await go('!12', env({}, [{ ...lighthouse, active: true }]))).toMatchObject({ kind: 'toast', message: 'lighthouse has no GitLab, GitHub, Forgejo or Bitbucket project for !12' });
   });
 
   it('selects the commit of a forge commit page in its tab; with no account, by its remote', async () => {

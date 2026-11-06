@@ -4,7 +4,7 @@ import type { BranchUpdateOffer } from '../../api/gen/BranchUpdateOffer';
 import type { ForgeMr } from '../../api/gen/ForgeMr';
 import type { ForgeProjectSettings } from '../../api/gen/ForgeProjectSettings';
 
-const api = vi.hoisted(() => ({ forgeMerge: vi.fn(), forgeSetAutoMerge: vi.fn(), forgeCancelAutoMerge: vi.fn(), forgeProjectSettings: vi.fn(), forgeUpdateBranch: vi.fn(), mergeBase: vi.fn(), saveProfile: vi.fn(async () => {}) }));
+const api = vi.hoisted(() => ({ openUrl: vi.fn(async () => null), forgeMerge: vi.fn(), forgeSetAutoMerge: vi.fn(), forgeCancelAutoMerge: vi.fn(), forgeProjectSettings: vi.fn(), forgeUpdateBranch: vi.fn(), mergeBase: vi.fn(), saveProfile: vi.fn(async () => {}) }));
 vi.mock('../../api/client', () => ({ api, errorMessage: (e: unknown) => String((e as { message?: string })?.message ?? e) }));
 vi.mock('../usePolling', () => ({ notifyForgeWrite: vi.fn() }));
 const poll = vi.hoisted(() => ({ refreshMr: vi.fn(async () => {}) }));
@@ -50,6 +50,25 @@ beforeEach(() => {
 });
 
 describe('merging from the MR/PR view (spec #4 §2: forge options, disabled with the reason when blocked)', () => {
+  it('hands Bitbucket PAT merges to the browser, including the keyboard action, without forge writes', () => {
+    const b = { ...mr, webUrl: 'https://bitbucket.example.com/projects/ORBIT/repos/widget/pull-requests/12' };
+    render(<MergeBox tabId="t" kind="bitbucket" mr={b} detail={detailOf(b)} />);
+    expect(screen.getByRole('note')).toHaveTextContent('Personal access tokens cannot merge');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Bitbucket' }));
+    expect(api.openUrl).toHaveBeenCalledWith(b.webUrl);
+    act(() => lentHandler('mr.merge')?.());
+    expect(api.openUrl).toHaveBeenCalledTimes(2);
+    expect(api.forgeMerge).not.toHaveBeenCalled();
+    expect(api.forgeSetAutoMerge).not.toHaveBeenCalled();
+    expect(api.forgeProjectSettings).not.toHaveBeenCalled();
+    expect(confirm.confirmAction).not.toHaveBeenCalled();
+  });
+  it('shows no merge handoff for a closed Bitbucket PR', () => {
+    const b = mrOf(12, { state: 'closed' });
+    render(<MergeBox tabId="t" kind="bitbucket" mr={b} detail={detailOf(b)} />);
+    expect(screen.queryByRole('button', { name: 'Open in Bitbucket' })).toBeNull();
+    expect(lentHandler('mr.merge')).toBeNull();
+  });
   it("GitLab: Delete source branch, then Squash commits, from the project's defaults; Merge arms, then merges with them and the head (the messages are GitLab's own)", async () => {
     show('gitlab');
     await loaded();

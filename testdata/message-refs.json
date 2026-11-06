@@ -1,6 +1,7 @@
 [
   { "message": "Refs !42 and group/sub/project!7, fixes #12.\nSee https://example.com/docs for details.", "refs": ["!42", "group/sub/project!7", "#12"] },
   { "message": "Closes #5 and other/repo#6, not !3", "refs": ["#5", "other/repo#6", "!3"] },
+  { "message": "See ~nova/widget#8", "refs": ["~nova/widget#8"] },
   { "message": "C#123 abc!4 v1.2#3 x-#9", "refs": [] },
   { "message": "Again !42. and !42", "refs": ["!42"] },
   { "message": "https://host/group/project/-/merge_requests/42#note_1", "refs": [] },

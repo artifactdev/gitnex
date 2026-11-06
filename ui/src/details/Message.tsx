@@ -1,7 +1,7 @@
 import { GitPullRequest } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api/client';
-import { effectiveKind } from '../forge/urls';
+import type { RemotePayload } from '../api/gen/RemotePayload';
 import type { RepoServices } from '../repo/services';
 import { useAppState } from '../app/state';
 import { useToast } from '../ui/toastStore';
@@ -14,12 +14,13 @@ import './header.css';
  * message in its first render instead of re-rendering it once the remotes resolve (F12). */
 export function useProjectRemote(services: RepoServices): ProjectRemote | null {
   const overrides = useAppState((s) => s.profile.hostOverrides);
-  const [state, setState] = useState<{ services: RepoServices; remote: ProjectRemote | null } | null>(null);
+  const bases = useAppState((s) => s.profile.bitbucketBases);
+  const [state, setState] = useState<{ services: RepoServices; remotes: RemotePayload[] } | null>(null);
   useEffect(() => {
     if (services.remotesSnapshot()) return;
     let live = true;
     services.remotes().then((r) => {
-      if (live) setState({ services, remote: projectRemote(r, overrides) });
+      if (live) setState({ services, remotes: r });
     }, () => {});
     return () => { live = false; };
     // The overrides apply below; this only waits for the remotes.
@@ -28,10 +29,10 @@ export function useProjectRemote(services: RepoServices): ProjectRemote | null {
   const snapshot = services.remotesSnapshot();
   const base = snapshot ? snapshot : null;
   return useMemo(() => {
-    if (base) return projectRemote(base, overrides);
-    if (state?.services !== services || !state.remote) return null;
-    return { ...state.remote, hostKind: effectiveKind(state.remote.host, state.remote.hostKind, overrides) };
-  }, [base, state, services, overrides]);
+    if (base) return projectRemote(base, overrides, bases);
+    if (state?.services !== services) return null;
+    return projectRemote(state.remotes, overrides, bases);
+  }, [base, state, services, overrides, bases]);
 }
 
 /** Opens a URL in the user's browser, through the backend (the webview never navigates). */

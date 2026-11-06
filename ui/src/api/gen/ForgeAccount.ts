@@ -14,6 +14,10 @@ export type ForgeAccount = {
  */
 id: string, host: string, kind: ForgeKind, 
 /**
+ * The installation URL, including its context path, for self-hosted Bitbucket.
+ */
+baseUrl: string | null, 
+/**
  * The token's user when the account was added (avatar and name in Settings).
  */
 user: ForgeUser, storage: TokenStorage, 

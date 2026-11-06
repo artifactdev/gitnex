@@ -2,6 +2,7 @@ import type { ForgeKind } from '../api/gen/ForgeKind';
 import { tabStore } from '../app/tabStores';
 import { mrRef } from '../forge/labels';
 import { forgeOf } from '../forge/mrStore';
+import { bitbucketRepoUrl } from '../forge/urls';
 import { resolveRepoPath } from './fileContext';
 import type { LinkTarget, MarkdownContext, MdReferenceNode } from './types';
 
@@ -44,15 +45,19 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const dash = (kind: ForgeKind) => (kind === 'gitlab' ? '/-' : '');
 
 /** The forge's web root: `https://github.com` for `https://github.com/o/r` (a GitLab instance may live under a path). */
-export function webRoot(p: { path: string; webUrl: string }): string {
+export function webRoot(p: { path: string; webUrl: string; kind?: ForgeKind }, kind = p.kind): string {
+  const bitbucket = kind === 'bitbucket' ? /\/(?:projects|users)\/[^/]+\/repos\/[^/]+\/?$/.exec(p.webUrl) : null;
+  if (bitbucket) return p.webUrl.slice(0, bitbucket.index);
   const tail = `/${p.path}`;
   return p.webUrl.toLowerCase().endsWith(tail.toLowerCase()) ? p.webUrl.slice(0, -tail.length) : new URL(p.webUrl).origin;
 }
-const MR_PATH: Record<ForgeKind, string> = { gitlab: '-/merge_requests', github: 'pull', forgejo: 'pulls' };
+const MR_PATH: Record<ForgeKind, string> = { gitlab: '-/merge_requests', github: 'pull', forgejo: 'pulls', bitbucket: 'pull-requests' };
 export const mrUrl = (kind: ForgeKind, web: string, n: number) => `${web}/${MR_PATH[kind]}/${n}`;
-export const issueUrl = (kind: ForgeKind, web: string, n: number) => `${web}${dash(kind)}/issues/${n}`;
-export const commitUrl = (kind: ForgeKind, web: string, sha: string) => `${web}${dash(kind)}/commit/${sha}`;
-export const blobUrl = (kind: ForgeKind, web: string, branch: string, path: string) => `${web}${kind === 'forgejo' ? '/src/branch' : `${dash(kind)}/blob`}/${encodeURIComponent(branch)}/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '')}`;
+export const issueUrl = (kind: ForgeKind, web: string, n: number) => kind === 'bitbucket' ? null : `${web}${dash(kind)}/issues/${n}`;
+export const commitUrl = (kind: ForgeKind, web: string, sha: string) => kind === 'bitbucket' ? `${web}/commits/${encodeURIComponent(sha)}` : `${web}${dash(kind)}/commit/${sha}`;
+export const blobUrl = (kind: ForgeKind, web: string, branch: string, path: string) => kind === 'bitbucket'
+  ? `${web}/browse/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}?at=${encodeURIComponent(branch)}`
+  : `${web}${kind === 'forgejo' ? '/src/branch' : `${dash(kind)}/blob`}/${encodeURIComponent(branch)}/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '')}`;
 
 export function targetOfReference(env: LinkEnv, node: MdReferenceNode): LinkTarget {
   const { kind, project: p } = env;
@@ -62,7 +67,7 @@ export function targetOfReference(env: LinkEnv, node: MdReferenceNode): LinkTarg
   }
   switch (node.refKind) {
     case 'mention':
-      return node.user ? { kind: 'external', url: `${webRoot(p)}/${node.user}` } : { kind: 'inert' };
+      return node.user ? { kind: 'external', url: `${webRoot(p, kind)}/${kind === 'bitbucket' ? 'users/' : ''}${encodeURIComponent(node.user)}` } : { kind: 'inert' };
     case 'commit': {
       if (!node.sha) return { kind: 'inert' };
       const full = env.fullSha(node.sha);
@@ -72,12 +77,15 @@ export function targetOfReference(env: LinkEnv, node: MdReferenceNode): LinkTarg
     case 'issue': {
       if (node.number === null) return { kind: 'inert' };
       const here = node.project === null || same(node.project, p.path);
-      const web = here ? p.webUrl : `${webRoot(p)}/${node.project}`;
+      const web = here ? p.webUrl : kind === 'bitbucket' ? bitbucketRepoUrl(webRoot(p, kind), node.project!) : `${webRoot(p, kind)}/${node.project}`;
       if (node.refKind === 'mr') return here ? { kind: 'mr', number: node.number, webUrl: mrUrl(kind, web, node.number) } : { kind: 'external', url: mrUrl(kind, web, node.number) };
+      if (kind === 'bitbucket') return { kind: 'inert' };
+      const url = issueUrl(kind, web, node.number);
+      if (!url) return { kind: 'inert' };
       // `#n`: GitHub and Forgejo number PRs and issues together (the view tries the PR, else the
       // browser); GitLab's are issues.
-      if (kind !== 'gitlab' && here) return { kind: 'mr', number: node.number, webUrl: issueUrl(kind, web, node.number) };
-      return { kind: 'external', url: issueUrl(kind, web, node.number) };
+      if (kind !== 'gitlab' && here) return { kind: 'mr', number: node.number, webUrl: url };
+      return { kind: 'external', url };
     }
   }
 }
@@ -92,6 +100,7 @@ const PAGES: Record<ForgeKind, { mr: RegExp; commit: RegExp; blob: RegExp }> = {
   github: { mr: /^pull\/(\d+)(?:\/|$)/, commit: /^commit\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /^blob\/([^/]+\/.+)$/ },
   // Forgejo's file pages name the ref's type: `src/branch/main/…`, `src/commit/<sha>/…`, `src/tag/v1/…`.
   forgejo: { mr: /^pulls\/(\d+)(?:\/|$)/, commit: /^commit\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /^src\/(?:branch|commit|tag)\/([^/]+\/.+)$/ },
+  bitbucket: { mr: /^pull-requests\/(\d+)(?:\/|$)/, commit: /^commits\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /$^/ },
 };
 
 /** The page `rest` is: the path below a project's web URL, with no query or anchor. */

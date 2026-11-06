@@ -7,6 +7,10 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ### Added
 
+- **Bitbucket Data Center / Server integration.** User personal access tokens, custom HTTPS
+  ports and context paths, repository search, forks, pull requests and reported build statuses.
+  Unsupported native options are not offered; merges restricted by token authentication open
+  in the browser. Bitbucket Cloud is not included.
 - **GitVolt is now GitNex.** The app, its bundles and its packages are GitNex. The first start
   copies GitVolt's profiles, settings, undo history and token files to GitNex's folders and keyring
   service; the old folders stay as they are. The update repository stays `artifactdev/gitvolt`,

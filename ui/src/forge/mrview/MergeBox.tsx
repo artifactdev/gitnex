@@ -25,6 +25,7 @@ import { refreshMr } from '../poll';
 import { branchBehind, defaultUpdate, useLocalBehind } from './branchUpdate';
 import { useProjectSettings } from './projectSettings';
 import { forgeWrite, putMr } from './writes';
+import { openInBrowser } from './MrHeader';
 
 export const METHOD_LABELS: Record<MergeMethod, string> = { merge: 'Merge commit', squash: 'Squash and merge', rebase: 'Rebase and merge', semiLinear: 'Merge commit with semi-linear history', fastForward: 'Fast-forward merge' };
 /** Forgejo's own names for its merge styles (`semiLinear` is its rebase-merge). */
@@ -47,6 +48,7 @@ export const UPDATE_LABELS: Record<ForgeKind, Partial<Record<BranchUpdate, { lab
     merge: { label: (t) => `Merge ${t} in`, busy: 'Merging…', tip: 'Forgejo merges the target branch into this branch' },
     rebase: { label: (t) => `Rebase onto ${t}`, busy: 'Rebasing…', tip: 'Forgejo rebases this branch onto the target branch' },
   },
+  bitbucket: {},
 };
 
 /** A row kept in the layout but not shown (visibility, not display: its space stays). */
@@ -77,6 +79,28 @@ type Mode = 'merge' | 'auto' | 'cancel' | 'none';
  * head is refused (Review Focus 3). No optimistic UI: the store changes only with the answer.
  */
 export function MergeBox({ tabId, kind, mr: listed, detail }: { tabId: string; kind: ForgeKind; mr: ForgeMr; detail: ForgeMrDetail | null }) {
+  if (kind === 'bitbucket') return <BitbucketMergeBox tabId={tabId} mr={detail?.mr ?? listed} />;
+  return <ProviderMergeBox tabId={tabId} kind={kind} mr={listed} detail={detail} />;
+}
+
+function BitbucketMergeBox({ tabId, mr }: { tabId: string; mr: ForgeMr }) {
+  const live = mr.state === 'open' || mr.state === 'draft';
+  const open = () => openInBrowser(mr.webUrl);
+  useLend('mr.merge', tabId, live ? open : null);
+  if (!live) return null;
+  return (
+    <section className="mr-merge" aria-label="Merge">
+      <div className="mr-merge-top">
+        <span className="mr-merge-dot wait" aria-hidden><GitMerge size={13} /></span>
+        <div className="mr-merge-title"><b>Merge on Bitbucket</b></div>
+        <span className="mr-merge-reason wait" role="note">Personal access tokens cannot merge here. Open Bitbucket to review its merge checks and merge in your browser.</span>
+        <div className="mr-merge-act"><button type="button" className="mr-button" onClick={open}>Open in Bitbucket</button></div>
+      </div>
+    </section>
+  );
+}
+
+function ProviderMergeBox({ tabId, kind, mr: listed, detail }: { tabId: string; kind: ForgeKind; mr: ForgeMr; detail: ForgeMrDetail | null }) {
   const mr = detail?.mr ?? listed;
   const remote = useForge((s) => s.byTab[tabId]?.remote ?? null);
   const { settings, error: settingsError } = useProjectSettings(tabId, remote);

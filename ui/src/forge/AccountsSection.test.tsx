@@ -6,7 +6,7 @@ import { armClock, press } from '../ui/arm/armTesting';
 
 const TOKEN = 'glpat-FAKE-test-token';
 const ada = (storage: 'keyring' | 'file', status: ForgeAccountView['status'] = { kind: 'ok' }): ForgeAccountView => ({
-  account: { id: 'gitlab.example.com', host: 'gitlab.example.com', kind: 'gitlab', user: { id: 7, username: 'ada', name: 'Ada Lovelace', avatarUrl: null, webUrl: 'https://gitlab.example.com/ada', email: 'ada@example.com', emails: [] }, storage, version: '18.9.1-ee', versionCheckedAt: 0, addedAt: 0 },
+  account: { id: 'gitlab.example.com', host: 'gitlab.example.com', baseUrl: null, kind: 'gitlab', user: { id: 7, username: 'ada', name: 'Ada Lovelace', avatarUrl: null, webUrl: 'https://gitlab.example.com/ada', email: 'ada@example.com', emails: [] }, storage, version: '18.9.1-ee', versionCheckedAt: 0, addedAt: 0 },
   status,
 });
 
@@ -51,6 +51,31 @@ beforeEach(() => {
 });
 
 describe('Settings › Accounts', () => {
+  it('adds Bitbucket using a full installation URL and preserves it when replacing a token', async () => {
+    const base = 'https://code.example.com:8443/bitbucket';
+    const account = { ...ada('keyring'), account: { ...ada('keyring').account, id: 'code.example.com:8443', host: 'code.example.com:8443', kind: 'bitbucket' as const, baseUrl: base, user: { id: 17, username: 'nova', name: 'Nova Pilot', avatarUrl: null, webUrl: `${base}/users/nova`, email: null, emails: [] } } };
+    api.addForgeAccount.mockResolvedValue(account);
+    show();
+    await openAdd();
+    const form = screen.getByRole('form', { name: 'Add a forge account' });
+    fireEvent.change(within(form).getByLabelText('Host'), { target: { value: base } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Bitbucket' }));
+    expect(within(form).getByText(/user HTTP access token/)).toBeVisible();
+    fireEvent.click(within(form).getByRole('button', { name: /^Create token on/ }));
+    await waitFor(() => expect(api.forgeTokenPage).toHaveBeenCalledWith(base, 'bitbucket', undefined));
+    api.forgeAccounts.mockResolvedValue([account]);
+    fireEvent.change(within(form).getByLabelText('Token'), { target: { value: 'bb-test-only' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Add account' }));
+    await waitFor(() => expect(api.addForgeAccount).toHaveBeenCalledWith(base, 'bitbucket', 'bb-test-only'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace the token for @nova on code.example.com:8443' }));
+    expect(useAppState.getState().profile.bitbucketBases).toEqual({ 'code.example.com:8443': base });
+    const replace = await screen.findByRole('form', { name: 'Replace the token for @nova on code.example.com:8443' });
+    expect(within(replace).getByLabelText('Host')).toHaveValue(base);
+    fireEvent.change(within(replace).getByLabelText('Token'), { target: { value: 'bb-replacement-only' } });
+    fireEvent.click(within(replace).getByRole('button', { name: 'Replace token' }));
+    await waitFor(() => expect(api.addForgeAccount).toHaveBeenCalledWith(base, 'bitbucket', 'bb-replacement-only', account.account.id));
+    expect(screen.queryByDisplayValue('bb-test-only')).toBeNull();
+  });
   it('lists an account with its user, forge, version and storage', async () => {
     api.forgeAccounts.mockResolvedValue([ada('keyring')]);
     show();

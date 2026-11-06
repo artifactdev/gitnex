@@ -30,6 +30,8 @@ terminal), a React UI, and [Tauri](https://tauri.app/) with the Chromium (CEF) r
 
 > **Status:** used day to day on Linux and Windows; newer on macOS.
 
+For self-hosted Bitbucket, see [setup and compatibility](docs/bitbucket.md).
+
 ## Platforms
 
 | Platform | Status |
@@ -169,8 +171,10 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 
 #### MRs/PRs
 
-- **GitHub, GitLab and Forgejo,** self-hosted included (Codeberg and Gitea too), with a personal
-  access token.
+- **GitHub, GitLab, Forgejo and Bitbucket,** self-hosted included (Codeberg and Gitea too),
+  with a personal access token. Bitbucket Data Center / Server supports custom HTTPS ports and
+  context paths, repository discovery, PRs, reviews and reported build statuses; token-restricted
+  merges open in the browser. Bitbucket Cloud is not included.
 - **MR/PR view.** Docked beside the graph: reply, resolve, react, edit, approve, request changes,
   change reviewers, assignees and labels, and check out (adding the fork's remote first).
 - **Pipelines and timeline.** Pipeline status, and the activity timeline in rendered Markdown

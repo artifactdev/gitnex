@@ -1,22 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppEvent } from './gen/AppEvent';
 import type { EventHandler } from './transport';
+import type { Request } from './gen/Request';
 
 /** Each `createTransport` call: its close callback and the subscriber it was given. */
 const made = vi.hoisted(() => [] as { closed: () => void; emit: (ev: AppEvent) => void }[]);
+const requests = vi.hoisted(() => [] as Request[]);
 vi.mock('./transport', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./transport')>()),
   createTransport: (onClosed: () => void) => {
     const subs = new Set<EventHandler>();
     made.push({ closed: onClosed, emit: (ev) => { for (const h of subs) h(ev); } });
     return {
-      call: async () => null,
+      call: async (req: Request) => { requests.push(req); return null; },
       subscribe: (h: EventHandler) => { subs.add(h); return () => { subs.delete(h); }; },
     };
   },
 }));
 
-const { onEvent, RECONNECT_MS } = await import('./client');
+const { api, onEvent, RECONNECT_MS } = await import('./client');
 
 describe('onEvent', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -39,6 +41,14 @@ describe('onEvent', () => {
     made[1].closed();
     vi.advanceTimersByTime(RECONNECT_MS * 4);
     expect(made).toHaveLength(2);
+  });
+
+  it('sends the Bitbucket installation URL separately from the account authority', async () => {
+    const base = 'https://code.example.com:8443/bitbucket';
+    await api.addForgeAccount(base, 'bitbucket', 'fixture-token-only');
+    expect(requests.at(-1)).toMatchObject({ method: 'addForgeAccount', params: { host: base, baseUrl: base, kind: 'bitbucket', account: null } });
+    await api.addForgeAccount('gitlab.example.com', 'gitlab', 'fixture-token-only');
+    expect(requests.at(-1)).toMatchObject({ method: 'addForgeAccount', params: { host: 'gitlab.example.com', baseUrl: undefined } });
   });
 
   it('a handler that throws is logged and the others still get the event', () => {

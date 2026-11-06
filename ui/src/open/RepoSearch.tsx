@@ -1,10 +1,8 @@
 import { LoaderCircle, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../api/client';
-import type { ForgeKind } from '../api/gen/ForgeKind';
 import type { ForgeRepoHit } from '../api/gen/ForgeRepoHit';
-
-const FORGE_NAME: Record<ForgeKind, string> = { github: 'GitHub', gitlab: 'GitLab', forgejo: 'Forgejo' };
+import { forgeName } from '../forge/labels';
 
 interface Group {
   key: string;
@@ -17,7 +15,7 @@ function groupsOf(hits: ForgeRepoHit[]): Group[] {
   const by = new Map<string, Group>();
   for (const hit of hits) {
     const key = `${hit.project.kind}:${hit.project.host}:${hit.accountId}`;
-    const group = by.get(key) ?? { key, label: `${FORGE_NAME[hit.project.kind]} · ${hit.accountUsername}@${hit.project.host}`, hits: [] };
+    const group = by.get(key) ?? { key, label: `${forgeName(hit.project.kind)} · ${hit.accountUsername}@${hit.project.host}`, hits: [] };
     group.hits.push(hit);
     by.set(key, group);
   }

@@ -48,6 +48,7 @@ const WHAT: Record<NotInDemoMethod, string> = {
   addToGitignore: 'editing .gitignore',
   forgeSearchRepos: 'forge accounts',
   forgeTokenPage: 'forge accounts',
+  forgeSetClosed: 'declining and reopening Bitbucket pull requests',
   detectForge: 'forge accounts',
   updateDownload: 'updates',
   updateInstall: 'updates',

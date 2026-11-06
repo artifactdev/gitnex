@@ -34,6 +34,15 @@ beforeEach(() => {
 });
 
 describe('replying in the MR/PR view (spec #4 §4 "4B")', () => {
+  it('a native Bitbucket discussion takes a reply without requiring a GitHub-style thread id', async () => {
+    patchForge('t', { kind: 'bitbucket', discussions: { 12: [thread('41')] } });
+    api.forgeReply.mockResolvedValue(note('Noted'));
+    render(<Discussion tabId="t" kind="bitbucket" mr={mrOf(12)} d={thread('41')} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reply' }), { target: { value: 'Noted' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    await waitFor(() => expect(api.forgeReply).toHaveBeenCalledWith(4, 12, '41', 'Noted'));
+  });
   it('a comment is sent, shown at once, and the box empties', async () => {
     api.forgeReply.mockResolvedValue(note('Thanks!'));
     render(<ReplyBox tabId="t" number={12} discussion={null} />);

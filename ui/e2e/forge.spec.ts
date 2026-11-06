@@ -41,6 +41,22 @@ test.describe('forge accounts and remotes (spec #4 §7, 4A)', () => {
     const fetched = () => { try { return git(repo, 'rev-parse', '--verify', '-q', 'refs/remotes/alice/main'); } catch { return ''; } };
     await expect.poll(fetched).toBe(originGit(repo, 'rev-parse', 'main'));
     await expect(remotePanel(page).getByText('alice', { exact: true })).toBeVisible();
+    await test.step('a Bitbucket PAT preserves its installation context and replaces securely', async () => {
+      await page.keyboard.press('Control+,');
+      await settings(page).getByRole('button', { name: 'Accounts', exact: true }).click();
+      await settings(page).getByRole('button', { name: '+ Add account' }).click();
+      await settings(page).getByLabel('Host').fill('https://bitbucket.example.com/bitbucket');
+      await settings(page).getByRole('button', { name: 'Bitbucket', exact: true }).click();
+      await settings(page).getByLabel('Token', { exact: true }).fill('bitbucket-FAKE-e2e-token');
+      await settings(page).getByRole('button', { name: 'Add account', exact: true }).click();
+      const bb = settings(page).getByRole('listitem', { name: '@reviewer on bitbucket.example.com' });
+      await expect(bb).toContainText('https://bitbucket.example.com/bitbucket');
+      expect(await page.content()).not.toContain('bitbucket-FAKE-e2e-token');
+      await bb.getByRole('button', { name: /Replace the token/ }).click();
+      await expect(settings(page).getByLabel('Host')).toHaveValue('https://bitbucket.example.com/bitbucket');
+      await settings(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+      await page.keyboard.press('Escape');
+    });
   });
 
   // --- 4C T10 ---

@@ -11,6 +11,13 @@ const links = (text: string, r: ProjectRemote | null) =>
     .map((t) => (t.kind === 'link' ? [t.text, t.url] : []));
 
 describe('message links', () => {
+  it('links Bitbucket PRs and personal repositories without losing the installation context', () => {
+    const b: ProjectRemote = { host: 'code.example.com:8443', path: 'ORBIT/widget', hostKind: 'bitbucket', baseUrl: 'https://code.example.com:8443/bitbucket' };
+    expect(links('Review #5 and ~nova/widget#6, not !3', b)).toEqual([
+      ['#5', 'https://code.example.com:8443/bitbucket/projects/ORBIT/repos/widget/pull-requests/5'],
+      ['~nova/widget#6', 'https://code.example.com:8443/bitbucket/users/nova/repos/widget/pull-requests/6'],
+    ]);
+  });
   it('links GitLab MRs, issues and URLs, and makes buttons for MRs only', () => {
     const text = 'Refs !42 and group/sub/project!7, fixes #12.\nSee https://example.com/docs for details.';
     expect(links(text, gitlab)).toEqual([

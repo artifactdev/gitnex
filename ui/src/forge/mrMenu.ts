@@ -91,7 +91,7 @@ export const offMrMenus: Array<() => void> = [
     id: 'mr.draft', kind: 'mr', group: 'forge', order: 0,
     when: (t) => {
       const me = forgeOf(t.tabId).me;
-      return me !== null && me === t.mr.author.username && (t.mr.state === 'open' || t.mr.state === 'draft');
+      return t.forge !== 'bitbucket' && me !== null && me === t.mr.author.username && (t.mr.state === 'open' || t.mr.state === 'draft');
     },
     rows: (t) => {
       const ref = mrRef(t.forge, t.mr.number);

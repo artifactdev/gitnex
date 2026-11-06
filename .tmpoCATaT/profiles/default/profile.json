@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "default",
+  "name": "Default",
+  "color": "#4d88ff",
+  "tabs": [],
+  "activeTab": null,
+  "tabGroups": [],
+  "savedGroups": [],
+  "closedTabs": [],
+  "recent": [],
+  "reposFolder": null,
+  "reposFolders": null,
+  "editor": null,
+  "extraGitconfig": null,
+  "hostOverrides": {
+    "bitbucket.example.com": "bitbucket"
+  },
+  "bitbucketBases": {
+    "bitbucket.example.com": "https://bitbucket.example.com/context"
+  },
+  "sidebarWidth": 240,
+  "sidebarNarrow": false,
+  "sidebarPanels": {},
+  "rightPanelWidth": null,
+  "flyoutWidth": null,
+  "repos": {},
+  "fileColours": {},
+  "forgeAccounts": [
+    {
+      "id": "bitbucket.example.com",
+      "host": "bitbucket.example.com",
+      "kind": "bitbucket",
+      "baseUrl": "https://bitbucket.example.com/context",
+      "user": {
+        "id": 7,
+        "username": "reviewer",
+        "name": "Reviewer",
+        "avatarUrl": null,
+        "webUrl": "",
+        "email": "reviewer@example.com",
+        "emails": [
+          "reviewer@example.com"
+        ]
+      },
+      "storage": "file",
+      "version": "7.21.0",
+      "versionCheckedAt": 1793954541,
+      "addedAt": 1793954541
+    }
+  ]
+}

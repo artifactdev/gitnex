@@ -17,15 +17,29 @@ pub type ForgeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, GbError>> + 
 
 /// A method this forge (or this plan) doesn't have yet.
 pub fn unsupported<'a, T: Send + 'a>(what: &'static str) -> ForgeFuture<'a, T> {
-    Box::pin(async move { Err(GbError::new(GbErrorKind::InvalidInput, format!("{what} isn't supported by this forge yet"))) })
+    Box::pin(async move {
+        Err(GbError::new(
+            GbErrorKind::InvalidInput,
+            format!("{what} isn't supported by this forge yet"),
+        ))
+    })
 }
 
 /// Gravatar's avatar addresses, https only: a forge (GitLab) links them for users without an upload.
-pub const GRAVATAR_AVATAR_BASES: [&str; 3] = ["https://secure.gravatar.com/avatar/", "https://www.gravatar.com/avatar/", "https://gravatar.com/avatar/"];
+pub const GRAVATAR_AVATAR_BASES: [&str; 3] = [
+    "https://secure.gravatar.com/avatar/",
+    "https://www.gravatar.com/avatar/",
+    "https://gravatar.com/avatar/",
+];
 
 /// `url` is a Gravatar picture (the user's Gravatar setting decides whether GitNex fetches it).
 pub fn is_gravatar_url(url: &str) -> bool {
-    GRAVATAR_AVATAR_BASES.iter().any(|b| url.len() > b.len() && url.get(..b.len()).is_some_and(|p| p.eq_ignore_ascii_case(b)))
+    GRAVATAR_AVATAR_BASES.iter().any(|b| {
+        url.len() > b.len()
+            && url
+                .get(..b.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(b))
+    })
 }
 
 fn percent_decode(s: &str) -> Option<String> {
@@ -48,7 +62,9 @@ fn percent_decode(s: &str) -> Option<String> {
 /// `url` is `base` or below it (`base/…`, `base?…`), the scheme and host compared without case.
 fn under_base(url: &str, base: &str) -> bool {
     let base = base.trim_end_matches('/');
-    url.get(..base.len()).is_some_and(|p| p.eq_ignore_ascii_case(base)) && matches!(url.as_bytes().get(base.len()), None | Some(b'/' | b'?'))
+    url.get(..base.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(base))
+        && matches!(url.as_bytes().get(base.len()), None | Some(b'/' | b'?'))
 }
 
 /// `url`'s scheme, authority, path and query, when its shape is one an avatar address may have:
@@ -57,7 +73,10 @@ fn under_base(url: &str, base: &str) -> bool {
 /// segment and no `%` left (a double encoding). Anything else could resolve somewhere else on the
 /// host than the prefix it seems to be under.
 fn avatar_url_parts(url: &str) -> Option<(&str, &str, &str, Option<&str>)> {
-    if url.is_empty() || url.contains(['@', '\\', '#']) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if url.is_empty()
+        || url.contains(['@', '\\', '#'])
+        || url.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
         return None;
     }
     let (scheme, rest) = url.split_once("://")?;
@@ -97,11 +116,19 @@ pub fn avatar_fetch_url(url: &str, bases: &[&str]) -> Option<String> {
         return None;
     }
     let https = scheme.eq_ignore_ascii_case("https");
-    if !https && !own.is_some_and(|b| b.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("http://"))) {
+    if !https
+        && !own.is_some_and(|b| {
+            b.get(..7)
+                .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        })
+    {
         return None;
     }
     if gravatar {
-        let kept = query.unwrap_or("").split('&').filter(|kv| !kv.is_empty() && !matches!(kv.split('=').next(), Some("d" | "default")));
+        let kept = query
+            .unwrap_or("")
+            .split('&')
+            .filter(|kv| !kv.is_empty() && !matches!(kv.split('=').next(), Some("d" | "default")));
         let q: Vec<&str> = kept.chain(["d=404"]).collect();
         return Some(format!("{scheme}://{authority}{path}?{}", q.join("&")));
     }
@@ -134,7 +161,11 @@ pub struct AccountKey {
 impl AccountKey {
     /// What names the account within its profile: its id, else its host.
     pub fn name(&self) -> &str {
-        if self.id.is_empty() { &self.host } else { &self.id }
+        if self.id.is_empty() {
+            &self.host
+        } else {
+            &self.id
+        }
     }
 
     /// The keyring's account name (core spec §14.3): `<profile-id>/<host>` for the account a host
@@ -172,18 +203,29 @@ pub trait ForgeProvider: Send + Sync {
     fn search_repos<'a>(&'a self, _query: &'a str) -> ForgeFuture<'a, Vec<ForgeProject>> {
         unsupported("Searching repositories")
     }
-    fn project_settings<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, ForgeProjectSettings>;
+    fn project_settings<'a>(
+        &'a self,
+        project: &'a ForgeProject,
+    ) -> ForgeFuture<'a, ForgeProjectSettings>;
     /// The project's forks, newest activity first.
     fn forks<'a>(&'a self, project: &'a ForgeProject) -> ForgeFuture<'a, Vec<ForgeProject>>;
 
     /// One page of the forks, newest first. The default slices `forks`; providers ask the forge for just the page.
-    fn forks_page<'a>(&'a self, project: &'a ForgeProject, page: u32, per_page: u32) -> ForgeFuture<'a, ForkPage> {
+    fn forks_page<'a>(
+        &'a self,
+        project: &'a ForgeProject,
+        page: u32,
+        per_page: u32,
+    ) -> ForgeFuture<'a, ForkPage> {
         Box::pin(async move {
             let all = self.forks(project).await?;
             let per = per_page.max(1) as usize;
             let start = (page.max(1) as usize - 1).saturating_mul(per);
             let next = (start.saturating_add(per) < all.len()).then(|| page.max(1) + 1);
-            Ok(ForkPage { forks: all.into_iter().skip(start).take(per).collect(), next })
+            Ok(ForkPage {
+                forks: all.into_iter().skip(start).take(per).collect(),
+                next,
+            })
         })
     }
 
@@ -194,7 +236,11 @@ pub trait ForgeProvider: Send + Sync {
     /// linked to `email`'s commits in `project` (the repo's own forge target, so the email only
     /// goes where its commits came from). Rationed: providers answer each email at most once a
     /// session. By default there's no such lookup.
-    fn avatar_for_email_in<'a>(&'a self, _project: &'a ForgeProject, _email: &'a str) -> ForgeFuture<'a, Option<AvatarPayload>> {
+    fn avatar_for_email_in<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _email: &'a str,
+    ) -> ForgeFuture<'a, Option<AvatarPayload>> {
         Box::pin(async { Ok(None) })
     }
     // --- end GitHub commit-author avatars ---
@@ -204,7 +250,11 @@ pub trait ForgeProvider: Send + Sync {
     /// display name or username is exactly `name` (case and spacing aside), else, where the forge
     /// has one, a user search by that name (never by email) with a single exact match. Two people
     /// with that name: none. A found picture is kept under `email`. By default there's none.
-    fn avatar_for_name<'a>(&'a self, _email: &'a str, _name: &'a str) -> ForgeFuture<'a, Option<AvatarPayload>> {
+    fn avatar_for_name<'a>(
+        &'a self,
+        _email: &'a str,
+        _name: &'a str,
+    ) -> ForgeFuture<'a, Option<AvatarPayload>> {
         Box::pin(async { Ok(None) })
     }
     // --- end commit-author avatars by name ---
@@ -221,13 +271,21 @@ pub trait ForgeProvider: Send + Sync {
     /// An image a Markdown body of `project` links (spec #5 §4.2), when `url` is on one of this
     /// forge's own hosts; `None`, and no request, for any other address (the UI offers to load it
     /// on a click). The token goes only where `HttpClient::get_image_within` sends it.
-    fn image<'a>(&'a self, _project: &'a ForgeProject, _url: &'a str) -> Option<ForgeFuture<'a, ForgeImage>> {
+    fn image<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _url: &'a str,
+    ) -> Option<ForgeFuture<'a, ForgeImage>> {
         None
     }
     // --- end 5A T1 ---
     /// A video a Markdown body embeds, as `image` (the same hosts and token rules): `Found` with a
     /// `video/*` type, up to the video size cap.
-    fn video<'a>(&'a self, _project: &'a ForgeProject, _url: &'a str) -> Option<ForgeFuture<'a, ForgeImage>> {
+    fn video<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _url: &'a str,
+    ) -> Option<ForgeFuture<'a, ForgeImage>> {
         None
     }
 
@@ -244,18 +302,30 @@ pub trait ForgeProvider: Send + Sync {
     }
 
     // --- 4B: reads ---
-    fn open_mrs<'a>(&'a self, _project: &'a ForgeProject, _filter: MrFilter) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
+    fn open_mrs<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _filter: MrFilter,
+    ) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
         unsupported("Listing merge requests")
     }
     /// `open_mrs` without pipelines or checks: the badges, which never show one, and cost no
     /// lookups per MR/PR. By default, `open_mrs` itself.
-    fn open_mrs_light<'a>(&'a self, project: &'a ForgeProject, filter: MrFilter) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
+    fn open_mrs_light<'a>(
+        &'a self,
+        project: &'a ForgeProject,
+        filter: MrFilter,
+    ) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
         self.open_mrs(project, filter)
     }
     // --- 4D T4 ---
     /// The open MRs/PRs whose target is `branch`, all of them (the merge guard must not miss one
     /// past the general list's first page). By default, `open_mrs_light` filtered.
-    fn open_mrs_targeting<'a>(&'a self, project: &'a ForgeProject, branch: &'a str) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
+    fn open_mrs_targeting<'a>(
+        &'a self,
+        project: &'a ForgeProject,
+        branch: &'a str,
+    ) -> ForgeFuture<'a, Fresh<Vec<ForgeMr>>> {
         Box::pin(async move {
             let mut r = self.open_mrs_light(project, MrFilter::All).await?;
             r.value.retain(|m| m.target_branch == branch);
@@ -263,30 +333,57 @@ pub trait ForgeProvider: Send + Sync {
         })
     }
     // --- end 4D T4 ---
-    fn mr_for_branch<'a>(&'a self, _project: &'a ForgeProject, _source: &'a SourceRef) -> ForgeFuture<'a, Fresh<Option<ForgeMr>>> {
+    fn mr_for_branch<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _source: &'a SourceRef,
+    ) -> ForgeFuture<'a, Fresh<Option<ForgeMr>>> {
         unsupported("Finding a branch's merge request")
     }
-    fn mr_detail<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, Fresh<ForgeMrDetail>> {
+    fn mr_detail<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, Fresh<ForgeMrDetail>> {
         unsupported("Merge request details")
     }
-    fn discussions<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, Fresh<Vec<ForgeDiscussion>>> {
+    fn discussions<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, Fresh<Vec<ForgeDiscussion>>> {
         unsupported("Reading discussions")
     }
     // --- 4B: writes ---
-    fn reply<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _note: &'a NewNote) -> ForgeFuture<'a, ForgeNote> {
+    fn reply<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _note: &'a NewNote,
+    ) -> ForgeFuture<'a, ForgeNote> {
         unsupported("Replying")
     }
     fn approve<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, ()> {
         unsupported("Approving")
     }
-    fn request_changes<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _body: &'a str) -> ForgeFuture<'a, ()> {
+    fn request_changes<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _body: &'a str,
+    ) -> ForgeFuture<'a, ()> {
         unsupported("Requesting changes")
     }
     // --- MR round 2: the review composer ---
     /// A review from the composer. By default: Comment is a note, Approve approves (then the
     /// note, if any), Request changes is `request_changes`. GitHub posts one review; GitLab
     /// sets the requested-changes reviewer state where it can.
-    fn review<'a>(&'a self, project: &'a ForgeProject, number: u64, review: &'a ReviewSubmit) -> ForgeFuture<'a, ReviewOutcome> {
+    fn review<'a>(
+        &'a self,
+        project: &'a ForgeProject,
+        number: u64,
+        review: &'a ReviewSubmit,
+    ) -> ForgeFuture<'a, ReviewOutcome> {
         Box::pin(review_by_parts(self, project, number, review))
     }
     /// How many reviewers and assignees an MR/PR of `project` may have (`PeopleLimits`).
@@ -295,39 +392,82 @@ pub trait ForgeProvider: Send + Sync {
         Box::pin(async { Ok(PeopleLimits::default()) })
     }
     /// Subscribes the token's user to the MR/PR's notifications, or unsubscribes; the state after.
-    fn set_subscribed<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _on: bool) -> ForgeFuture<'a, bool> {
+    fn set_subscribed<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _on: bool,
+    ) -> ForgeFuture<'a, bool> {
         unsupported("Notifications")
     }
     // --- end MR round 2 ---
     // --- comment actions ---
     /// Adds (`on`) or removes the token's user's `name` reaction on a note, if not so already;
     /// the note's reactions after.
-    fn react<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _note: &'a NoteRef, _name: &'a str, _on: bool) -> ForgeFuture<'a, Vec<ForgeReaction>> {
+    fn react<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _note: &'a NoteRef,
+        _name: &'a str,
+        _on: bool,
+    ) -> ForgeFuture<'a, Vec<ForgeReaction>> {
         unsupported("Reactions")
     }
     /// The note with its new body, as the forge answered (no position or reactions: the caller
     /// keeps its own).
-    fn edit_note<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _note: &'a NoteRef, _body: &'a str) -> ForgeFuture<'a, ForgeNote> {
+    fn edit_note<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _note: &'a NoteRef,
+        _body: &'a str,
+    ) -> ForgeFuture<'a, ForgeNote> {
         unsupported("Editing a comment")
     }
-    fn delete_note<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _note: &'a NoteRef) -> ForgeFuture<'a, ()> {
+    fn delete_note<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _note: &'a NoteRef,
+    ) -> ForgeFuture<'a, ()> {
         unsupported("Deleting a comment")
     }
     /// Resolves a resolvable thread (GitLab's discussion, GitHub's review thread), or unresolves it.
-    fn resolve<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _discussion: &'a str, _resolved: bool) -> ForgeFuture<'a, ThreadState> {
+    fn resolve<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _discussion: &'a str,
+        _resolved: bool,
+    ) -> ForgeFuture<'a, ThreadState> {
         unsupported("Resolving a thread")
     }
     // --- end comment actions ---
-    fn merge<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _opts: &'a MergeOptions) -> ForgeFuture<'a, ForgeMr> {
+    fn merge<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _opts: &'a MergeOptions,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Merging")
     }
     // --- auto-merge ---
     /// Sets it to merge once its checks pass, with `opts` (GitLab's auto-merge, GitHub's
     /// auto-merge). GitLab merges at once when they've passed already: the answer says which.
-    fn set_auto_merge<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _opts: &'a MergeOptions) -> ForgeFuture<'a, ForgeMr> {
+    fn set_auto_merge<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _opts: &'a MergeOptions,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Auto-merge")
     }
-    fn cancel_auto_merge<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, ForgeMr> {
+    fn cancel_auto_merge<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Auto-merge")
     }
     // --- end auto-merge ---
@@ -336,81 +476,178 @@ pub trait ForgeProvider: Send + Sync {
     /// detail's `update.kinds`), only while its head is still `expected_sha` where the forge can
     /// check it. The forge does it in the background: this waits a while for it to finish, and
     /// answers the MR as it is then (still updating, if it took longer: the detail says so).
-    fn update_branch<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _how: BranchUpdate, _expected_sha: Option<&'a str>) -> ForgeFuture<'a, ForgeMr> {
+    fn update_branch<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _how: BranchUpdate,
+        _expected_sha: Option<&'a str>,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Updating the branch")
     }
     // --- end branch update ---
-    fn edit<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _edit: &'a MrEdit) -> ForgeFuture<'a, ForgeMr> {
+    fn edit<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _edit: &'a MrEdit,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Editing a merge request")
     }
-    fn set_draft<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _draft: bool) -> ForgeFuture<'a, ForgeMr> {
+    fn set_closed<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _closed: bool,
+    ) -> ForgeFuture<'a, ForgeMr> {
+        unsupported("Closing or reopening a merge request")
+    }
+    fn set_draft<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _draft: bool,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Changing draft status")
     }
     // --- review comments (spec 2026-10-08 §6) ---
     /// The MR's diff as the forge has it, with the lines each file takes comments on.
-    fn review_diff<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, ReviewDiff> {
+    fn review_diff<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, ReviewDiff> {
         unsupported("Commenting on lines")
     }
     /// The user's pending review: its drafts and the diff refs; `can_draft` true (the hub knows
     /// GitLab's version).
-    fn review_drafts<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, ReviewDrafts> {
+    fn review_drafts<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, ReviewDrafts> {
         unsupported("Commenting on lines")
     }
     /// Adds a line comment to the user's pending review (GitHub starts one when none is).
-    fn add_draft<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _comment: &'a NewReviewComment) -> ForgeFuture<'a, ReviewDraft> {
+    fn add_draft<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _comment: &'a NewReviewComment,
+    ) -> ForgeFuture<'a, ReviewDraft> {
         unsupported("Commenting on lines")
     }
     /// The draft with its new body, as the forge answered (no position: the caller keeps its own).
-    fn edit_draft<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _id: &'a str, _body: &'a str) -> ForgeFuture<'a, ReviewDraft> {
+    fn edit_draft<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _id: &'a str,
+        _body: &'a str,
+    ) -> ForgeFuture<'a, ReviewDraft> {
         unsupported("Commenting on lines")
     }
-    fn delete_draft<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _id: &'a str) -> ForgeFuture<'a, ()> {
+    fn delete_draft<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _id: &'a str,
+    ) -> ForgeFuture<'a, ()> {
         unsupported("Commenting on lines")
     }
     /// Sends the pending review with `review`'s event and summary (without one pending: the
     /// review alone). `published` is left at 0: the hub counted the drafts before.
-    fn submit_review<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _review: &'a ReviewSubmit) -> ForgeFuture<'a, SubmitOutcome> {
+    fn submit_review<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _review: &'a ReviewSubmit,
+    ) -> ForgeFuture<'a, SubmitOutcome> {
         unsupported("Commenting on lines")
     }
     /// Deletes the pending review and its drafts: how many drafts went.
-    fn discard_review<'a>(&'a self, _project: &'a ForgeProject, _number: u64) -> ForgeFuture<'a, u32> {
+    fn discard_review<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+    ) -> ForgeFuture<'a, u32> {
         unsupported("Commenting on lines")
     }
     /// A line comment now, outside any review: its new thread.
-    fn comment_now<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _comment: &'a NewReviewComment) -> ForgeFuture<'a, ForgeDiscussion> {
+    fn comment_now<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _comment: &'a NewReviewComment,
+    ) -> ForgeFuture<'a, ForgeDiscussion> {
         unsupported("Commenting on lines")
     }
     // --- end review comments ---
     // --- 4C ---
-    fn create_mr<'a>(&'a self, _project: &'a ForgeProject, _req: &'a CreateMr) -> ForgeFuture<'a, CreateOutcome> {
+    fn create_mr<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _req: &'a CreateMr,
+    ) -> ForgeFuture<'a, CreateOutcome> {
         unsupported("Creating a merge request")
     }
-    fn search_users<'a>(&'a self, _project: &'a ForgeProject, _query: &'a str) -> ForgeFuture<'a, Vec<ForgeUser>> {
+    fn search_users<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _query: &'a str,
+    ) -> ForgeFuture<'a, Vec<ForgeUser>> {
         unsupported("Searching users")
     }
-    fn labels<'a>(&'a self, _project: &'a ForgeProject, _query: &'a str) -> ForgeFuture<'a, Vec<ForgeLabel>> {
+    fn labels<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _query: &'a str,
+    ) -> ForgeFuture<'a, Vec<ForgeLabel>> {
         unsupported("Listing labels")
     }
-    fn mr_templates<'a>(&'a self, _project: &'a ForgeProject, _branch: &'a str) -> ForgeFuture<'a, Vec<MrTemplate>> {
+    fn mr_templates<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _branch: &'a str,
+    ) -> ForgeFuture<'a, Vec<MrTemplate>> {
         unsupported("Reading templates")
     }
     // --- 4C T1: an addition to 4A's trait, with a refusing default like the others ---
     /// Adds the parts a create's follow-up calls couldn't (GitHub: reviewers, assignees and labels
     /// on PR `number`), for the Retry of a partial failure (spec #4 §3.5). The parts still failing.
-    fn complete_create<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _req: &'a CreateMr, _parts: &'a [CreatePart]) -> ForgeFuture<'a, Vec<PartFailure>> {
+    fn complete_create<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _req: &'a CreateMr,
+        _parts: &'a [CreatePart],
+    ) -> ForgeFuture<'a, Vec<PartFailure>> {
         unsupported("Adding reviewers, assignees and labels afterwards")
     }
     // --- end 4C T1 ---
     // --- 4D ---
-    fn retarget<'a>(&'a self, _project: &'a ForgeProject, _number: u64, _target_branch: &'a str) -> ForgeFuture<'a, ForgeMr> {
+    fn retarget<'a>(
+        &'a self,
+        _project: &'a ForgeProject,
+        _number: u64,
+        _target_branch: &'a str,
+    ) -> ForgeFuture<'a, ForgeMr> {
         unsupported("Retargeting")
     }
 }
 
 /// `ForgeProvider::review`'s default, from the provider's own writes: Comment is a note,
 /// Approve approves (then the note, if any), Request changes is `request_changes`.
-pub async fn review_by_parts<P: ForgeProvider + ?Sized>(p: &P, project: &ForgeProject, number: u64, review: &ReviewSubmit) -> Result<ReviewOutcome, GbError> {
-    let note = || NewNote { discussion: None, body: review.body.clone() };
+pub async fn review_by_parts<P: ForgeProvider + ?Sized>(
+    p: &P,
+    project: &ForgeProject,
+    number: u64,
+    review: &ReviewSubmit,
+) -> Result<ReviewOutcome, GbError> {
+    let note = || NewNote {
+        discussion: None,
+        body: review.body.clone(),
+    };
     match review.event {
         ReviewEvent::Comment => {
             p.reply(project, number, &note()).await?;
@@ -429,7 +666,28 @@ pub async fn review_by_parts<P: ForgeProvider + ?Sized>(p: &P, project: &ForgePr
 /// Builds a provider for an account (gitnex-forge's `Forge`; tests' fakes).
 pub trait ForgeConnector: Send + Sync {
     /// `Err(InvalidInput)` for a host this build won't talk to (the harness: any real forge).
-    fn connect(&self, kind: ForgeKind, host: &str, token: Secret) -> Result<Arc<dyn ForgeProvider>, GbError>;
+    fn connect(
+        &self,
+        kind: ForgeKind,
+        host: &str,
+        token: Secret,
+    ) -> Result<Arc<dyn ForgeProvider>, GbError>;
+    /// Connect an account with an installation URL, if the connector supports one.
+    fn connect_account(
+        &self,
+        kind: ForgeKind,
+        host: &str,
+        base_url: Option<&str>,
+        token: Secret,
+    ) -> Result<Arc<dyn ForgeProvider>, GbError> {
+        if base_url.is_some() {
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "Installation URLs aren't supported by this connector",
+            ));
+        }
+        self.connect(kind, host, token)
+    }
     // --- 5A T1 ---
     /// An image the user chose to load ("Load image from <host>"): no token, https only, the
     /// image size cap. Needs no account.
@@ -477,9 +735,15 @@ mod tests {
     #[test]
     fn an_avatar_address_is_fetched_only_under_the_accounts_bases_or_gravatar() {
         let ok = format!("{UPLOADS}/-/system/user/avatar/7/a%20b.png");
-        assert_eq!(avatar_fetch_url(&ok, &[UPLOADS]).as_deref(), Some(ok.as_str()));
+        assert_eq!(
+            avatar_fetch_url(&ok, &[UPLOADS]).as_deref(),
+            Some(ok.as_str())
+        );
         assert!(avatar_fetch_url(&format!("{GH}/u/583231?v=4"), &[GH]).is_some());
-        assert!(avatar_fetch_url("HTTPS://Avatars.GitHubUserContent.com/u/1", &[GH]).is_some(), "scheme and host without case");
+        assert!(
+            avatar_fetch_url("HTTPS://Avatars.GitHubUserContent.com/u/1", &[GH]).is_some(),
+            "scheme and host without case"
+        );
         for no in [
             "https://gitlab.example.com/api/v4/user".to_string(),
             "https://evil.example.com/uploads/a.png".to_string(),
@@ -491,21 +755,42 @@ mod tests {
         ] {
             assert_eq!(avatar_fetch_url(&no, &[UPLOADS, GH]), None, "{no}");
         }
-        assert!(avatar_fetch_url("http://127.0.0.1:9/gitlab/uploads/a.png", &["http://127.0.0.1:9/gitlab/uploads"]).is_some(), "plain http only under an http base (the harness)");
+        assert!(
+            avatar_fetch_url(
+                "http://127.0.0.1:9/gitlab/uploads/a.png",
+                &["http://127.0.0.1:9/gitlab/uploads"]
+            )
+            .is_some(),
+            "plain http only under an http base (the harness)"
+        );
     }
 
     #[test]
     fn tricks_around_dot_segments_encodings_and_userinfo_are_refused() {
         for no in [
-            "/uploads/..?x", "/uploads/..#x", "/uploads/../api/v4/user", "/uploads/./a.png", "/uploads/..%2f..%2fapi/v4/user",
-            "/uploads/..%2F..%2Fapi", "/uploads/%2e%2e/api/v4/user", "/uploads/%2E%2E/api", "/uploads/%252e%252e/api", "/uploads/..%5capi",
-            "/uploads\\..\\api", "/uploads/a.png#frag", "/uploads/a%zz.png", "/uploads/a .png",
+            "/uploads/..?x",
+            "/uploads/..#x",
+            "/uploads/../api/v4/user",
+            "/uploads/./a.png",
+            "/uploads/..%2f..%2fapi/v4/user",
+            "/uploads/..%2F..%2Fapi",
+            "/uploads/%2e%2e/api/v4/user",
+            "/uploads/%2E%2E/api",
+            "/uploads/%252e%252e/api",
+            "/uploads/..%5capi",
+            "/uploads\\..\\api",
+            "/uploads/a.png#frag",
+            "/uploads/a%zz.png",
+            "/uploads/a .png",
         ] {
             let url = format!("https://gitlab.example.com{no}");
             assert_eq!(avatar_fetch_url(&url, &[UPLOADS]), None, "{url}");
             assert!(!avatar_url_is_clean(&url), "{url}");
         }
-        for no in ["https://x@gitlab.example.com/uploads/a.png", "https://gitlab.example.com/uploads/a@b.png"] {
+        for no in [
+            "https://x@gitlab.example.com/uploads/a.png",
+            "https://gitlab.example.com/uploads/a@b.png",
+        ] {
             assert_eq!(avatar_fetch_url(no, &[UPLOADS]), None, "{no}");
         }
     }
@@ -516,7 +801,13 @@ mod tests {
             avatar_fetch_url("https://secure.gravatar.com/avatar/abc?s=80&d=https%3A%2F%2Fevil.example.com%2Fx&default=mm", &[]).as_deref(),
             Some("https://secure.gravatar.com/avatar/abc?s=80&d=404")
         );
-        assert_eq!(avatar_fetch_url("https://www.gravatar.com/avatar/abc", &[]).as_deref(), Some("https://www.gravatar.com/avatar/abc?d=404"));
-        assert_eq!(avatar_fetch_url("http://secure.gravatar.com/avatar/abc", &[]), None);
+        assert_eq!(
+            avatar_fetch_url("https://www.gravatar.com/avatar/abc", &[]).as_deref(),
+            Some("https://www.gravatar.com/avatar/abc?d=404")
+        );
+        assert_eq!(
+            avatar_fetch_url("http://secure.gravatar.com/avatar/abc", &[]),
+            None
+        );
     }
 }

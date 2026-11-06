@@ -2,7 +2,8 @@ import type { ForgeKind } from '../api/gen/ForgeKind';
 import type { LocateResult } from '../api/gen/LocateResult';
 import { shortSha } from '../format/sha';
 import { forgeName, mrRef } from '../forge/labels';
-import { mrUrl } from '../markdown/links';
+import { mrUrl, webRoot } from '../markdown/links';
+import { bitbucketRepoUrl } from '../forge/urls';
 import type { ForgeProjectRef, GotoTarget, LineRange } from './classify';
 
 /** A tab's forge project: its kind, `group/project` and web URL (no trailing slash). */
@@ -152,9 +153,9 @@ async function findCommit(env: GotoEnv, tabs: GotoTab[], sha: string): Promise<G
 }
 
 /** Whether `t`'s forge project is `at`'s, exactly: host and full path. */
-const isProject = (t: GotoTab, at: ForgeProjectRef) => t.forge !== null && same(withoutScheme(t.forge.webUrl), `${at.host}/${at.project}`);
+const isProject = (t: GotoTab, at: ForgeProjectRef) => t.forge !== null && same(withoutScheme(t.forge.webUrl), at.webUrl ? withoutScheme(at.webUrl) : `${at.host}/${at.project}`);
 /** Whether one of `t`'s remotes is `at`'s project (host and full path). */
-const hasRemote = (t: GotoTab, at: ForgeProjectRef) => t.remotes.some((r) => same(r.host, at.host) && same(r.path, at.project));
+const hasRemote = (t: GotoTab, at: ForgeProjectRef) => t.remotes.some((r) => same(r.host, at.host) && (same(r.path, at.project) || (at.forge === 'bitbucket' && r.path.toLowerCase().endsWith(`/scm/${at.project.toLowerCase()}`))));
 
 /**
  * The tab for a forge page of `at`'s project. First, across all tabs, the one whose forge project
@@ -201,15 +202,18 @@ async function resolveMr(target: Extract<GotoTarget, { kind: 'mr' }>, tabs: Goto
   const active = activeOf(tabs);
   const forge = active?.forge;
   if (!active) return NONE;
-  if (!forge) return toast(`${active.name} has no GitLab, GitHub or Forgejo project for ${target.sigil}${target.number}`);
+  if (!forge) return toast(`${active.name} has no GitLab, GitHub, Forgejo or Bitbucket project for ${target.sigil}${target.number}`);
   if ((forge.kind === 'gitlab') !== (target.sigil === '!')) return NONE;
-  const root = forge.webUrl.slice(0, forge.webUrl.length - forge.path.length).replace(/\/+$/, '');
+  const root = webRoot(forge);
   const project = target.project ?? forge.path;
   if (same(project, forge.path)) return { kind: 'mr', tabId: active.tabId, number: target.number, forge: forge.kind, project: forge.path, url: mrUrl(forge.kind, forge.webUrl, target.number) };
   // `group/other!12`: the tab whose project that is, on the same forge.
-  const at: ForgeProjectRef = { host: withoutScheme(root).split('/')[0].toLowerCase(), project: `${withoutScheme(root).split('/').slice(1).concat(project).join('/')}`, forge: forge.kind };
+  const projectUrl = forge.kind === 'bitbucket' ? bitbucketRepoUrl(root, project) : `${root}/${project}`;
+  const at: ForgeProjectRef = forge.kind === 'bitbucket'
+    ? { host: new URL(root).host.toLowerCase(), project, forge: forge.kind, webUrl: projectUrl }
+    : { host: withoutScheme(root).split('/')[0].toLowerCase(), project: `${withoutScheme(root).split('/').slice(1).concat(project).join('/')}`, forge: forge.kind };
   const m = await matchTab(tabs, at, env, 'mr');
-  const url = mrUrl(forge.kind, `${root}/${project}`, target.number);
+  const url = mrUrl(forge.kind, projectUrl, target.number);
   if (m.tab?.forge) return { kind: 'mr', tabId: m.tab.tabId, number: target.number, forge: m.tab.forge.kind, project: m.tab.forge.path, url };
   return toast(`${mrRef(forge.kind, target.number)} belongs to ${project}, which isn't open here`, url);
 }

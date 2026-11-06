@@ -19,7 +19,7 @@ import { effectiveKind } from './urls';
 import './accounts.css';
 
 export const FILE_WARNING = 'Stored in a file, not the system keyring: install or start a Secret Service (GNOME Keyring, KWallet), then restart GitNex to secure it.';
-const KINDS: Array<[ForgeKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo']];
+const KINDS: Array<[ForgeKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo'], ['bitbucket', 'Bitbucket']];
 
 /** What an account's last requests said, in plain words; `null` when all is well. */
 export function statusText(v: ForgeAccountView): string | null {
@@ -50,6 +50,7 @@ const TOKEN_HELP: Record<ForgeKind, string> = {
   gitlab: 'Opens your profile\'s token page with the api scope selected. Copy the token, then paste it here.',
   github: 'Opens GitHub\'s fine-grained token page with the permissions GitNex needs selected. Some organizations cap these tokens\' lifetime (e.g. 90 days); use a classic token for those.',
   forgejo: 'Opens the new-token form in your Applications settings. Generate a token with the read:user, write:repository and write:issue scopes, then paste it here.',
+  bitbucket: 'Use a personal access token (user HTTP access token) from Manage account › HTTP access tokens, with repository read/write permissions for the actions you need. Merges open in your browser. Bitbucket Cloud is not supported.',
 };
 /** Untyped, with no suggestion of its kind, the host a forge picked starts with (GitLab: none). */
 const DEFAULT_HOSTS: Partial<Record<ForgeKind, string>> = { github: 'github.com', forgejo: 'codeberg.org' };
@@ -71,8 +72,14 @@ export function AccountsSection() {
   const addButton = useRef<HTMLButtonElement>(null);
   const refocusAdd = useRef(false);
   const reload = useCallback(async (keepError = false) => {
+    const profileId = useAppState.getState().profile.id;
     try {
-      setAccounts(await api.forgeAccounts());
+      const views = await api.forgeAccounts();
+      setAccounts(views);
+      const bases = Object.fromEntries(views.flatMap(({ account }) => account.kind === 'bitbucket' && account.baseUrl ? [[account.host, account.baseUrl]] : []));
+      useAppState.setState(({ profile }) => profile.id === profileId && Object.entries(bases).some(([host, base]) => profile.bitbucketBases?.[host] !== base)
+        ? { profile: { ...profile, bitbucketBases: { ...profile.bitbucketBases, ...bases } } }
+        : {});
       if (!keepError) setError(null);
     } catch (e) {
       setError(errorMessage(e));
@@ -125,7 +132,7 @@ export function AccountsSection() {
   return (
     <div className="accounts-box" id="setting-forgeAccounts" data-setting-id="forgeAccounts">
       <p className="dim accounts-help">
-        Connect GitLab, GitHub or Forgejo to see merge requests, pull requests and forks. A host can have
+        Connect GitLab, GitHub, Forgejo or Bitbucket Data Center / Server to see merge requests, pull requests and forks. A host can have
         several accounts: repositories use its default unless Settings › Repository picks another.
         {accounts?.length === 0 && ' Tokens are kept in the system keyring.'}
       </p>
@@ -172,7 +179,7 @@ function AccountRow({ v, isDefault, onReplace, onRemove }: { v: ForgeAccountView
           <span className="dim">@{a.user.username}</span>
         </div>
         <div className="account-meta dim">
-          <span>{a.host} · {forgeName(a.kind)}{version ? ` ${version}` : ''}</span>
+          <span>{a.baseUrl ?? a.host} · {forgeName(a.kind)}{version ? ` ${version}` : ''}</span>
           <span className={`chip is-${chip.tone}`}>● {chip.label}</span>
           <span className={`chip${file ? ' is-warn' : ''}`}>{file ? 'File — not secure' : 'System keyring'}</span>
           {isDefault && <span className="chip" title="Automatic uses it, in Settings › Repository › Forge account">Default for {a.host}</span>}
@@ -206,7 +213,7 @@ function AddAccount({ panel, taken, onAdded, onCancel, onReplace }: { panel: Pan
     }
     return out;
   }, [remotes, overrides, repoName]);
-  const [typed, setTyped] = useState<string | null>(replacing ? panel.account.host : null);
+  const [typed, setTyped] = useState<string | null>(replacing ? panel.account.baseUrl ?? panel.account.host : null);
   const [pickedEarly, setPickedEarly] = useState<ForgeKind | null>(replacing ? panel.account.kind : null);
   // Untyped, the host follows the forge picked: its first suggestion, and otherwise github.com for
   // GitHub (GitHub Enterprise Server is out of scope) or codeberg.org for Forgejo.
@@ -350,6 +357,7 @@ function AddAccount({ panel, taken, onAdded, onCancel, onReplace }: { panel: Pan
           </div>
           <span className="dim">{picked === null && host ? (asking ? `Asking ${bare} which forge it runs…` : 'Detected from the host') : ''}</span>
         </div>
+        {kind === 'bitbucket' && <p className="dim field-help">Enter the full HTTPS installation address in Host, including its port and context path, for example https://code.example.com:8443/bitbucket. Use the web address, not the SSH clone port.</p>}
       </div>
       {kind === 'github' && (
         <div className="field">

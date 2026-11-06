@@ -15,6 +15,13 @@ const refs = (md: string, flavor: MdFlavor = 'gitlab') => {
 const ref = (refKind: MdReferenceNode['refKind'], value: string, over: Partial<MdReferenceNode> = {}) => ({ refKind, project: null, number: null, sha: null, user: null, value, ...over });
 
 describe('the references plugin (spec #5 §3.1)', () => {
+  it('treats Bitbucket # references as PRs, including personal repositories', () => {
+    expect(refs('See #7, ORBIT/widget#8 and ~nova/widget#9, not !10.', 'bitbucket')).toEqual([
+      ref('mr', '#7', { number: 7 }),
+      ref('mr', 'ORBIT/widget#8', { project: 'ORBIT/widget', number: 8 }),
+      ref('mr', '~nova/widget#9', { project: '~nova/widget', number: 9 }),
+    ]);
+  });
   it('finds #n and project#n, and GitLab’s !n and group/project!n in the gitlab flavor only', () => {
     expect(refs('Fixes #12, see group/sub/project#3 and !45 or group/project!7.')).toEqual([
       ref('issue', '#12', { number: 12 }),

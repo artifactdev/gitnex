@@ -16,9 +16,26 @@ pub struct HostEndpoints {
 
 pub fn default_endpoints(kind: ForgeKind, host: &str) -> HostEndpoints {
     match kind {
-        ForgeKind::GitLab => HostEndpoints { api: format!("https://{host}/api/v4"), web: format!("https://{host}"), avatars: None },
-        ForgeKind::GitHub => HostEndpoints { api: "https://api.github.com".into(), web: "https://github.com".into(), avatars: Some("https://avatars.githubusercontent.com".into()) },
-        ForgeKind::Forgejo => HostEndpoints { api: format!("https://{host}/api/v1"), web: format!("https://{host}"), avatars: None },
+        ForgeKind::GitLab => HostEndpoints {
+            api: format!("https://{host}/api/v4"),
+            web: format!("https://{host}"),
+            avatars: None,
+        },
+        ForgeKind::GitHub => HostEndpoints {
+            api: "https://api.github.com".into(),
+            web: "https://github.com".into(),
+            avatars: Some("https://avatars.githubusercontent.com".into()),
+        },
+        ForgeKind::Forgejo => HostEndpoints {
+            api: format!("https://{host}/api/v1"),
+            web: format!("https://{host}"),
+            avatars: None,
+        },
+        ForgeKind::Bitbucket => HostEndpoints {
+            api: format!("https://{host}/rest/api/1.0"),
+            web: format!("https://{host}"),
+            avatars: None,
+        },
     }
 }
 
@@ -28,6 +45,13 @@ mod tests {
 
     #[test]
     fn forgejo_is_on_its_own_host_under_api_v1() {
-        assert_eq!(default_endpoints(ForgeKind::Forgejo, "forgejo.example.org:3000"), HostEndpoints { api: "https://forgejo.example.org:3000/api/v1".into(), web: "https://forgejo.example.org:3000".into(), avatars: None });
+        assert_eq!(
+            default_endpoints(ForgeKind::Forgejo, "forgejo.example.org:3000"),
+            HostEndpoints {
+                api: "https://forgejo.example.org:3000/api/v1".into(),
+                web: "https://forgejo.example.org:3000".into(),
+                avatars: None
+            }
+        );
     }
 }

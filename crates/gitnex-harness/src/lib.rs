@@ -1,25 +1,25 @@
 //! Serves `Api::dispatch` over a WebSocket so Playwright can drive the real backend, and
 //! forwards the backend's event bus on the same socket as `{"event": …}` frames.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
+use axum::serve::ListenerExt;
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
-use gitnex_core::api::{Api, Request, WriteGuard, FIXTURE_ONLY};
+use gitnex_core::api::{Api, FIXTURE_ONLY, Request, WriteGuard};
 use gitnex_core::error::{GbError, GbErrorKind};
 use gitnex_core::events::AppEvent;
 use gitnex_core::git::GitCli;
 use gitnex_core::log::CommandLog;
 use gitnex_core::openers::{ArgStyle, ExecArg, LaunchCommand, Opener, OpenerKind};
 use gitnex_core::settings::SettingsStore;
-use gitnex_core::testing::{isolated_git_env, FIXTURE_MARKER};
+use gitnex_core::testing::{FIXTURE_MARKER, isolated_git_env};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
-use axum::serve::ListenerExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 
@@ -31,7 +31,11 @@ pub mod media;
 pub mod orbital;
 pub mod playground;
 pub mod showcase;
-use gitnex_forge::{connector::{Forge, ForgeConfig}, endpoints::HostEndpoints, tokens::FileTokenStore};
+use gitnex_forge::{
+    connector::{Forge, ForgeConfig},
+    endpoints::HostEndpoints,
+    tokens::FileTokenStore,
+};
 
 /// The "Open in…" launches the harness recorded instead of running anything (tests never start
 /// a real application). Served as JSON at `GET /launches`: `[{program, args}]`, oldest first.
@@ -40,8 +44,15 @@ pub struct Launches(Mutex<Vec<serde_json::Value>>);
 
 impl Launches {
     pub fn record(&self, c: &LaunchCommand) {
-        let args: Vec<String> = c.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        self.0.lock().expect("launches poisoned").push(serde_json::json!({"program": c.program.to_string_lossy(), "args": args}));
+        let args: Vec<String> = c
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        self.0
+            .lock()
+            .expect("launches poisoned")
+            .push(serde_json::json!({"program": c.program.to_string_lossy(), "args": args}));
     }
 
     pub fn all(&self) -> Vec<serde_json::Value> {
@@ -60,21 +71,35 @@ struct RecordingRunner(Arc<Launches>);
 
 impl RecordingRunner {
     fn record(&self, c: &gitnex_core::updates::install::InstallCommand) {
-        self.0.record(&LaunchCommand { program: c.program.clone().into(), args: c.args.iter().map(Into::into).collect() });
+        self.0.record(&LaunchCommand {
+            program: c.program.clone().into(),
+            args: c.args.iter().map(Into::into).collect(),
+        });
     }
 }
 
 impl gitnex_core::updates::UpdateRunner for RecordingRunner {
-    fn run<'a>(&'a self, cmd: &'a gitnex_core::updates::install::InstallCommand) -> gitnex_core::updates::RunFuture<'a> {
+    fn run<'a>(
+        &'a self,
+        cmd: &'a gitnex_core::updates::install::InstallCommand,
+    ) -> gitnex_core::updates::RunFuture<'a> {
         self.record(cmd);
-        Box::pin(async { Err(std::io::Error::new(std::io::ErrorKind::NotFound, "the harness never installs")) })
+        Box::pin(async {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the harness never installs",
+            ))
+        })
     }
     fn spawn(&self, cmd: &gitnex_core::updates::install::InstallCommand) -> std::io::Result<()> {
         self.record(cmd);
         Ok(())
     }
     fn quit(&self) {
-        self.0.record(&LaunchCommand { program: "quit".into(), args: Vec::new() });
+        self.0.record(&LaunchCommand {
+            program: "quit".into(),
+            args: Vec::new(),
+        });
     }
 }
 
@@ -87,7 +112,10 @@ pub const DEFAULT_APP_PROGRAM: &str = "default-app";
 /// The harness's installed fonts: a fixed list, so tests don't depend on the machine's. Common
 /// Linux families, so the pickers' names draw in their own font on most machines.
 pub fn fake_font_families() -> Vec<gitnex_core::fonts::FontFamily> {
-    let family = |name: &str, monospace: bool| gitnex_core::fonts::FontFamily { name: name.into(), monospace };
+    let family = |name: &str, monospace: bool| gitnex_core::fonts::FontFamily {
+        name: name.into(),
+        monospace,
+    };
     vec![
         family("DejaVu Sans", false),
         family("DejaVu Sans Mono", true),
@@ -107,20 +135,50 @@ pub fn with_fake_openers(api: Api, launches: Arc<Launches>) -> Api {
     let chosen = launches.clone();
     let defaulted = launches.clone();
     api.with_default_app(Arc::new(move |file: &std::path::Path| {
-        defaulted.record(&LaunchCommand { program: DEFAULT_APP_PROGRAM.into(), args: vec![file.into()] });
+        defaulted.record(&LaunchCommand {
+            program: DEFAULT_APP_PROGRAM.into(),
+            args: vec![file.into()],
+        });
         Ok(())
     }))
     .with_chooser(Arc::new(move |file: &std::path::Path| {
-        chosen.record(&LaunchCommand { program: CHOOSER_PROGRAM.into(), args: vec![file.into()] });
+        chosen.record(&LaunchCommand {
+            program: CHOOSER_PROGRAM.into(),
+            args: vec![file.into()],
+        });
         Ok(())
     }))
     .with_openers(
         Arc::new(|| {
             vec![
-                Opener::new("vscode", "VS Code", OpenerKind::Editor, "/fake/bin/code", ArgStyle::VsCode),
-                Opener::new("jetbrains-phpstorm", "PhpStorm", OpenerKind::Editor, "/fake/bin/phpstorm", ArgStyle::JetBrains),
-                Opener::new("text-editor", "Text Editor", OpenerKind::Editor, "/fake/bin/gnome-text-editor", ArgStyle::Exec(vec![ExecArg::File])),
-                Opener::new("file-manager", "Files", OpenerKind::FileManager, "/fake/bin/nautilus", ArgStyle::Exec(vec![ExecArg::Literal("--new-window".into()), ExecArg::File])),
+                Opener::new(
+                    "vscode",
+                    "VS Code",
+                    OpenerKind::Editor,
+                    "/fake/bin/code",
+                    ArgStyle::VsCode,
+                ),
+                Opener::new(
+                    "jetbrains-phpstorm",
+                    "PhpStorm",
+                    OpenerKind::Editor,
+                    "/fake/bin/phpstorm",
+                    ArgStyle::JetBrains,
+                ),
+                Opener::new(
+                    "text-editor",
+                    "Text Editor",
+                    OpenerKind::Editor,
+                    "/fake/bin/gnome-text-editor",
+                    ArgStyle::Exec(vec![ExecArg::File]),
+                ),
+                Opener::new(
+                    "file-manager",
+                    "Files",
+                    OpenerKind::FileManager,
+                    "/fake/bin/nautilus",
+                    ArgStyle::Exec(vec![ExecArg::Literal("--new-window".into()), ExecArg::File]),
+                ),
             ]
         }),
         Arc::new(move |c: &LaunchCommand| {
@@ -156,12 +214,12 @@ pub fn fixture_guard(root: PathBuf) -> WriteGuard {
         let dir = gitnex_core::platform::fs::canonicalize(common_dir).map_err(|_| refused())?;
         // Strictly below the root: a stray marker in the root itself (e.g. /tmp) must not
         // authorise every repository under it (T4 review).
-        let marked = dir.starts_with(&root) && dir.ancestors().take_while(|a| a.starts_with(&root) && *a != root.as_path()).any(|a| a.join(FIXTURE_MARKER).is_file());
-        if marked {
-            Ok(())
-        } else {
-            Err(refused())
-        }
+        let marked = dir.starts_with(&root)
+            && dir
+                .ancestors()
+                .take_while(|a| a.starts_with(&root) && *a != root.as_path())
+                .any(|a| a.join(FIXTURE_MARKER).is_file());
+        if marked { Ok(()) } else { Err(refused()) }
     })
 }
 
@@ -221,21 +279,66 @@ fn harness_exe() -> PathBuf {
     if me.file_name().is_some_and(|n| *n == *name) {
         return me;
     }
-    me.ancestors().skip(1).take(2).map(|d| d.join(&name)).find(|p| p.is_file()).unwrap_or(me)
+    me.ancestors()
+        .skip(1)
+        .take(2)
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+        .unwrap_or(me)
 }
 
 /// The real providers, pointed at the fake forge; no other host is reachable.
 fn fake_connector(forge: &fake_forge::FakeForge) -> Forge {
     let overrides = std::collections::HashMap::from([
-        (fake_forge::GITLAB_HOST.to_string(), HostEndpoints { api: forge.gitlab_api(), web: forge.gitlab_web(), avatars: None }),
-        (fake_forge::GITHUB_HOST.to_string(), HostEndpoints { api: forge.github_api(), web: forge.github_web(), avatars: Some(forge.github_avatars()) }),
-        (fake_forge::forgejo::FORGEJO_HOST.to_string(), HostEndpoints { api: forge.forgejo_api(), web: forge.forgejo_web(), avatars: None }),
+        (
+            fake_forge::GITLAB_HOST.to_string(),
+            HostEndpoints {
+                api: forge.gitlab_api(),
+                web: forge.gitlab_web(),
+                avatars: None,
+            },
+        ),
+        (
+            fake_forge::GITHUB_HOST.to_string(),
+            HostEndpoints {
+                api: forge.github_api(),
+                web: forge.github_web(),
+                avatars: Some(forge.github_avatars()),
+            },
+        ),
+        (
+            fake_forge::forgejo::FORGEJO_HOST.to_string(),
+            HostEndpoints {
+                api: forge.forgejo_api(),
+                web: forge.forgejo_web(),
+                avatars: None,
+            },
+        ),
+        (
+            fake_forge::bitbucket::BITBUCKET_HOST.to_string(),
+            HostEndpoints {
+                api: forge.bitbucket_api(),
+                web: forge.bitbucket_web(),
+                avatars: None,
+            },
+        ),
     ]);
-    Forge::new(ForgeConfig { overrides, only_overrides: true, avatar_dir: None })
-        // --- 5A T3: GitHub's Markdown image hosts are the fake's (no test reaches a real one) ---
-        .with_image_bases(fake_forge::GITHUB_HOST, vec![forge.github_web(), forge.github_images(), forge.github_avatars()])
-        // A test that reseeds the fake sees it at once (no `FRESH_SECS` answer from before).
-        .with_change_counter(forge.change_counter())
+    Forge::new(ForgeConfig {
+        overrides,
+        only_overrides: true,
+        avatar_dir: None,
+    })
+    // --- 5A T3: GitHub's Markdown image hosts are the fake's (no test reaches a real one) ---
+    .with_image_bases(
+        fake_forge::GITHUB_HOST,
+        vec![
+            forge.github_web(),
+            forge.github_images(),
+            forge.github_avatars(),
+        ],
+    )
+    // A test that reseeds the fake sees it at once (no `FRESH_SECS` answer from before).
+    .with_change_counter(forge.change_counter())
 }
 
 /// Tests opt into background fetch explicitly: a fresh (or reset) harness never fetches on its
@@ -288,7 +391,11 @@ impl Harness {
         // Updates: the fake GitHub's releases (none until a test seeds some), a .deb install,
         // downloads in the temp dir, and installs only recorded.
         let updates = gitnex_core::updates::UpdateConfig {
-            source: Arc::new(gitnex_forge::updates::GitHubReleases::new(&forge.github_api(), &forge.github_releases(), vec![forge.github_objects()])),
+            source: Arc::new(gitnex_forge::updates::GitHubReleases::new(
+                &forge.github_api(),
+                &forge.github_releases(),
+                vec![forge.github_objects()],
+            )),
             runner: Arc::new(RecordingRunner(launches.clone())),
             dir: runtime_tmp.path().join("updates"),
             kind: gitnex_core::updates::install::InstallKind::Deb,
@@ -300,32 +407,64 @@ impl Harness {
                 let k = k.to_string_lossy();
                 !k.starts_with("GIT_AUTHOR_") && !k.starts_with("GIT_COMMITTER_")
             });
-            env.extend(crate::golden::GOLDEN_GIT_ENV.iter().map(|(k, v)| ((*k).into(), (*v).into())));
+            env.extend(
+                crate::golden::GOLDEN_GIT_ENV
+                    .iter()
+                    .map(|(k, v)| ((*k).into(), (*v).into())),
+            );
             // A recording never reaches the network: git may only reach local paths, so a remote
             // named by a forge URL (`forge_lab`'s origin) fails instead of resolving.
             env.push(("GIT_ALLOW_PROTOCOL".into(), "file".into()));
         }
-        let api = Api::new(GitCli::new(Arc::new(CommandLog::new(1000))).with_env(env), None)
-            .with_updates(updates)
-            // The journal and temp index files: the harness's own, never ~/.local/share.
-            .with_data_dir(runtime_tmp.path().join("data"))
-            .with_forge(connector, tokens.clone())
-            .with_url_opener(Arc::new(|url: &str| {
-                tracing::info!("openUrl {url}");
-                Ok(())
-            }))
-            .with_open_cache(open_cache.path().to_path_buf())
-            .with_folder_picker(Arc::new(move |_start: Option<&std::path::Path>| next_pick.next()))
-            .with_home(Some(home.clone()))
-            .with_store(store.clone())
-            .with_write_guard(fixture_guard(opts.fixture_root.clone().unwrap_or_else(std::env::temp_dir)));
-        let api = if opts.golden { api.with_clock(Arc::new(|| crate::golden::GOLDEN_NOW_MS)) } else { api };
-        let api = Arc::new(with_fake_openers(api.with_font_source(Arc::new(fake_font_families)), launches.clone()));
+        let api = Api::new(
+            GitCli::new(Arc::new(CommandLog::new(1000))).with_env(env),
+            None,
+        )
+        .with_updates(updates)
+        // The journal and temp index files: the harness's own, never ~/.local/share.
+        .with_data_dir(runtime_tmp.path().join("data"))
+        .with_forge(connector, tokens.clone())
+        .with_url_opener(Arc::new(|url: &str| {
+            tracing::info!("openUrl {url}");
+            Ok(())
+        }))
+        .with_open_cache(open_cache.path().to_path_buf())
+        .with_folder_picker(Arc::new(move |_start: Option<&std::path::Path>| {
+            next_pick.next()
+        }))
+        .with_home(Some(home.clone()))
+        .with_store(store.clone())
+        .with_write_guard(fixture_guard(
+            opts.fixture_root.clone().unwrap_or_else(std::env::temp_dir),
+        ));
+        let api = if opts.golden {
+            api.with_clock(Arc::new(|| crate::golden::GOLDEN_NOW_MS))
+        } else {
+            api
+        };
+        let api = Arc::new(with_fake_openers(
+            api.with_font_source(Arc::new(fake_font_families)),
+            launches.clone(),
+        ));
         // Askpass (spec §5.4), in the private temp dir: git runs `askpass_exe` (the harness binary
         // itself unless a test names one), which asks this server over its socket.
         let exe = opts.askpass_exe.unwrap_or_else(harness_exe);
-        api.start_askpass(runtime_tmp.path(), exe).await.expect("askpass socket");
-        Self { forge, tokens, tokens_path, api, store, launches, picks, home, _config_tmp: config_tmp, _open_cache: open_cache, _runtime_tmp: runtime_tmp }
+        api.start_askpass(runtime_tmp.path(), exe)
+            .await
+            .expect("askpass socket");
+        Self {
+            forge,
+            tokens,
+            tokens_path,
+            api,
+            store,
+            launches,
+            picks,
+            home,
+            _config_tmp: config_tmp,
+            _open_cache: open_cache,
+            _runtime_tmp: runtime_tmp,
+        }
     }
 
     /// Where the harness keeps forge tokens (tests check its mode).
@@ -350,11 +489,14 @@ impl Harness {
     /// The app launched again: a new `Api` (a new forge hub, nothing in memory) on this harness's
     /// settings, tokens, data dir and fake forge (the MR/PR cache across restarts).
     pub fn relaunch(&self) -> Api {
-        Api::new(GitCli::new(Arc::new(CommandLog::new(1000))).with_env(isolated_git_env()), None)
-            .with_data_dir(self._runtime_tmp.path().join("data"))
-            .with_forge(Arc::new(fake_connector(&self.forge)), self.tokens.clone())
-            .with_home(Some(self.home.clone()))
-            .with_store(self.store.clone())
+        Api::new(
+            GitCli::new(Arc::new(CommandLog::new(1000))).with_env(isolated_git_env()),
+            None,
+        )
+        .with_data_dir(self._runtime_tmp.path().join("data"))
+        .with_forge(Arc::new(fake_connector(&self.forge)), self.tokens.clone())
+        .with_home(Some(self.home.clone()))
+        .with_store(self.store.clone())
     }
 
     /// `POST /test/reset`: the state a fresh app launch would see (default settings, with
@@ -396,7 +538,10 @@ pub async fn serve(listener: tokio::net::TcpListener, harness: Harness) {
         .route("/test/auth/{*rest}", any(test_auth))
         .route("/test/watched", get(test_watched))
         .route("/test/write", post(test_write))
-        .route("/test/forge/seed", get(test_forge_seed_get).post(test_forge_seed))
+        .route(
+            "/test/forge/seed",
+            get(test_forge_seed_get).post(test_forge_seed),
+        )
         .route("/test/forge/script", post(test_forge_script))
         .route("/test/forge/requests", get(test_forge_requests))
         // --- 4B T16 ---
@@ -409,7 +554,9 @@ pub async fn serve(listener: tokio::net::TcpListener, harness: Harness) {
             tracing::warn!("harness: couldn't set TCP_NODELAY: {e}");
         }
     });
-    axum::serve(listener, app).await.expect("harness server failed");
+    axum::serve(listener, app)
+        .await
+        .expect("harness server failed");
 }
 
 async fn test_reset(State(h): State<Arc<Harness>>, headers: HeaderMap) -> Response {
@@ -420,7 +567,11 @@ async fn test_reset(State(h): State<Arc<Harness>>, headers: HeaderMap) -> Respon
     // async workers.
     match tokio::task::spawn_blocking(move || h.reset()).await {
         Ok(()) => "ok".into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("reset failed: {e}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reset failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -429,7 +580,11 @@ struct NextPick {
     path: Option<String>,
 }
 
-async fn test_next_pick(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(p): Json<NextPick>) -> Response {
+async fn test_next_pick(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(p): Json<NextPick>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -441,14 +596,20 @@ async fn test_next_pick(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(
 /// askpass for a username and password, retries, and fails with "Authentication failed". It has
 /// no state and reveals nothing, so it needs no Origin check.
 async fn test_auth() -> impl IntoResponse {
-    (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Basic realm=\"gitnex-test\"")], "authentication required")
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"gitnex-test\"")],
+        "authentication required",
+    )
 }
 
 /// Browsers always send Origin on a WebSocket upgrade and on a cross-origin POST, so refusing
 /// foreign ones stops any other web page from driving the backend. Non-browser clients (the Rust
 /// tests, Playwright's request context) send none.
 fn foreign_origin(headers: &HeaderMap) -> bool {
-    headers.get(header::ORIGIN).is_some_and(|origin| !origin.to_str().is_ok_and(origin_allowed))
+    headers
+        .get(header::ORIGIN)
+        .is_some_and(|origin| !origin.to_str().is_ok_and(origin_allowed))
 }
 
 #[derive(serde::Deserialize)]
@@ -470,7 +631,11 @@ async fn test_forge_seed_get(State(h): State<Arc<Harness>>, headers: HeaderMap) 
     Json(h.forge.current_seed()).into_response()
 }
 
-async fn test_forge_seed(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(seed): Json<fake_forge::ForgeSeed>) -> Response {
+async fn test_forge_seed(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(seed): Json<fake_forge::ForgeSeed>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -480,7 +645,11 @@ async fn test_forge_seed(State(h): State<Arc<Harness>>, headers: HeaderMap, Json
     }
 }
 
-async fn test_forge_script(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(s): Json<fake_forge::Scripted>) -> Response {
+async fn test_forge_script(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(s): Json<fake_forge::Scripted>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -499,15 +668,33 @@ async fn test_forge_requests(State(h): State<Arc<Harness>>, headers: HeaderMap) 
 /// `POST /test/write`: a test-only write intent (spec #2 §18 2A) on the repository at `path`
 /// (opened if it isn't), in `worktree` (default: `path`). Answers `{ok}` or `{err}` like the
 /// socket. The write guard applies: only marked fixtures under the fixture root.
-async fn test_write(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(b): Json<TestWriteBody>) -> Response {
+async fn test_write(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(b): Json<TestWriteBody>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let reply = async {
-        let opened = h.api.dispatch(Request::OpenRepo { path: b.path.clone() }).await?;
+        let opened = h
+            .api
+            .dispatch(Request::OpenRepo {
+                path: b.path.clone(),
+            })
+            .await?;
         let repo = opened["id"].as_u64().unwrap_or_default() as u32;
-        let worktree = b.worktree.unwrap_or_else(|| opened["path"].as_str().unwrap_or(&b.path).to_string());
-        h.api.dispatch(Request::TestWrite { repo, worktree, expect: b.expect, intent: b.intent }).await
+        let worktree = b
+            .worktree
+            .unwrap_or_else(|| opened["path"].as_str().unwrap_or(&b.path).to_string());
+        h.api
+            .dispatch(Request::TestWrite {
+                repo,
+                worktree,
+                expect: b.expect,
+                intent: b.intent,
+            })
+            .await
     }
     .await;
     match reply {
@@ -530,7 +717,11 @@ async fn launches(State(h): State<Arc<Harness>>, headers: HeaderMap) -> Response
     Json(h.launches.all()).into_response()
 }
 
-async fn test_emit(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(ev): Json<AppEvent>) -> Response {
+async fn test_emit(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(ev): Json<AppEvent>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -542,12 +733,18 @@ async fn test_emit(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(ev): 
     "ok".into_response()
 }
 
-async fn ws(State(h): State<Arc<Harness>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+async fn ws(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let api = h.api.clone();
-    upgrade.on_upgrade(move |socket| handle(socket, api)).into_response()
+    upgrade
+        .on_upgrade(move |socket| handle(socket, api))
+        .into_response()
 }
 
 /// `http://localhost[:port]`, `http://127.0.0.1[:port]` (the Vite dev server and the harness
@@ -558,7 +755,10 @@ fn origin_allowed(origin: &str) -> bool {
     }
     ["http://localhost", "http://127.0.0.1"].iter().any(|host| {
         origin.strip_prefix(host).is_some_and(|rest| {
-            rest.is_empty() || rest.strip_prefix(':').is_some_and(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+            rest.is_empty()
+                || rest.strip_prefix(':').is_some_and(|port| {
+                    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+                })
         })
     })
 }
@@ -581,10 +781,14 @@ async fn handle(socket: WebSocket, api: Arc<Api>) {
             match events.recv().await {
                 Ok(ev) => match ev_tx.try_send(serde_json::json!({ "event": ev }).to_string()) {
                     Ok(()) => {}
-                    Err(TrySendError::Full(_)) => tracing::warn!("harness socket is {SOCKET_QUEUE} frames behind; dropped an event"),
+                    Err(TrySendError::Full(_)) => tracing::warn!(
+                        "harness socket is {SOCKET_QUEUE} frames behind; dropped an event"
+                    ),
                     Err(TrySendError::Closed(_)) => break,
                 },
-                Err(RecvError::Lagged(n)) => tracing::warn!("harness event forwarder lagged by {n} events"),
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!("harness event forwarder lagged by {n} events")
+                }
                 Err(RecvError::Closed) => break,
             }
         }
@@ -634,7 +838,7 @@ fn error_reply(id: serde_json::Value, message: String) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitnex_core::testing::{TestRepo, FIXTURE_MARKER};
+    use gitnex_core::testing::{FIXTURE_MARKER, TestRepo};
 
     // As the integration tests: no host git config, and no outer repository (`GIT_DIR`).
     ctor::declarative::ctor! {
@@ -655,7 +859,10 @@ mod tests {
         let wt = marked.root().join("wt-x");
         marked.commit("c");
         marked.git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "x"]);
-        assert!(guard(&marked.path().join(".git")).is_ok(), "the common dir decides, whichever worktree writes");
+        assert!(
+            guard(&marked.path().join(".git")).is_ok(),
+            "the common dir decides, whichever worktree writes"
+        );
 
         let unmarked = TestRepo::init_at(&root.path().join("plain"));
         let err = guard(&unmarked.path().join(".git")).unwrap_err();
@@ -664,7 +871,10 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         let outside = TestRepo::init_at(elsewhere.path());
         outside.mark_fixture();
-        assert!(guard(&outside.path().join(".git")).is_err(), "a marker outside the root doesn't count");
+        assert!(
+            guard(&outside.path().join(".git")).is_err(),
+            "a marker outside the root doesn't count"
+        );
 
         // A symlink inside the root that points out of it doesn't count either. (Unix: a folder
         // symlink; Windows needs privileges for one.)
@@ -678,7 +888,10 @@ mod tests {
 
         // A stray marker in the root itself doesn't authorise everything under it.
         std::fs::write(root.path().join(FIXTURE_MARKER), "").unwrap();
-        assert!(guard(&unmarked.path().join(".git")).is_err(), "the root's own marker doesn't count");
+        assert!(
+            guard(&unmarked.path().join(".git")).is_err(),
+            "the root's own marker doesn't count"
+        );
     }
 
     #[tokio::test]
@@ -686,13 +899,44 @@ mod tests {
         let h = Harness::for_tests().await;
         let plain = TestRepo::new();
         let c = plain.commit("c");
-        let id = h.api.dispatch(Request::OpenRepo { path: plain.path().display().to_string() }).await.unwrap()["id"].as_u64().unwrap() as u32;
-        let intent = || gitnex_core::write::test_intents::TestIntent::MoveRef { name: "refs/heads/x".into(), to: Some(c.clone()) };
-        let wt = gitnex_core::platform::fs::canonicalize(plain.path()).unwrap().display().to_string();
-        let err = h.api.dispatch(Request::TestWrite { repo: id, worktree: wt.clone(), expect: Default::default(), intent: intent() }).await.unwrap_err();
+        let id = h
+            .api
+            .dispatch(Request::OpenRepo {
+                path: plain.path().display().to_string(),
+            })
+            .await
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap() as u32;
+        let intent = || gitnex_core::write::test_intents::TestIntent::MoveRef {
+            name: "refs/heads/x".into(),
+            to: Some(c.clone()),
+        };
+        let wt = gitnex_core::platform::fs::canonicalize(plain.path())
+            .unwrap()
+            .display()
+            .to_string();
+        let err = h
+            .api
+            .dispatch(Request::TestWrite {
+                repo: id,
+                worktree: wt.clone(),
+                expect: Default::default(),
+                intent: intent(),
+            })
+            .await
+            .unwrap_err();
         assert_eq!(err.message, gitnex_core::api::FIXTURE_ONLY);
         plain.mark_fixture();
-        h.api.dispatch(Request::TestWrite { repo: id, worktree: wt, expect: Default::default(), intent: intent() }).await.unwrap();
+        h.api
+            .dispatch(Request::TestWrite {
+                repo: id,
+                worktree: wt,
+                expect: Default::default(),
+                intent: intent(),
+            })
+            .await
+            .unwrap();
         assert_eq!(plain.git(&["rev-parse", "x"]), c);
     }
 
@@ -703,14 +947,50 @@ mod tests {
         let r = TestRepo::new();
         let c = r.commit("c");
         r.mark_fixture();
-        let id = h.api.dispatch(Request::OpenRepo { path: r.path().display().to_string() }).await.unwrap()["id"].as_u64().unwrap() as u32;
-        let wt = gitnex_core::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
-        let intent = gitnex_core::write::test_intents::TestIntent::MoveRef { name: "refs/heads/x".into(), to: Some(c) };
-        let res = h.api.dispatch(Request::TestWrite { repo: id, worktree: wt.clone(), expect: Default::default(), intent }).await.unwrap();
+        let id = h
+            .api
+            .dispatch(Request::OpenRepo {
+                path: r.path().display().to_string(),
+            })
+            .await
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap() as u32;
+        let wt = gitnex_core::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
+        let intent = gitnex_core::write::test_intents::TestIntent::MoveRef {
+            name: "refs/heads/x".into(),
+            to: Some(c),
+        };
+        let res = h
+            .api
+            .dispatch(Request::TestWrite {
+                repo: id,
+                worktree: wt.clone(),
+                expect: Default::default(),
+                intent,
+            })
+            .await
+            .unwrap();
         assert!(res["journal"]["undo"].is_object());
         h.reset();
-        let noop = gitnex_core::write::test_intents::TestIntent::Sleep { label: "noop".into(), ms: 0, fail: false };
-        let res = h.api.dispatch(Request::TestWrite { repo: id, worktree: wt, expect: Default::default(), intent: noop }).await.unwrap();
+        let noop = gitnex_core::write::test_intents::TestIntent::Sleep {
+            label: "noop".into(),
+            ms: 0,
+            fail: false,
+        };
+        let res = h
+            .api
+            .dispatch(Request::TestWrite {
+                repo: id,
+                worktree: wt,
+                expect: Default::default(),
+                intent: noop,
+            })
+            .await
+            .unwrap();
         assert!(res["journal"]["undo"].is_null(), "{res}");
     }
 }
@@ -725,16 +1005,36 @@ struct TestForgeAccount {
 
 impl Harness {
     /// The app's own `addForgeAccount` (tests only: the fake forge's tokens).
-    pub async fn add_forge_account_for_test(&self, host: &str, kind: gitnex_core::forge::ForgeKind, token: &str) -> Result<serde_json::Value, GbError> {
-        self.api.dispatch(Request::AddForgeAccount { host: host.to_string(), kind, token: gitnex_core::redact::Secret::new(token), account: None }).await
+    pub async fn add_forge_account_for_test(
+        &self,
+        host: &str,
+        kind: gitnex_core::forge::ForgeKind,
+        token: &str,
+    ) -> Result<serde_json::Value, GbError> {
+        self.api
+            .dispatch(Request::AddForgeAccount {
+                host: host.to_string(),
+                kind,
+                token: gitnex_core::redact::Secret::new(token),
+                account: None,
+                base_url: None,
+            })
+            .await
     }
 }
 
-async fn test_forge_account(State(h): State<Arc<Harness>>, headers: HeaderMap, Json(b): Json<TestForgeAccount>) -> Response {
+async fn test_forge_account(
+    State(h): State<Arc<Harness>>,
+    headers: HeaderMap,
+    Json(b): Json<TestForgeAccount>,
+) -> Response {
     if foreign_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    match h.add_forge_account_for_test(&b.host, b.kind, &b.token).await {
+    match h
+        .add_forge_account_for_test(&b.host, b.kind, &b.token)
+        .await
+    {
         Ok(v) => Json(serde_json::json!({ "ok": v })).into_response(),
         Err(e) => Json(serde_json::json!({ "err": e })).into_response(),
     }

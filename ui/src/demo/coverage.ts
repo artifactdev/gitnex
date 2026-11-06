@@ -204,6 +204,7 @@ export const COVERAGE = {
   forgeMerge: 'real',
   forgeEditMr: 'real',
   forgeSetDraft: 'real',
+  forgeSetClosed: 'notInDemo',
   forgeSetAutoMerge: 'real',
   forgeCancelAutoMerge: 'real',
   forgeUpdateBranch: 'real',

@@ -3,7 +3,7 @@
 
 use crate::layout::{GraphRow, NodeKind, Segment};
 use crate::walk::CommitMeta;
-use crate::{render_ascii, AsciiRow};
+use crate::{AsciiRow, render_ascii};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -34,7 +34,10 @@ pub struct GraphPayload {
     /// Each worktree's merge, rebase or other in-progress operation (spec #2 §13.2), keyed by its
     /// path as its WIP row's `worktreePath` spells it (Deviation 1). Absent when none is mid-operation.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    #[ts(optional, as = "Option<std::collections::BTreeMap<String, crate::InProgress>>")]
+    #[ts(
+        optional,
+        as = "Option<std::collections::BTreeMap<String, crate::InProgress>>"
+    )]
     pub in_progress: std::collections::BTreeMap<String, InProgress>,
     // 2D-T6 end
     /// The repository is a fork (`snapshot::fork_of`): which remote is your fork, which the
@@ -261,7 +264,11 @@ pub struct RemoteRefLabel {
 impl GraphPayload {
     /// ASCII dump: layout grid, then the row summary (WIP rows show their worktree).
     pub fn ascii(&self) -> String {
-        let segs: Vec<Vec<Segment>> = self.rows.iter().map(|r| r.segments.iter().map(|&s| Segment::unpack(s)).collect()).collect();
+        let segs: Vec<Vec<Segment>> = self
+            .rows
+            .iter()
+            .map(|r| r.segments.iter().map(|&s| Segment::unpack(s)).collect())
+            .collect();
         let labels: Vec<String> = self
             .rows
             .iter()
@@ -275,7 +282,12 @@ impl GraphPayload {
             .iter()
             .zip(&segs)
             .zip(&labels)
-            .map(|((r, s), l)| AsciiRow { lane: r.lane, kind: r.kind, segments: s, label: l })
+            .map(|((r, s), l)| AsciiRow {
+                lane: r.lane,
+                kind: r.kind,
+                segments: s,
+                label: l,
+            })
             .collect();
         render_ascii(&rows, self.max_lanes)
     }
@@ -291,7 +303,13 @@ impl RowPayload {
             color: g.color,
             segments,
             summary: c.summary.clone(),
-            body_first_line: c.body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string(),
+            body_first_line: c
+                .body
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .to_string(),
             author_name: c.author_name.clone(),
             author_email: c.author_email.clone(),
             author_time: c.author_time,
@@ -311,7 +329,10 @@ impl RowPayload {
     /// summary, author or parents, times 0.
     pub fn collapsed(row: CollapsedRow, lane: u16, color: u8, segments: Vec<u32>) -> Self {
         RowPayload {
-            id: format!("collapsed:{}", row.key.strip_prefix("branch:").unwrap_or(&row.key)),
+            id: format!(
+                "collapsed:{}",
+                row.key.strip_prefix("branch:").unwrap_or(&row.key)
+            ),
             kind: NodeKind::Collapsed,
             lane,
             color,
@@ -341,15 +362,24 @@ pub enum HostKind {
     GitLab,
     GitHub,
     Forgejo,
+    Bitbucket,
     Generic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(export)]
 pub enum InProgress {
     /// `MERGE_HEAD` exists. `message`: `MERGE_MSG`, line endings normalised (§8.2).
-    Merge { merge_head: String, message: String, conflicted: u32 },
+    Merge {
+        merge_head: String,
+        message: String,
+        conflicted: u32,
+    },
     /// `rebase-merge/` (or `rebase-apply/`). `onto` and `stopped_at` are oids; `head_name` is the
     /// branch being rebased (`refs/heads/main`). `message`: what Continue commits the stopped
     /// pick with (`rebase-merge/message`, `rebase-apply/final-commit`), line endings normalised;
@@ -391,9 +421,17 @@ pub enum InProgress {
     /// `CHERRY_PICK_HEAD` (a single pick, or a range's, `.git/sequencer/` too). `head`: the commit
     /// being picked; `message`: `MERGE_MSG`, what Continue commits it with. A range stopped
     /// between picks (`sequencer/` alone) isn't an operation here, as for gix.
-    CherryPick { head: Option<String>, message: String, conflicted: u32 },
+    CherryPick {
+        head: Option<String>,
+        message: String,
+        conflicted: u32,
+    },
     /// `REVERT_HEAD`: as `CherryPick`, for the commit being reverted.
-    Revert { head: Option<String>, message: String, conflicted: u32 },
+    Revert {
+        head: Option<String>,
+        message: String,
+        conflicted: u32,
+    },
     /// `git am`, started outside GitNex; #3 adds its actions.
     Other { what: String },
 }
@@ -433,7 +471,9 @@ pub enum DecidedBy {
     /// "Expand in graph", or a navigation to one of its commits, this session.
     Expanded,
     /// The preset's rule at `index`.
-    Rule { index: u16 },
+    Rule {
+        index: u16,
+    },
     /// Everything else.
     Otherwise,
 }
@@ -598,11 +638,20 @@ mod tests {
     #[test]
     fn a_row_without_view_extras_serializes_as_before() {
         let json = serde_json::to_value(row()).unwrap();
-        let keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         for extra in ["collapsed", "fold", "ghosts"] {
             assert!(!keys.contains(&extra), "{extra} in {keys:?}");
         }
-        assert_eq!(serde_json::from_value::<RowPayload>(json).unwrap(), row(), "and reads back");
+        assert_eq!(
+            serde_json::from_value::<RowPayload>(json).unwrap(),
+            row(),
+            "and reads back"
+        );
         let g = GraphPayload {
             rows: vec![row()],
             labels: vec![],
@@ -621,11 +670,26 @@ mod tests {
 
     #[test]
     fn a_collapsed_row_carries_its_extras() {
-        let r = RowPayload { kind: NodeKind::Collapsed, collapsed: Some(CollapsedRow { key: "branch:feature/x".into(), branch: "feature/x".into(), count: 4, authors: 2 }), ..row() };
+        let r = RowPayload {
+            kind: NodeKind::Collapsed,
+            collapsed: Some(CollapsedRow {
+                key: "branch:feature/x".into(),
+                branch: "feature/x".into(),
+                count: 4,
+                authors: 2,
+            }),
+            ..row()
+        };
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["kind"], "collapsed");
-        assert_eq!(json["collapsed"], serde_json::json!({"key": "branch:feature/x", "branch": "feature/x", "count": 4, "authors": 2}));
-        assert_eq!(serde_json::to_value(DecidedBy::Rule { index: 2 }).unwrap(), serde_json::json!({"kind": "rule", "index": 2}));
+        assert_eq!(
+            json["collapsed"],
+            serde_json::json!({"key": "branch:feature/x", "branch": "feature/x", "count": 4, "authors": 2})
+        );
+        assert_eq!(
+            serde_json::to_value(DecidedBy::Rule { index: 2 }).unwrap(),
+            serde_json::json!({"kind": "rule", "index": 2})
+        );
         assert_eq!(serde_json::to_value(BranchState::Folded).unwrap(), "folded");
     }
 }

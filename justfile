@@ -13,6 +13,7 @@ test-scripts:
     scripts/test-package-arch.sh
     scripts/test-package-rpm.sh
     scripts/test-package-compression.sh
+    bash scripts/test-build-macos-app.sh
     scripts/test-licenses.sh
     scripts/test-version-order.sh
     scripts/test-release.sh

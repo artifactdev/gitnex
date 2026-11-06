@@ -11,7 +11,7 @@ import { forgePageOf } from '../markdown/links';
 export interface LineRange { start: number; end: number }
 
 /** A forge page's project: its host (`host[:port]`, lower-case) and path (`group/sub/project`). */
-export interface ForgeProjectRef { host: string; project: string; forge: ForgeKind }
+export interface ForgeProjectRef { host: string; project: string; forge: ForgeKind; webUrl?: string }
 
 export type GotoTarget =
   /** A commit by its hash (7–40 hex, lower-case). `ref`: the same text read as a ref name.
@@ -39,7 +39,7 @@ const NONE: GotoTarget = { kind: 'none' };
 const MAX_TEXT = 4096;
 
 const HASH = /^(?:commit\s+)?([0-9a-f]{7,40})(?:\s+\([^)]*\))?$/i;
-const SHORT_MR = /^(?:([\w.-]+(?:\/[\w.-]+)+))?([!#])(\d+)$/;
+const SHORT_MR = /^(?:(~?[\w.-]+(?:\/[\w.-]+)+))?([!#])(\d+)$/;
 
 /** What `text` names; the first non-empty line of several, if it names something on its own. */
 export function classify(text: string): GotoTarget {
@@ -87,6 +87,23 @@ function classifyUrl(s: string): GotoTarget {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return NONE;
   const segs = u.pathname.split('/').filter(Boolean);
+  const native = segs.findIndex((s, i) => (s === 'projects' || s === 'users') && segs[i + 2] === 'repos' && !!segs[i + 3]);
+  if (native >= 0) {
+    const cut = native + 4;
+    const project = `${segs[native] === 'users' ? '~' : ''}${decode(segs[native + 1])}/${decode(segs[native + 3])}`;
+    const at: ForgeProjectRef = { host: u.host.toLowerCase(), project, forge: 'bitbucket', webUrl: `${u.origin}/${segs.slice(0, cut).join('/')}` };
+    const rest = segs.slice(cut).join('/');
+    const page = forgePageOf('bitbucket', rest);
+    if (page?.kind === 'mr') return { kind: 'mr', number: page.number, url: s, at, project, sigil: null };
+    if (page?.kind === 'commit') return { kind: 'forgeCommit', sha: page.sha, url: s, at };
+    if (segs[cut] === 'browse' && segs.length > cut + 1) {
+      const ref = u.searchParams.get('at');
+      if (!ref) return NONE;
+      const lines = /^#(\d+)(?:-(\d+))?$/.exec(u.hash);
+      return { kind: 'forgeFile', refPath: [ref.replace(/^refs\/heads\//, ''), ...segs.slice(cut + 1).map(decode)], lines: lines ? range(lines[1], lines[2]) : null, url: s, at };
+    }
+    return NONE;
+  }
   // A GitLab page's project ends where `/-/` starts (projects nest in groups); a GitHub or Forgejo
   // one is `owner/repo`. Forgejo's by its host's name, or by its own page shapes (`pulls/12`,
   // `src/branch/…`).

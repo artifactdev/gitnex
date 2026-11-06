@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { bareHost, detectHostKind, HOST_KIND_NAMES } from './hostKind';
 
 describe('detectHostKind (the Rust host_kind)', () => {
+  it('detects self-hosted Bitbucket and Stash names, but not Bitbucket Cloud', () => {
+    expect(detectHostKind('Bitbucket.example.com:8443')).toBe('bitbucket');
+    expect(detectHostKind('stash.example.com')).toBe('bitbucket');
+    expect(detectHostKind('bitbucket.org')).toBe('generic');
+    expect(detectHostKind('bitbucket.org:443')).toBe('generic');
+    expect(HOST_KIND_NAMES.bitbucket).toBe('Bitbucket');
+  });
   it('knows GitHub, GitLab and any host with gitlab in a label', () => {
     expect(detectHostKind('github.com')).toBe('github');
     expect(detectHostKind('GitLab.com')).toBe('gitlab');

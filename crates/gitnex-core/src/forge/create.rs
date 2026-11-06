@@ -68,7 +68,8 @@ pub struct CreateContext {
 /// `file` without a (case-insensitive) `.md`; `None` when it has none or nothing before it.
 fn strip_md(file: &str) -> Option<&str> {
     let n = file.len().checked_sub(3)?;
-    file.get(n..).filter(|ext| ext.eq_ignore_ascii_case(".md"))?;
+    file.get(n..)
+        .filter(|ext| ext.eq_ignore_ascii_case(".md"))?;
     file.get(..n).filter(|stem| !stem.is_empty())
 }
 
@@ -80,14 +81,23 @@ pub fn is_template_path(kind: ForgeKind, path: &str) -> bool {
     }
     match kind {
         ForgeKind::GitLab => dir == GITLAB_TEMPLATE_DIR,
-        ForgeKind::GitHub => (dir == GITHUB_DIR && file.eq_ignore_ascii_case(GITHUB_TEMPLATE_FILE)) || dir.eq_ignore_ascii_case(&format!("{GITHUB_DIR}/{GITHUB_TEMPLATE_DIR}")),
+        ForgeKind::GitHub => {
+            (dir == GITHUB_DIR && file.eq_ignore_ascii_case(GITHUB_TEMPLATE_FILE))
+                || dir.eq_ignore_ascii_case(&format!("{GITHUB_DIR}/{GITHUB_TEMPLATE_DIR}"))
+        }
         ForgeKind::Forgejo => FORGEJO_TEMPLATES.contains(&path),
+        ForgeKind::Bitbucket => false,
     }
 }
 
 /// Of Forgejo's template candidates found, the one it uses (`FORGEJO_TEMPLATES`' order), alone.
 pub fn forgejo_template(mut found: Vec<MrTemplate>) -> Vec<MrTemplate> {
-    found.sort_by_key(|t| FORGEJO_TEMPLATES.iter().position(|p| *p == t.path).unwrap_or(usize::MAX));
+    found.sort_by_key(|t| {
+        FORGEJO_TEMPLATES
+            .iter()
+            .position(|p| *p == t.path)
+            .unwrap_or(usize::MAX)
+    });
     found.truncate(1);
     found
 }
@@ -96,7 +106,9 @@ pub fn forgejo_template(mut found: Vec<MrTemplate>) -> Vec<MrTemplate> {
 /// file is `Default`.
 pub fn template_name(path: &str) -> String {
     let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
-    if (dir == GITHUB_DIR && file.eq_ignore_ascii_case(GITHUB_TEMPLATE_FILE)) || FORGEJO_TEMPLATES.contains(&path) {
+    if (dir == GITHUB_DIR && file.eq_ignore_ascii_case(GITHUB_TEMPLATE_FILE))
+        || FORGEJO_TEMPLATES.contains(&path)
+    {
         return DEFAULT_TEMPLATE.to_string();
     }
     strip_md(file).unwrap_or(file).to_string()
@@ -104,7 +116,12 @@ pub fn template_name(path: &str) -> String {
 
 /// `Default` first, then by name (case-insensitive), at most `MAX_TEMPLATES`.
 pub fn sort_templates(mut list: Vec<MrTemplate>) -> Vec<MrTemplate> {
-    list.sort_by_key(|t| (!t.name.eq_ignore_ascii_case(DEFAULT_TEMPLATE), t.name.to_lowercase()));
+    list.sort_by_key(|t| {
+        (
+            !t.name.eq_ignore_ascii_case(DEFAULT_TEMPLATE),
+            t.name.to_lowercase(),
+        )
+    });
     list.truncate(MAX_TEMPLATES);
     list
 }
@@ -119,7 +136,9 @@ pub fn clip_template(bytes: &[u8]) -> String {
 pub fn split_message(message: &str) -> (String, String) {
     let text = message.replace("\r\n", "\n");
     let text = text.trim_end();
-    let Some((summary, mut body)) = text.split_once('\n') else { return (text.to_string(), String::new()) };
+    let Some((summary, mut body)) = text.split_once('\n') else {
+        return (text.to_string(), String::new());
+    };
     while let Some((line, rest)) = body.split_once('\n') {
         if !line.trim().is_empty() {
             break;
@@ -131,10 +150,18 @@ pub fn split_message(message: &str) -> (String, String) {
 }
 
 /// The first of `revs` that names a commit here.
-async fn first_existing(cli: &GitCli, root: &Path, revs: &[String]) -> Result<Option<String>, GbError> {
+async fn first_existing(
+    cli: &GitCli,
+    root: &Path,
+    revs: &[String],
+) -> Result<Option<String>, GbError> {
     for rev in revs {
         let spec = format!("{rev}^{{commit}}");
-        let out = cli.run(GitInvocation::new(root, ["rev-parse", "--verify", "-q", spec.as_str()]).ok_exit(1)).await?;
+        let out = cli
+            .run(
+                GitInvocation::new(root, ["rev-parse", "--verify", "-q", spec.as_str()]).ok_exit(1),
+            )
+            .await?;
         if !String::from_utf8_lossy(&out.stdout).trim().is_empty() {
             return Ok(Some(rev.clone()));
         }
@@ -143,48 +170,128 @@ async fn first_existing(cli: &GitCli, root: &Path, revs: &[String]) -> Result<Op
 }
 
 /// `branch`'s first commit since the first of `bases` that exists (ruling 5).
-pub async fn first_commit(cli: &GitCli, root: &Path, branch: &str, bases: &[String]) -> Result<Option<FirstCommit>, GbError> {
-    let Some(base) = first_existing(cli, root, bases).await? else { return Ok(None) };
+pub async fn first_commit(
+    cli: &GitCli,
+    root: &Path,
+    branch: &str,
+    bases: &[String],
+) -> Result<Option<FirstCommit>, GbError> {
+    let Some(base) = first_existing(cli, root, bases).await? else {
+        return Ok(None);
+    };
     let span = format!("{base}..refs/heads/{branch}");
     let flags = ["--first-parent", "--no-merges"];
-    let count = cli.run(GitInvocation::new(root, ["rev-list", "--count"].into_iter().chain(flags).chain([span.as_str(), "--"]))).await?;
-    let count: u32 = String::from_utf8_lossy(&count.stdout).trim().parse().unwrap_or(0);
+    let count = cli
+        .run(GitInvocation::new(
+            root,
+            ["rev-list", "--count"]
+                .into_iter()
+                .chain(flags)
+                .chain([span.as_str(), "--"]),
+        ))
+        .await?;
+    let count: u32 = String::from_utf8_lossy(&count.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
     if count == 0 {
         return Ok(None);
     }
     // The oldest is the last of the newest-first list: skip all but one.
     let skip = (count - 1).to_string();
-    let out = cli.run(GitInvocation::new(root, ["rev-list", "--skip", skip.as_str(), "-1"].into_iter().chain(flags).chain([span.as_str(), "--"]))).await?;
+    let out = cli
+        .run(GitInvocation::new(
+            root,
+            ["rev-list", "--skip", skip.as_str(), "-1"]
+                .into_iter()
+                .chain(flags)
+                .chain([span.as_str(), "--"]),
+        ))
+        .await?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty()) else { return Ok(None) };
-    let msg = cli.run(GitInvocation::new(root, ["log", "-1", "--no-show-signature", "--format=%B", first, "--"]).stdout_limit(MAX_READ_BYTES)).await?;
+    let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty()) else {
+        return Ok(None);
+    };
+    let msg = cli
+        .run(
+            GitInvocation::new(
+                root,
+                [
+                    "log",
+                    "-1",
+                    "--no-show-signature",
+                    "--format=%B",
+                    first,
+                    "--",
+                ],
+            )
+            .stdout_limit(MAX_READ_BYTES),
+        )
+        .await?;
     let (summary, body) = split_message(&String::from_utf8_lossy(&msg.stdout));
-    Ok(Some(FirstCommit { summary, body, count }))
+    Ok(Some(FirstCommit {
+        summary,
+        body,
+        count,
+    }))
 }
 
 /// `kind`'s templates in the first of `revs` that exists (ruling 7: the local copy of the
 /// target branch, never the working directory).
-pub async fn local_templates(cli: &GitCli, root: &Path, kind: ForgeKind, revs: &[String]) -> Result<Vec<MrTemplate>, GbError> {
-    let Some(rev) = first_existing(cli, root, revs).await? else { return Ok(Vec::new()) };
+pub async fn local_templates(
+    cli: &GitCli,
+    root: &Path,
+    kind: ForgeKind,
+    revs: &[String],
+) -> Result<Vec<MrTemplate>, GbError> {
+    if kind == ForgeKind::Bitbucket {
+        return Ok(Vec::new());
+    }
+    let Some(rev) = first_existing(cli, root, revs).await? else {
+        return Ok(Vec::new());
+    };
     // Only regular files count: a symlink or submodule named `Foo.md` is skipped. Forgejo's are
     // single files, listed by name.
     let mut dirs = vec![match kind {
         ForgeKind::GitLab => vec![format!("{GITLAB_TEMPLATE_DIR}/")],
         ForgeKind::GitHub => vec![format!("{GITHUB_DIR}/")],
         ForgeKind::Forgejo => FORGEJO_TEMPLATES.iter().map(|p| p.to_string()).collect(),
+        ForgeKind::Bitbucket => unreachable!(),
     }];
     let mut paths: Vec<String> = Vec::new();
     while let Some(listed) = dirs.pop() {
         let dir = listed.first().cloned().unwrap_or_default();
-        let out = cli.run(GitInvocation::new(root, ["ls-tree", "-z", rev.as_str(), "--"].into_iter().chain(listed.iter().map(String::as_str))).stdout_limit(MAX_READ_BYTES)).await?;
+        let out = cli
+            .run(
+                GitInvocation::new(
+                    root,
+                    ["ls-tree", "-z", rev.as_str(), "--"]
+                        .into_iter()
+                        .chain(listed.iter().map(String::as_str)),
+                )
+                .stdout_limit(MAX_READ_BYTES),
+            )
+            .await?;
         // A capped listing's last record may be cut short: only whole (NUL-ended) records count.
         let whole = &out.stdout[..out.stdout.iter().rposition(|b| *b == 0).unwrap_or(0)];
-        for rec in whole.split(|b| *b == 0).filter_map(|r| std::str::from_utf8(r).ok()) {
-            let Some((meta, path)) = rec.split_once('\t') else { continue };
+        for rec in whole
+            .split(|b| *b == 0)
+            .filter_map(|r| std::str::from_utf8(r).ok())
+        {
+            let Some((meta, path)) = rec.split_once('\t') else {
+                continue;
+            };
             let mode = meta.split(' ').next().unwrap_or("");
-            if mode == "040000" && kind == ForgeKind::GitHub && dir == format!("{GITHUB_DIR}/") && path.eq_ignore_ascii_case(&format!("{GITHUB_DIR}/{GITHUB_TEMPLATE_DIR}")) {
+            if mode == "040000"
+                && kind == ForgeKind::GitHub
+                && dir == format!("{GITHUB_DIR}/")
+                && path.eq_ignore_ascii_case(&format!("{GITHUB_DIR}/{GITHUB_TEMPLATE_DIR}"))
+            {
                 dirs.push(vec![format!("{path}/")]);
-            } else if (mode == "100644" || mode == "100755") && is_template_path(kind, path) && paths.len() < MAX_TEMPLATES {
+            } else if (mode == "100644" || mode == "100755")
+                && is_template_path(kind, path)
+                && paths.len() < MAX_TEMPLATES
+            {
                 paths.push(path.to_string());
             }
         }
@@ -192,17 +299,33 @@ pub async fn local_templates(cli: &GitCli, root: &Path, kind: ForgeKind, revs: &
     let mut list = Vec::with_capacity(paths.len());
     for path in paths {
         let spec = format!("{rev}:{path}");
-        let Ok(blob) = cli.run(GitInvocation::new(root, ["cat-file", "blob", spec.as_str()]).stdout_limit(MAX_TEMPLATE_BYTES as u64)).await else { continue };
-        list.push(MrTemplate { name: template_name(&path), body: clip_template(&blob.stdout), path });
+        let Ok(blob) = cli
+            .run(
+                GitInvocation::new(root, ["cat-file", "blob", spec.as_str()])
+                    .stdout_limit(MAX_TEMPLATE_BYTES as u64),
+            )
+            .await
+        else {
+            continue;
+        };
+        list.push(MrTemplate {
+            name: template_name(&path),
+            body: clip_template(&blob.stdout),
+            path,
+        });
     }
-    Ok(if kind == ForgeKind::Forgejo { forgejo_template(list) } else { sort_templates(list) })
+    Ok(if kind == ForgeKind::Forgejo {
+        forgejo_template(list)
+    } else {
+        sort_templates(list)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::log::CommandLog;
-    use crate::testing::{isolated_git_env, TestRepo};
+    use crate::testing::{TestRepo, isolated_git_env};
     use std::sync::Arc;
 
     fn cli() -> GitCli {
@@ -210,56 +333,141 @@ mod tests {
     }
 
     fn tpl(name: &str) -> MrTemplate {
-        MrTemplate { name: name.into(), path: format!("x/{name}.md"), body: String::new() }
+        MrTemplate {
+            name: name.into(),
+            path: format!("x/{name}.md"),
+            body: String::new(),
+        }
     }
 
     #[test]
     fn template_paths_follow_each_forge() {
-        assert!(is_template_path(ForgeKind::GitLab, ".gitlab/merge_request_templates/Bug.md"));
-        assert!(is_template_path(ForgeKind::GitLab, ".gitlab/merge_request_templates/Bug.MD"));
-        assert!(!is_template_path(ForgeKind::GitLab, ".gitlab/merge_request_templates/sub/Bug.md"));
-        assert!(!is_template_path(ForgeKind::GitLab, ".gitlab/merge_request_templates/notes.txt"));
-        assert!(!is_template_path(ForgeKind::GitLab, ".gitlab/merge_request_templates/.md"));
-        assert!(!is_template_path(ForgeKind::GitLab, ".gitlab/issue_templates/Bug.md"));
-        assert!(is_template_path(ForgeKind::GitHub, ".github/pull_request_template.md"));
-        assert!(is_template_path(ForgeKind::GitHub, ".github/PULL_REQUEST_TEMPLATE.md"));
-        assert!(is_template_path(ForgeKind::GitHub, ".github/PULL_REQUEST_TEMPLATE/feature.md"));
-        assert!(!is_template_path(ForgeKind::GitHub, ".github/PULL_REQUEST_TEMPLATE/a/b.md"));
-        assert!(!is_template_path(ForgeKind::GitHub, ".github/workflows/ci.yml"));
-        assert!(!is_template_path(ForgeKind::GitHub, "docs/pull_request_template.md"));
-        for p in [".forgejo/pull_request_template.md", ".gitea/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md"] {
+        assert!(is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/merge_request_templates/Bug.md"
+        ));
+        assert!(is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/merge_request_templates/Bug.MD"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/merge_request_templates/sub/Bug.md"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/merge_request_templates/notes.txt"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/merge_request_templates/.md"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitLab,
+            ".gitlab/issue_templates/Bug.md"
+        ));
+        assert!(is_template_path(
+            ForgeKind::GitHub,
+            ".github/pull_request_template.md"
+        ));
+        assert!(is_template_path(
+            ForgeKind::GitHub,
+            ".github/PULL_REQUEST_TEMPLATE.md"
+        ));
+        assert!(is_template_path(
+            ForgeKind::GitHub,
+            ".github/PULL_REQUEST_TEMPLATE/feature.md"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitHub,
+            ".github/PULL_REQUEST_TEMPLATE/a/b.md"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitHub,
+            ".github/workflows/ci.yml"
+        ));
+        assert!(!is_template_path(
+            ForgeKind::GitHub,
+            "docs/pull_request_template.md"
+        ));
+        for p in [
+            ".forgejo/pull_request_template.md",
+            ".gitea/PULL_REQUEST_TEMPLATE.md",
+            ".github/pull_request_template.md",
+            "PULL_REQUEST_TEMPLATE.md",
+        ] {
             assert!(is_template_path(ForgeKind::Forgejo, p), "{p}");
         }
-        assert!(!is_template_path(ForgeKind::Forgejo, ".github/PULL_REQUEST_TEMPLATE/feature.md"), "a single template");
-        assert!(!is_template_path(ForgeKind::Forgejo, ".forgejo/Pull_Request_Template.md"), "Forgejo's two spellings only");
-        assert!(!is_template_path(ForgeKind::Forgejo, "docs/pull_request_template.md"));
+        assert!(
+            !is_template_path(
+                ForgeKind::Forgejo,
+                ".github/PULL_REQUEST_TEMPLATE/feature.md"
+            ),
+            "a single template"
+        );
+        assert!(
+            !is_template_path(ForgeKind::Forgejo, ".forgejo/Pull_Request_Template.md"),
+            "Forgejo's two spellings only"
+        );
+        assert!(!is_template_path(
+            ForgeKind::Forgejo,
+            "docs/pull_request_template.md"
+        ));
     }
 
     #[test]
     fn names_drop_md_and_githubs_single_file_is_default() {
         assert_eq!(template_name(".github/PULL_REQUEST_TEMPLATE.md"), "Default");
-        assert_eq!(template_name(".github/pull_request_template/feature.md"), "feature");
-        assert_eq!(template_name(".gitlab/merge_request_templates/Bug Fix.MD"), "Bug Fix");
+        assert_eq!(
+            template_name(".github/pull_request_template/feature.md"),
+            "feature"
+        );
+        assert_eq!(
+            template_name(".gitlab/merge_request_templates/Bug Fix.MD"),
+            "Bug Fix"
+        );
         assert_eq!(template_name(".gitlab/merge_request_templates/é.md"), "é");
-        assert_eq!(template_name(".forgejo/pull_request_template.md"), "Default");
+        assert_eq!(
+            template_name(".forgejo/pull_request_template.md"),
+            "Default"
+        );
         assert_eq!(template_name("PULL_REQUEST_TEMPLATE.md"), "Default");
     }
 
     #[test]
     fn default_sorts_first_then_names_and_the_list_is_capped() {
         let names = |l: Vec<MrTemplate>| l.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(sort_templates(vec![tpl("bug"), tpl("Default"), tpl("Alpha")])), ["Default", "Alpha", "bug"]);
+        assert_eq!(
+            names(sort_templates(vec![
+                tpl("bug"),
+                tpl("Default"),
+                tpl("Alpha")
+            ])),
+            ["Default", "Alpha", "bug"]
+        );
         let many: Vec<MrTemplate> = (0..30).map(|i| tpl(&format!("t{i:02}"))).collect();
         assert_eq!(sort_templates(many).len(), MAX_TEMPLATES);
     }
 
     #[test]
     fn a_message_splits_into_title_and_body() {
-        assert_eq!(split_message("Add login\r\n\r\n\r\nWhy.\n\n  - indented\n\n"), ("Add login".into(), "Why.\n\n  - indented".into()));
-        assert_eq!(split_message("One line\n"), ("One line".into(), String::new()));
-        assert_eq!(split_message("Title\n\n   \n"), ("Title".into(), String::new()));
+        assert_eq!(
+            split_message("Add login\r\n\r\n\r\nWhy.\n\n  - indented\n\n"),
+            ("Add login".into(), "Why.\n\n  - indented".into())
+        );
+        assert_eq!(
+            split_message("One line\n"),
+            ("One line".into(), String::new())
+        );
+        assert_eq!(
+            split_message("Title\n\n   \n"),
+            ("Title".into(), String::new())
+        );
         assert_eq!(clip_template(b"## Why\r\n"), "## Why\n");
-        assert_eq!(clip_template(&vec![b'a'; MAX_TEMPLATE_BYTES + 10]).len(), MAX_TEMPLATE_BYTES);
+        assert_eq!(
+            clip_template(&vec![b'a'; MAX_TEMPLATE_BYTES + 10]).len(),
+            MAX_TEMPLATE_BYTES
+        );
     }
 
     /// main pushed as origin/main; feature: "Add login" (with a body), a merge of `side`, "Fix typo".
@@ -280,13 +488,53 @@ mod tests {
     #[tokio::test]
     async fn the_first_commit_is_the_oldest_on_the_first_parent_line_without_merges() {
         let r = branched();
-        let bases = ["refs/remotes/origin/main".to_string(), "refs/heads/main".to_string()];
-        let first = first_commit(&cli(), r.path(), "feature", &bases).await.unwrap().unwrap();
-        assert_eq!(first, FirstCommit { summary: "Add login".into(), body: "Why it matters.".into(), count: 2 });
-        let fallback = ["refs/remotes/origin/nope".to_string(), "refs/heads/main".to_string()];
-        assert_eq!(first_commit(&cli(), r.path(), "feature", &fallback).await.unwrap().unwrap().summary, "Add login");
-        assert_eq!(first_commit(&cli(), r.path(), "feature", &["refs/heads/nope".to_string()]).await.unwrap(), None, "no local copy of the target");
-        assert_eq!(first_commit(&cli(), r.path(), "main", &bases).await.unwrap(), None, "nothing since the target");
+        let bases = [
+            "refs/remotes/origin/main".to_string(),
+            "refs/heads/main".to_string(),
+        ];
+        let first = first_commit(&cli(), r.path(), "feature", &bases)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first,
+            FirstCommit {
+                summary: "Add login".into(),
+                body: "Why it matters.".into(),
+                count: 2
+            }
+        );
+        let fallback = [
+            "refs/remotes/origin/nope".to_string(),
+            "refs/heads/main".to_string(),
+        ];
+        assert_eq!(
+            first_commit(&cli(), r.path(), "feature", &fallback)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary,
+            "Add login"
+        );
+        assert_eq!(
+            first_commit(
+                &cli(),
+                r.path(),
+                "feature",
+                &["refs/heads/nope".to_string()]
+            )
+            .await
+            .unwrap(),
+            None,
+            "no local copy of the target"
+        );
+        assert_eq!(
+            first_commit(&cli(), r.path(), "main", &bases)
+                .await
+                .unwrap(),
+            None,
+            "nothing since the target"
+        );
     }
 
     #[cfg(unix)] // a 1 MB message on git's command line (Windows caps one at 32K)
@@ -296,9 +544,21 @@ mod tests {
         r.commit("one");
         r.switch_new("feature");
         r.commit(&format!("Huge\n\n{}", "x".repeat(100 * 1024)));
-        let first = first_commit(&cli(), r.path(), "feature", &["refs/heads/main".to_string()]).await.unwrap().unwrap();
+        let first = first_commit(
+            &cli(),
+            r.path(),
+            "feature",
+            &["refs/heads/main".to_string()],
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(first.summary, "Huge");
-        assert!(first.body.len() < MAX_READ_BYTES as usize, "{}", first.body.len());
+        assert!(
+            first.body.len() < MAX_READ_BYTES as usize,
+            "{}",
+            first.body.len()
+        );
     }
 
     #[cfg(unix)] // symlinks (Windows: privileges, and core.symlinks=false there)
@@ -308,18 +568,49 @@ mod tests {
         r.write(".gitlab/merge_request_templates/Default.md", "## Why\r\n");
         r.write(".gitlab/merge_request_templates/Bug.md", "## Bug\n");
         r.write(".gitlab/merge_request_templates/notes.txt", "x\n");
-        std::os::unix::fs::symlink("Bug.md", r.path().join(".gitlab/merge_request_templates/Link.md")).unwrap();
+        std::os::unix::fs::symlink(
+            "Bug.md",
+            r.path().join(".gitlab/merge_request_templates/Link.md"),
+        )
+        .unwrap();
         r.git(&["add", "-A"]);
         r.git(&["commit", "-q", "-m", "templates"]);
         r.git(&["update-ref", "refs/remotes/origin/main", "main"]);
-        r.write(".gitlab/merge_request_templates/Default.md", "uncommitted\n");
-        let revs = ["refs/remotes/origin/main".to_string(), "refs/heads/main".to_string(), "HEAD".to_string()];
-        let list = local_templates(&cli(), r.path(), ForgeKind::GitLab, &revs).await.unwrap();
-        assert_eq!(list.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Default", "Bug"]);
+        r.write(
+            ".gitlab/merge_request_templates/Default.md",
+            "uncommitted\n",
+        );
+        let revs = [
+            "refs/remotes/origin/main".to_string(),
+            "refs/heads/main".to_string(),
+            "HEAD".to_string(),
+        ];
+        let list = local_templates(&cli(), r.path(), ForgeKind::GitLab, &revs)
+            .await
+            .unwrap();
+        assert_eq!(
+            list.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["Default", "Bug"]
+        );
         assert_eq!(list[0].body, "## Why\n");
         assert_eq!(list[0].path, ".gitlab/merge_request_templates/Default.md");
-        assert!(local_templates(&cli(), r.path(), ForgeKind::GitHub, &revs).await.unwrap().is_empty());
-        assert!(local_templates(&cli(), r.path(), ForgeKind::GitLab, &["refs/heads/nope".to_string()]).await.unwrap().is_empty());
+        assert!(
+            local_templates(&cli(), r.path(), ForgeKind::GitHub, &revs)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            local_templates(
+                &cli(),
+                r.path(),
+                ForgeKind::GitLab,
+                &["refs/heads/nope".to_string()]
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -330,18 +621,40 @@ mod tests {
         r.write(".github/workflows/ci.yml", "x\n");
         r.git(&["add", "-A"]);
         r.git(&["commit", "-q", "-m", "templates"]);
-        let list = local_templates(&cli(), r.path(), ForgeKind::Forgejo, &["HEAD".to_string()]).await.unwrap();
-        assert_eq!(list.iter().map(|t| (t.name.as_str(), t.path.as_str(), t.body.as_str())).collect::<Vec<_>>(), [("Default", ".forgejo/pull_request_template.md", "forgejo\n")]);
+        let list = local_templates(&cli(), r.path(), ForgeKind::Forgejo, &["HEAD".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|t| (t.name.as_str(), t.path.as_str(), t.body.as_str()))
+                .collect::<Vec<_>>(),
+            [("Default", ".forgejo/pull_request_template.md", "forgejo\n")]
+        );
         r.write("PULL_REQUEST_TEMPLATE.md", "root\n");
         r.git(&["add", "-A"]);
         r.git(&["commit", "-q", "-m", "root"]);
-        assert_eq!(local_templates(&cli(), r.path(), ForgeKind::Forgejo, &["HEAD".to_string()]).await.unwrap()[0].path, "PULL_REQUEST_TEMPLATE.md", "the repository's root first");
+        assert_eq!(
+            local_templates(&cli(), r.path(), ForgeKind::Forgejo, &["HEAD".to_string()])
+                .await
+                .unwrap()[0]
+                .path,
+            "PULL_REQUEST_TEMPLATE.md",
+            "the repository's root first"
+        );
         assert!(forgejo_template(vec![]).is_empty());
     }
 
     #[test]
     fn the_context_serializes_as_the_ui_reads_it() {
-        let v = serde_json::to_value(FirstCommit { summary: "s".into(), body: "b".into(), count: 1 }).unwrap();
-        assert_eq!(v, serde_json::json!({"summary": "s", "body": "b", "count": 1}));
+        let v = serde_json::to_value(FirstCommit {
+            summary: "s".into(),
+            body: "b".into(),
+            count: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"summary": "s", "body": "b", "count": 1})
+        );
     }
 }

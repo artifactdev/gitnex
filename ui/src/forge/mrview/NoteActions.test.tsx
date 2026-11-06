@@ -73,6 +73,13 @@ afterEach(() => {
 });
 
 describe('a comment header: reactions, edit and delete', () => {
+  it('keeps Bitbucket comment edit/delete actions without offering unsupported reactions', () => {
+    show('bitbucket', thread('101', [note('101', ada)]));
+    expect(screen.queryByRole('button', { name: 'Add reaction' })).toBeNull();
+    const m = menu();
+    expect(within(m).getByRole('menuitem', { name: /^Edit/ })).toBeTruthy();
+    expect(within(m).getByRole('menuitem', { name: /^Delete/ })).toBeTruthy();
+  });
   it("has Add reaction and Comment actions; Edit and Delete only on the user's own comments", () => {
     show('gitlab', thread('d1', [note('101'), note('102', ada)]));
     expect(screen.getAllByRole('button', { name: 'Add reaction' })).toHaveLength(2);

@@ -89,6 +89,39 @@ function addTo(noun: string, label: string) {
 }
 
 describe('the Create flyout (spec #4 §4 "4C")', () => {
+  it('Bitbucket exposes reviewers but no unsupported draft, assignee or label controls', async () => {
+    const bb = { ...project, kind: 'bitbucket' as const, path: 'ORBIT/widget', webUrl: 'https://code.example.com/projects/ORBIT/repos/widget' };
+    patchForge('t1', { kind: 'bitbucket', project: bb as never });
+    api.forgeCreateContext.mockResolvedValue({ ...CTX, project: bb, sourceProject: bb.path });
+    api.forgeCreateMr.mockResolvedValue({ mr: { number: 7, webUrl: `${bb.webUrl}/pull-requests/7` }, failed: [] });
+    render(<Host />);
+    const dialog = await screen.findByRole('dialog', { name: 'Create pull request' });
+    await within(dialog).findByLabelText('Title');
+    expect(within(dialog).getByRole('button', { name: 'Add reviewer' })).toBeVisible();
+    expect(within(dialog).queryByRole('button', { name: 'Add assignee' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Add label' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Create options' })).toBeNull();
+    fireEvent.click(createButton('Create pull request'));
+    await waitFor(() => expect(api.forgeCreateMr).toHaveBeenCalledWith(7, 'origin', expect.objectContaining({ draft: false, assignees: [], labels: [] })));
+  });
+
+  it('Bitbucket keeps unsupported saved values until they are explicitly cleared', async () => {
+    const bb = { ...project, kind: 'bitbucket' as const, path: 'ORBIT/widget' };
+    patchForge('t1', { kind: 'bitbucket', project: bb as never });
+    api.forgeCreateContext.mockResolvedValue({ ...CTX, project: bb, sourceProject: bb.path });
+    writeMrDraft('/r/shop', 'feature/login', {
+      sourceRemote: 'origin', targetRemote: 'origin', targetBranch: 'main', title: 'Keep my work', description: 'Kept', prefilled: '', template: null,
+      reviewers: [], assignees: [], labels: ['bug'], draft: true, squash: false, deleteSourceBranch: false,
+    });
+    render(<Host />);
+    await screen.findByLabelText('Title');
+    expect(createButton('Create pull request')).toBeDisabled();
+    expect(readMrDraft('/r/shop', 'feature/login')).toMatchObject({ draft: true, labels: ['bug'] });
+    expect(api.forgeCreateMr).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear unsupported options' }));
+    expect(readMrDraft('/r/shop', 'feature/login')).toMatchObject({ title: 'Keep my work', description: 'Kept', draft: false, labels: [] });
+    expect(createButton('Create pull request')).toBeEnabled();
+  });
   it('prefills from the first commit and the default template, and saves nothing until edited', async () => {
     await show();
     expect(api.forgeCreateContext).toHaveBeenCalledWith(7, 'origin', 'origin', 'feature/login', 'main');

@@ -20,6 +20,9 @@ pub struct ForgeAccount {
     pub id: String,
     pub host: String,
     pub kind: ForgeKind,
+    /// The installation URL, including its context path, for self-hosted Bitbucket.
+    #[serde(default)]
+    pub base_url: Option<String>,
     /// The token's user when the account was added (avatar and name in Settings).
     pub user: ForgeUser,
     pub storage: TokenStorage,
@@ -37,7 +40,11 @@ pub struct ForgeAccount {
 
 /// What the account's last requests said (no request is made to show it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(export)]
 pub enum AccountStatus {
     Ok,
@@ -45,8 +52,12 @@ pub enum AccountStatus {
         #[ts(type = "number")]
         until: i64,
     },
-    AuthFailed { message: String },
-    Unreachable { message: String },
+    AuthFailed {
+        message: String,
+    },
+    Unreachable {
+        message: String,
+    },
     /// The store has no token for it (the keyring was reset, the file deleted).
     TokenMissing,
 }
@@ -70,7 +81,10 @@ pub fn new_account_id(accounts: &[ForgeAccount], host: &str, user_id: u64) -> St
     if !taken(&id) {
         return id;
     }
-    (2..).map(|n| format!("{host}#{user_id}-{n}")).find(|id| !taken(id)).expect("an unused id")
+    (2..)
+        .map(|n| format!("{host}#{user_id}-{n}"))
+        .find(|id| !taken(id))
+        .expect("an unused id")
 }
 
 /// Gives every account an id on load (`ForgeAccount::id`); true when one changed. A profile from
@@ -82,22 +96,31 @@ pub fn assign_account_ids(accounts: &mut [ForgeAccount]) -> bool {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for i in 0..accounts.len() {
         let a = &accounts[i];
-        let valid = a.id == a.host || a.id.strip_prefix(a.host.as_str()).is_some_and(|rest| rest.starts_with('#'));
+        let valid = a.id == a.host
+            || a.id
+                .strip_prefix(a.host.as_str())
+                .is_some_and(|rest| rest.starts_with('#'));
         if valid && !seen.contains(&a.id) {
             seen.insert(a.id.clone());
             continue;
         }
         // The host's own name only while no other account has it, here or further down.
-        let host_free = !seen.contains(&a.host) && !accounts.iter().any(|b| b.id == b.host && b.host == a.host);
+        let host_free =
+            !seen.contains(&a.host) && !accounts.iter().any(|b| b.id == b.host && b.host == a.host);
         // A development build named the others by the user id alone (`42`, token `<host>#42`).
-        let bare_user = (!a.id.is_empty() && a.id.bytes().all(|b| b.is_ascii_digit())).then(|| format!("{}#{}", a.host, a.id)).filter(|id| !seen.contains(id));
+        let bare_user = (!a.id.is_empty() && a.id.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| format!("{}#{}", a.host, a.id))
+            .filter(|id| !seen.contains(id));
         let id = if let Some(id) = bare_user {
             id
         } else if host_free {
             a.host.clone()
         } else {
             let base = format!("{}#{}", a.host, a.user.id);
-            std::iter::once(base.clone()).chain((2..).map(|n| format!("{base}-{n}"))).find(|id| !seen.contains(id) && !accounts.iter().any(|b| &b.id == id)).expect("an unused id")
+            std::iter::once(base.clone())
+                .chain((2..).map(|n| format!("{base}-{n}")))
+                .find(|id| !seen.contains(id) && !accounts.iter().any(|b| &b.id == id))
+                .expect("an unused id")
         };
         seen.insert(id.clone());
         accounts[i].id = id;
@@ -120,7 +143,11 @@ pub fn normalize_host(input: &str) -> Result<String, GbError> {
         Some((n, p)) => (n, Some(p)),
         None => (host.as_str(), None),
     };
-    let name_ok = !name.is_empty() && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let name_ok = !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
     let port_ok = port.is_none_or(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
     if !name_ok || !port_ok {
         return Err(bad());
@@ -128,11 +155,64 @@ pub fn normalize_host(input: &str) -> Result<String, GbError> {
     Ok(host)
 }
 
+/// Validate a Bitbucket installation URL without allowing it to change the account's authority.
+pub fn normalize_bitbucket_base_url(input: &str, host: &str) -> Result<String, GbError> {
+    let bad = || {
+        GbError::new(
+            GbErrorKind::InvalidInput,
+            "Enter an HTTPS Bitbucket installation URL on the account host, without credentials, query, fragment or traversal",
+        )
+    };
+    let input = input.trim();
+    let rest = input.strip_prefix("https://").ok_or_else(bad)?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.to_ascii_lowercase() != host
+        || authority.contains('@')
+        || normalize_host(authority).ok().as_deref() != Some(host)
+    {
+        return Err(bad());
+    }
+    if let Some((_, port)) = authority.rsplit_once(':')
+        && port.parse::<u16>().ok().filter(|p| *p != 0).is_none()
+    {
+        return Err(bad());
+    }
+    let path = path.trim_end_matches('/');
+    if !path.is_empty()
+        && path.split('/').any(|s| {
+            s.is_empty()
+                || s == "."
+                || s == ".."
+                || !s
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b'~'))
+        })
+    {
+        return Err(bad());
+    }
+    Ok(if path.is_empty() {
+        format!("https://{host}")
+    } else {
+        format!("https://{host}/{path}")
+    })
+}
+
 /// GitHub accounts are github.com's (GitHub Enterprise Server is out of scope, spec #4 §9); GitLab
 /// and Forgejo accounts are on any host.
 pub fn check_kind_host(kind: ForgeKind, host: &str) -> Result<(), GbError> {
     if kind == ForgeKind::GitHub && host != "github.com" {
-        return Err(GbError::new(GbErrorKind::InvalidInput, "GitHub accounts are for github.com (GitHub Enterprise Server isn't supported)"));
+        return Err(GbError::new(
+            GbErrorKind::InvalidInput,
+            "GitHub accounts are for github.com (GitHub Enterprise Server isn't supported)",
+        ));
+    }
+    if kind == ForgeKind::Bitbucket
+        && (host == "bitbucket.org" || host.starts_with("bitbucket.org:"))
+    {
+        return Err(GbError::new(
+            GbErrorKind::InvalidInput,
+            "Bitbucket Cloud isn't supported; enter a Bitbucket Data Center or Server host",
+        ));
     }
     Ok(())
 }
@@ -152,6 +232,7 @@ pub fn token_page_url_for(kind: ForgeKind, host: &str, classic: bool) -> String 
         ForgeKind::GitHub if classic => "https://github.com/settings/tokens/new?description=GitNex%20desktop%20client&scopes=repo,read:org".to_string(),
         ForgeKind::GitHub => format!("https://github.com/settings/personal-access-tokens/new?{DESCRIPTION}&pull_requests=write&issues=write&checks=read&statuses=read&metadata=read&profile=read"),
         ForgeKind::Forgejo => format!("https://{host}/user/settings/applications/tokens/new"),
+        ForgeKind::Bitbucket => format!("https://{host}/plugins/servlet/access-tokens/manage"),
     }
 }
 
@@ -160,27 +241,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bitbucket_installation_url_is_same_host_https_and_has_safe_context() {
+        let host = "bitbucket.example.com:8443";
+        assert_eq!(
+            normalize_bitbucket_base_url("https://Bitbucket.Example.com:8443/bitbucket/", host)
+                .unwrap(),
+            "https://bitbucket.example.com:8443/bitbucket"
+        );
+        assert_eq!(
+            normalize_bitbucket_base_url("https://bitbucket.example.com:8443", host).unwrap(),
+            "https://bitbucket.example.com:8443"
+        );
+        for bad in [
+            "http://bitbucket.example.com:8443",
+            "https://user@bitbucket.example.com:8443/x",
+            "https://evil.example.com/x",
+            "https://bitbucket.example.com:8443/a/../b",
+            "https://bitbucket.example.com:8443/a%2fb",
+            "https://bitbucket.example.com:8443/a?x",
+            "https://bitbucket.example.com:8443/a#x",
+            "https://bitbucket.example.com:8443/a//b",
+        ] {
+            assert!(normalize_bitbucket_base_url(bad, host).is_err(), "{bad}");
+        }
+        assert!(check_kind_host(ForgeKind::Bitbucket, "bitbucket.org").is_err());
+    }
+
+    #[test]
     fn the_host_box_accepts_a_url_and_keeps_only_the_host() {
-        assert_eq!(normalize_host(" https://GitLab.Example.com/group/project ").unwrap(), "gitlab.example.com");
-        assert_eq!(normalize_host("gitlab.example.com/").unwrap(), "gitlab.example.com");
-        assert_eq!(normalize_host("http://gitlab.example.com:8443?x").unwrap(), "gitlab.example.com:8443");
-        for bad in ["", "   ", "https://user:pw@gitlab.example.com", "git@gitlab.example.com:group/x.git", "gitlab example.com", "-gitlab.example.com", "gitlab.example.com:port"] {
+        assert_eq!(
+            normalize_host(" https://GitLab.Example.com/group/project ").unwrap(),
+            "gitlab.example.com"
+        );
+        assert_eq!(
+            normalize_host("gitlab.example.com/").unwrap(),
+            "gitlab.example.com"
+        );
+        assert_eq!(
+            normalize_host("http://gitlab.example.com:8443?x").unwrap(),
+            "gitlab.example.com:8443"
+        );
+        for bad in [
+            "",
+            "   ",
+            "https://user:pw@gitlab.example.com",
+            "git@gitlab.example.com:group/x.git",
+            "gitlab example.com",
+            "-gitlab.example.com",
+            "gitlab.example.com:port",
+        ] {
             let e = normalize_host(bad).unwrap_err();
-            assert_eq!((e.kind, e.message.as_str()), (GbErrorKind::InvalidInput, "Enter the host only, like gitlab.example.com"), "{bad:?}");
+            assert_eq!(
+                (e.kind, e.message.as_str()),
+                (
+                    GbErrorKind::InvalidInput,
+                    "Enter the host only, like gitlab.example.com"
+                ),
+                "{bad:?}"
+            );
         }
         assert!(check_kind_host(ForgeKind::GitHub, "github.com").is_ok());
         assert!(check_kind_host(ForgeKind::GitLab, "gitlab.example.com").is_ok());
-        assert!(check_kind_host(ForgeKind::Forgejo, "code.example.org").is_ok(), "Forgejo on any host");
-        assert_eq!(check_kind_host(ForgeKind::GitHub, "github.example.com").unwrap_err().message, "GitHub accounts are for github.com (GitHub Enterprise Server isn't supported)");
+        assert!(
+            check_kind_host(ForgeKind::Forgejo, "code.example.org").is_ok(),
+            "Forgejo on any host"
+        );
+        assert_eq!(
+            check_kind_host(ForgeKind::GitHub, "github.example.com")
+                .unwrap_err()
+                .message,
+            "GitHub accounts are for github.com (GitHub Enterprise Server isn't supported)"
+        );
     }
 
     #[test]
     fn create_token_pages_are_prefilled_with_write_scope() {
-        assert_eq!(token_page_url(ForgeKind::GitLab, "gitlab.example.com"), "https://gitlab.example.com/-/user_settings/personal_access_tokens?name=GitNex&description=GitNex%20desktop%20client&scopes=api");
-        assert_eq!(token_page_url_for(ForgeKind::GitHub, "github.com", true), "https://github.com/settings/tokens/new?description=GitNex%20desktop%20client&scopes=repo,read:org");
-        assert_eq!(token_page_url_for(ForgeKind::GitLab, "gitlab.example.com", true), token_page_url(ForgeKind::GitLab, "gitlab.example.com"));
-        assert_eq!(token_page_url(ForgeKind::GitHub, "github.com"), "https://github.com/settings/personal-access-tokens/new?name=GitNex&description=GitNex%20desktop%20client&pull_requests=write&issues=write&checks=read&statuses=read&metadata=read&profile=read");
-        assert_eq!(token_page_url(ForgeKind::Forgejo, "code.example.org:3000"), "https://code.example.org:3000/user/settings/applications/tokens/new");
+        assert_eq!(
+            token_page_url(ForgeKind::GitLab, "gitlab.example.com"),
+            "https://gitlab.example.com/-/user_settings/personal_access_tokens?name=GitNex&description=GitNex%20desktop%20client&scopes=api"
+        );
+        assert_eq!(
+            token_page_url_for(ForgeKind::GitHub, "github.com", true),
+            "https://github.com/settings/tokens/new?description=GitNex%20desktop%20client&scopes=repo,read:org"
+        );
+        assert_eq!(
+            token_page_url_for(ForgeKind::GitLab, "gitlab.example.com", true),
+            token_page_url(ForgeKind::GitLab, "gitlab.example.com")
+        );
+        assert_eq!(
+            token_page_url(ForgeKind::GitHub, "github.com"),
+            "https://github.com/settings/personal-access-tokens/new?name=GitNex&description=GitNex%20desktop%20client&pull_requests=write&issues=write&checks=read&statuses=read&metadata=read&profile=read"
+        );
+        assert_eq!(
+            token_page_url(ForgeKind::Forgejo, "code.example.org:3000"),
+            "https://code.example.org:3000/user/settings/applications/tokens/new"
+        );
     }
 
     #[test]
@@ -195,25 +350,60 @@ mod tests {
         });
         let profile: crate::settings::Profile = serde_json::from_value(profile).unwrap();
         let a = profile.forge_accounts.into_iter().next().unwrap();
-        assert_eq!(a.id, "", "1.5.0's account has no id until the store gives it one (`assign_account_ids`)");
+        assert_eq!(
+            a.id, "",
+            "1.5.0's account has no id until the store gives it one (`assign_account_ids`)"
+        );
         assert_eq!((a.version, a.version_checked_at, a.added_at), (None, 0, 0));
-        assert_eq!((a.user.avatar_url, a.user.email, a.user.web_url.as_str()), (None, None, ""));
+        assert_eq!(
+            (a.user.avatar_url, a.user.email, a.user.web_url.as_str()),
+            (None, None, "")
+        );
     }
 
     fn on(host: &str, id: &str, user: u64) -> ForgeAccount {
-        let user = ForgeUser { id: user, username: format!("user{user}"), name: format!("User {user}"), avatar_url: None, web_url: String::new(), email: None, emails: vec![] };
-        ForgeAccount { id: id.into(), host: host.into(), kind: ForgeKind::GitLab, user, storage: TokenStorage::Keyring, version: None, version_checked_at: 0, added_at: 0 }
+        let user = ForgeUser {
+            id: user,
+            username: format!("user{user}"),
+            name: format!("User {user}"),
+            avatar_url: None,
+            web_url: String::new(),
+            email: None,
+            emails: vec![],
+        };
+        ForgeAccount {
+            id: id.into(),
+            host: host.into(),
+            kind: ForgeKind::GitLab,
+            base_url: None,
+            user,
+            storage: TokenStorage::Keyring,
+            version: None,
+            version_checked_at: 0,
+            added_at: 0,
+        }
     }
 
     #[test]
     fn a_hosts_first_account_is_named_by_the_host_and_the_others_by_their_user() {
         const H: &str = "gitlab.example.com";
         assert_eq!(new_account_id(&[], H, 7), H);
-        assert_eq!(new_account_id(&[on("code.example.org", "code.example.org", 7)], H, 7), H, "another host's account doesn't count");
+        assert_eq!(
+            new_account_id(&[on("code.example.org", "code.example.org", 7)], H, 7),
+            H,
+            "another host's account doesn't count"
+        );
         assert_eq!(new_account_id(&[on(H, H, 7)], H, 8), "gitlab.example.com#8");
         // The host's first account was removed: the others keep their names, and a new one too.
-        assert_eq!(new_account_id(&[on(H, "gitlab.example.com#8", 8)], H, 9), "gitlab.example.com#9");
-        assert_eq!(new_account_id(&[on(H, H, 7), on(H, "gitlab.example.com#8", 8)], H, 8), "gitlab.example.com#8-2", "never a taken one");
+        assert_eq!(
+            new_account_id(&[on(H, "gitlab.example.com#8", 8)], H, 9),
+            "gitlab.example.com#9"
+        );
+        assert_eq!(
+            new_account_id(&[on(H, H, 7), on(H, "gitlab.example.com#8", 8)], H, 8),
+            "gitlab.example.com#8-2",
+            "never a taken one"
+        );
     }
 
     #[test]
@@ -222,29 +412,50 @@ mod tests {
         // 1.5.0: one account per host, no ids.
         let mut old = vec![on(H, "", 7), on("code.example.org", "", 7)];
         assert!(assign_account_ids(&mut old));
-        assert_eq!(old.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [H, "code.example.org"]);
+        assert_eq!(
+            old.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            [H, "code.example.org"]
+        );
         assert!(!assign_account_ids(&mut old), "nothing more to do");
         // 1.5.0 saved two accounts on a host without their ids: never both the host's name.
         let mut stripped = vec![on(H, "", 7), on(H, "", 8)];
         assert!(assign_account_ids(&mut stripped));
-        assert_eq!(stripped.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [H, "gitlab.example.com#8"]);
+        assert_eq!(
+            stripped.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            [H, "gitlab.example.com#8"]
+        );
         // Another account already has the host's name: the id-less one doesn't take it.
         let mut later = vec![on(H, "", 8), on(H, H, 7)];
         assert!(assign_account_ids(&mut later));
-        assert_eq!(later.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["gitlab.example.com#8", H]);
+        assert_eq!(
+            later.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            ["gitlab.example.com#8", H]
+        );
         // A duplicate id is renamed.
         let mut twice = vec![on(H, H, 7), on(H, H, 8)];
         assert!(assign_account_ids(&mut twice));
-        assert_eq!(twice.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [H, "gitlab.example.com#8"]);
+        assert_eq!(
+            twice.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            [H, "gitlab.example.com#8"]
+        );
         // A development build's ids: the user id alone, `legacy:<host>`.
         let mut dev = vec![on(H, "legacy:gitlab.example.com", 7), on(H, "8", 8)];
         assert!(assign_account_ids(&mut dev));
-        assert_eq!(dev.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [H, "gitlab.example.com#8"]);
+        assert_eq!(
+            dev.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            [H, "gitlab.example.com#8"]
+        );
     }
 
     #[test]
     fn statuses_serialize_tagged() {
-        assert_eq!(serde_json::to_value(AccountStatus::RateLimited { until: 5 }).unwrap(), serde_json::json!({"kind": "rateLimited", "until": 5}));
-        assert_eq!(serde_json::to_value(AccountStatus::TokenMissing).unwrap(), serde_json::json!({"kind": "tokenMissing"}));
+        assert_eq!(
+            serde_json::to_value(AccountStatus::RateLimited { until: 5 }).unwrap(),
+            serde_json::json!({"kind": "rateLimited", "until": 5})
+        );
+        assert_eq!(
+            serde_json::to_value(AccountStatus::TokenMissing).unwrap(),
+            serde_json::json!({"kind": "tokenMissing"})
+        );
     }
 }

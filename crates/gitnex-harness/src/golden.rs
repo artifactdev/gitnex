@@ -5,9 +5,9 @@
 
 use crate::{Harness, HarnessOptions};
 use gitnex_core::api::Request;
-use gitnex_core::settings::{AppSettings, Profile, DEFAULT_PROFILE_ID};
-use gitnex_core::testing::{isolated_git_env, FIXTURE_MARKER};
-use serde_json::{json, Value};
+use gitnex_core::settings::{AppSettings, DEFAULT_PROFILE_ID, Profile};
+use gitnex_core::testing::{FIXTURE_MARKER, isolated_git_env};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -52,7 +52,10 @@ pub fn rewrite_paths(text: &str, root: &str, name: &str, pieces: &[String]) -> S
     while let Some(at) = rest.find(&prefix) {
         out.push_str(&rest[..at]);
         let after = &rest[at + prefix.len()..];
-        match sorted.iter().find(|p| after.starts_with(p.as_str()) && piece_ends(after[p.len()..].chars().next())) {
+        match sorted
+            .iter()
+            .find(|p| after.starts_with(p.as_str()) && piece_ends(after[p.len()..].chars().next()))
+        {
             Some(p) => {
                 out.push_str(&demo_root(name, p));
                 rest = &after[p.len()..];
@@ -82,9 +85,14 @@ fn last_component(path: &str) -> &str {
 pub fn normalise(v: &mut Value, root: &str, name: &str, pieces: &[String]) {
     match v {
         Value::String(s) => *s = rewrite_paths(s, root, name, pieces),
-        Value::Array(items) => items.iter_mut().for_each(|x| normalise(x, root, name, pieces)),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|x| normalise(x, root, name, pieces)),
         Value::Object(map) => {
-            let follows = match (map.get("path").and_then(Value::as_str), map.get("name").and_then(Value::as_str)) {
+            let follows = match (
+                map.get("path").and_then(Value::as_str),
+                map.get("name").and_then(Value::as_str),
+            ) {
                 (Some(p), Some(n)) => last_component(p) == n,
                 _ => false,
             };
@@ -93,7 +101,12 @@ pub fn normalise(v: &mut Value, root: &str, name: &str, pieces: &[String]) {
                 normalise(&mut x, root, name, pieces);
                 map.insert(rewrite_paths(&k, root, name, pieces), x);
             }
-            if follows && let Some(p) = map.get("path").and_then(Value::as_str).map(|p| last_component(p).to_string()) {
+            if follows
+                && let Some(p) = map
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(|p| last_component(p).to_string())
+            {
                 map.insert("name".into(), Value::String(p));
             }
         }
@@ -138,12 +151,37 @@ const UNTIMED: &str = "<untimed>";
 /// storage, by method: dot-separated paths, `[]` for each item of a list. ui/src/demo/golden/
 /// normalise.ts drops the same fields on both sides (keep the two tables alike).
 const UNTIMED_FIELDS: [(&str, &[&str]); 6] = [
-    ("forgeAccounts", &["[].account.addedAt", "[].account.storage", "[].account.versionCheckedAt"]),
+    (
+        "forgeAccounts",
+        &[
+            "[].account.addedAt",
+            "[].account.storage",
+            "[].account.versionCheckedAt",
+        ],
+    ),
     ("forgeBranchMrs", &["fetchedAt", "pollIntervalSecs"]),
-    ("forgeCachedMrs", &["savedAt", "badges.fetchedAt", "badges.pollIntervalSecs", "list.fetchedAt", "list.pollIntervalSecs"]),
-    ("forgeMrDetail", &["fetchedAt", "notModified", "pollIntervalSecs"]),
-    ("forgeMrDiscussions", &["fetchedAt", "notModified", "pollIntervalSecs"]),
-    ("forgeMrList", &["fetchedAt", "pollIntervalSecs", "rateLimit"]),
+    (
+        "forgeCachedMrs",
+        &[
+            "savedAt",
+            "badges.fetchedAt",
+            "badges.pollIntervalSecs",
+            "list.fetchedAt",
+            "list.pollIntervalSecs",
+        ],
+    ),
+    (
+        "forgeMrDetail",
+        &["fetchedAt", "notModified", "pollIntervalSecs"],
+    ),
+    (
+        "forgeMrDiscussions",
+        &["fetchedAt", "notModified", "pollIntervalSecs"],
+    ),
+    (
+        "forgeMrList",
+        &["fetchedAt", "pollIntervalSecs", "rateLimit"],
+    ),
 ];
 
 fn mask_at(v: &mut Value, path: &[&str]) {
@@ -189,7 +227,11 @@ fn collapses(last: Option<&Value>, ev: &Value) -> bool {
 pub fn rename_fetch_labels(ev: &mut Value, name: &str) {
     let fetch = |x: &Value| x.get("kind").and_then(Value::as_str) == Some("fetch");
     match ev.get("type").and_then(Value::as_str) {
-        Some("opStarted") if fetch(ev) && ev.get("label").and_then(Value::as_str) == Some("repo") => ev["label"] = json!(name),
+        Some("opStarted")
+            if fetch(ev) && ev.get("label").and_then(Value::as_str) == Some("repo") =>
+        {
+            ev["label"] = json!(name)
+        }
         Some("queueChanged") => {
             let rename = |item: &mut Value| {
                 if fetch(item) && item.get("label").and_then(Value::as_str) == Some("fetch repo") {
@@ -215,7 +257,10 @@ pub fn digest_large_strings(v: &mut Value) {
             for (key, x) in map.iter_mut() {
                 let digest = match &*x {
                     Value::String(s) if (key == "base64" || key == "dump") && s.len() > LARGE => {
-                        let hex: String = Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+                        let hex: String = Sha256::digest(s.as_bytes())
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect();
                         Some(format!("sha256:{hex}:{}", s.len()))
                     }
                     _ => None,
@@ -233,7 +278,10 @@ pub fn digest_large_strings(v: &mut Value) {
 
 /// `v` with each `{"$rev": spec, "short"?: n}` as the id `rev_parse` gives (its first `n`
 /// characters with `short`). Commit ids are the fixture's, so both sides share them.
-pub fn resolve_revs(v: &Value, rev_parse: &dyn Fn(&str) -> Result<String, String>) -> Result<Value, String> {
+pub fn resolve_revs(
+    v: &Value,
+    rev_parse: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Value, String> {
     Ok(match v {
         Value::Object(map) if map.contains_key("$rev") => {
             let spec = map["$rev"].as_str().ok_or("$rev names a revision")?;
@@ -243,26 +291,65 @@ pub fn resolve_revs(v: &Value, rev_parse: &dyn Fn(&str) -> Result<String, String
             }
             Value::String(id)
         }
-        Value::Object(map) => Value::Object(map.iter().map(|(k, x)| Ok((k.clone(), resolve_revs(x, rev_parse)?))).collect::<Result<_, String>>()?),
-        Value::Array(items) => Value::Array(items.iter().map(|x| resolve_revs(x, rev_parse)).collect::<Result<_, String>>()?),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, x)| Ok((k.clone(), resolve_revs(x, rev_parse)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|x| resolve_revs(x, rev_parse))
+                .collect::<Result<_, String>>()?,
+        ),
         _ => v.clone(),
     })
 }
 
-pub fn resolve_hashes(v: &Value, hash: &dyn Fn(&str) -> Result<String, String>) -> Result<Value, String> {
+pub fn resolve_hashes(
+    v: &Value,
+    hash: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Value, String> {
     Ok(match v {
-        Value::Object(map) if map.contains_key("$hash") => Value::String(hash(map["$hash"].as_str().ok_or("$hash names a file")?)?),
-        Value::Object(map) => Value::Object(map.iter().map(|(k, x)| Ok((k.clone(), resolve_hashes(x, hash)?))).collect::<Result<_, String>>()?),
-        Value::Array(items) => Value::Array(items.iter().map(|x| resolve_hashes(x, hash)).collect::<Result<_, String>>()?),
+        Value::Object(map) if map.contains_key("$hash") => {
+            Value::String(hash(map["$hash"].as_str().ok_or("$hash names a file")?)?)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, x)| Ok((k.clone(), resolve_hashes(x, hash)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|x| resolve_hashes(x, hash))
+                .collect::<Result<_, String>>()?,
+        ),
         _ => v.clone(),
     })
 }
 
-pub fn resolve_entries(v: &Value, entry: &dyn Fn(&str) -> Result<u64, String>) -> Result<Value, String> {
+pub fn resolve_entries(
+    v: &Value,
+    entry: &dyn Fn(&str) -> Result<u64, String>,
+) -> Result<Value, String> {
     Ok(match v {
-        Value::Object(map) if map.contains_key("$entry") => Value::from(entry(map["$entry"].as_str().ok_or("$entry names undo, redo or banner")?)?),
-        Value::Object(map) => Value::Object(map.iter().map(|(k, x)| Ok((k.clone(), resolve_entries(x, entry)?))).collect::<Result<_, String>>()?),
-        Value::Array(items) => Value::Array(items.iter().map(|x| resolve_entries(x, entry)).collect::<Result<_, String>>()?),
+        Value::Object(map) if map.contains_key("$entry") => Value::from(entry(
+            map["$entry"]
+                .as_str()
+                .ok_or("$entry names undo, redo or banner")?,
+        )?),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, x)| Ok((k.clone(), resolve_entries(x, entry)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|x| resolve_entries(x, entry))
+                .collect::<Result<_, String>>()?,
+        ),
         _ => v.clone(),
     })
 }
@@ -277,7 +364,10 @@ fn hash_in(root: &Path) -> impl Fn(&str) -> Result<String, String> + '_ {
             .output()
             .map_err(|e| format!("git hash-object: {e}"))?;
         if !out.status.success() {
-            return Err(format!("git hash-object {rel}: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            return Err(format!(
+                "git hash-object {rel}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -293,7 +383,11 @@ pub fn substitute(v: &Value, root: &str, id: Option<u64>) -> Value {
             None => v.clone(),
         },
         Value::Array(a) => Value::Array(a.iter().map(|x| substitute(x, root, id)).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), substitute(x, root, id))).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), substitute(x, root, id)))
+                .collect(),
+        ),
         _ => v.clone(),
     }
 }
@@ -308,7 +402,10 @@ fn rev_parse_in(worktree: &Path) -> impl Fn(&str) -> Result<String, String> + '_
             .output()
             .map_err(|e| format!("git rev-parse: {e}"))?;
         if !out.status.success() {
-            return Err(format!("git rev-parse --verify {spec}: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            return Err(format!(
+                "git rev-parse --verify {spec}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -322,7 +419,9 @@ const SETTLE_QUIET: std::time::Duration = std::time::Duration::from_millis(40);
 
 /// The events a request emitted: every op it started has finished and its queue is idle again,
 /// then a short quiet, so nothing late lands in the next request's list. Bounded by SETTLE_LIMIT.
-async fn settle(rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::AppEvent>) -> Result<Vec<gitnex_core::events::AppEvent>, String> {
+async fn settle(
+    rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::AppEvent>,
+) -> Result<Vec<gitnex_core::events::AppEvent>, String> {
     use gitnex_core::events::AppEvent;
     use tokio::sync::broadcast::error::RecvError;
     let deadline = tokio::time::Instant::now() + SETTLE_LIMIT;
@@ -331,7 +430,11 @@ async fn settle(rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::A
     let mut busy = std::collections::BTreeSet::new();
     loop {
         let done = open.is_empty() && busy.is_empty();
-        let wait = if done { SETTLE_QUIET } else { deadline.saturating_duration_since(tokio::time::Instant::now()) };
+        let wait = if done {
+            SETTLE_QUIET
+        } else {
+            deadline.saturating_duration_since(tokio::time::Instant::now())
+        };
         match tokio::time::timeout(wait, rx.recv()).await {
             Ok(Ok(ev)) => {
                 match &ev {
@@ -341,7 +444,12 @@ async fn settle(rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::A
                     AppEvent::OpFinished { op, .. } => {
                         open.remove(op);
                     }
-                    AppEvent::QueueChanged { repo, running, queued, .. } => {
+                    AppEvent::QueueChanged {
+                        repo,
+                        running,
+                        queued,
+                        ..
+                    } => {
                         if running.is_none() && queued.is_empty() {
                             busy.remove(repo);
                         } else {
@@ -352,10 +460,16 @@ async fn settle(rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::A
                 }
                 got.push(ev);
             }
-            Ok(Err(RecvError::Lagged(n))) => return Err(format!("{n} events lost while recording")),
+            Ok(Err(RecvError::Lagged(n))) => {
+                return Err(format!("{n} events lost while recording"));
+            }
             Ok(Err(RecvError::Closed)) => return Ok(got),
             Err(_) if done => return Ok(got),
-            Err(_) => return Err(format!("a request's ops didn't finish within {SETTLE_LIMIT:?}: ops {open:?}, busy queues {busy:?}")),
+            Err(_) => {
+                return Err(format!(
+                    "a request's ops didn't finish within {SETTLE_LIMIT:?}: ops {open:?}, busy queues {busy:?}"
+                ));
+            }
         }
     }
 }
@@ -365,7 +479,15 @@ async fn settle(rx: &mut tokio::sync::broadcast::Receiver<gitnex_core::events::A
 fn check_paths(v: &Value) -> Result<(), String> {
     match v {
         Value::String(s) => match s.strip_prefix("$wt:") {
-            Some(dir) if dir.is_empty() || dir.starts_with('/') || dir.split('/').any(|c| c == ".." || c == "." || c.is_empty()) => Err(format!("{s} leaves the fixture tree")),
+            Some(dir)
+                if dir.is_empty()
+                    || dir.starts_with('/')
+                    || dir
+                        .split('/')
+                        .any(|c| c == ".." || c == "." || c.is_empty()) =>
+            {
+                Err(format!("{s} leaves the fixture tree"))
+            }
             _ => Ok(()),
         },
         Value::Array(items) => items.iter().try_for_each(check_paths),
@@ -376,28 +498,67 @@ fn check_paths(v: &Value) -> Result<(), String> {
 
 /// The core's answer to each of `requests` on the fixture folder `root` (a fresh harness in golden
 /// mode), each with the events it emitted when `events`.
-pub async fn record(root: &Path, name: &str, requests: &[Value], events: bool) -> Result<Vec<Value>, String> {
+pub async fn record(
+    root: &Path,
+    name: &str,
+    requests: &[Value],
+    events: bool,
+) -> Result<Vec<Value>, String> {
     let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let root_s = root.to_str().ok_or("the fixture folder's path isn't UTF-8")?.to_string();
+    let root_s = root
+        .to_str()
+        .ok_or("the fixture folder's path isn't UTF-8")?
+        .to_string();
     let read_pieces = || -> Result<Vec<String>, String> {
-        Ok(std::fs::read_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| n != FIXTURE_MARKER).collect())
+        Ok(std::fs::read_dir(&root)
+            .map_err(|e| format!("{}: {e}", root.display()))?
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n != FIXTURE_MARKER)
+            .collect())
     };
     let mut pieces: Vec<String>;
     let worktree = root.join("repo");
     let rev_parse = rev_parse_in(&worktree);
     // The write guard wants the marked folder strictly below its root: the fixture folder's parent.
-    let guard_root = root.parent().ok_or("the fixture folder has no parent")?.to_path_buf();
-    let harness = Harness::new(HarnessOptions { fixture_root: Some(guard_root), golden: true, ..Default::default() }).await;
+    let guard_root = root
+        .parent()
+        .ok_or("the fixture folder has no parent")?
+        .to_path_buf();
+    let harness = Harness::new(HarnessOptions {
+        fixture_root: Some(guard_root),
+        golden: true,
+        ..Default::default()
+    })
+    .await;
     // Plan 4: a fixture with a forge.json gets its fake GitLab, and the visitor's account on it.
     let forge = crate::forge_seed::load(&root)?;
     if let Some(f) = &forge {
         let mut gitlab = f.gitlab.clone();
-        gitlab.tokens.push(crate::fake_forge::FakeToken { token: crate::fake_forge::DEMO_TOKEN.into(), user: crate::forge_seed::me(), scopes: vec!["api".into()], fine_grained: false });
-        harness.forge.try_seed(crate::fake_forge::ForgeSeed { gitlab, github: Default::default(), forgejo: Default::default() })?;
-        harness.add_forge_account_for_test(&f.host, gitnex_core::forge::ForgeKind::GitLab, crate::fake_forge::DEMO_TOKEN).await.map_err(|e| e.message)?;
+        gitlab.tokens.push(crate::fake_forge::FakeToken {
+            token: crate::fake_forge::DEMO_TOKEN.into(),
+            user: crate::forge_seed::me(),
+            scopes: vec!["api".into()],
+            fine_grained: false,
+        });
+        harness.forge.try_seed(crate::fake_forge::ForgeSeed {
+            gitlab,
+            github: Default::default(),
+            forgejo: Default::default(),
+            bitbucket: Default::default(),
+        })?;
+        harness
+            .add_forge_account_for_test(
+                &f.host,
+                gitnex_core::forge::ForgeKind::GitLab,
+                crate::fake_forge::DEMO_TOKEN,
+            )
+            .await
+            .map_err(|e| e.message)?;
     }
     // The fake's own address in answers, and the forge's that the demo's answers name instead.
-    let web = forge.as_ref().map(|f| (harness.forge.gitlab_web(), format!("https://{}", f.host)));
+    let web = forge
+        .as_ref()
+        .map(|f| (harness.forge.gitlab_web(), format!("https://{}", f.host)));
     let mut rx = harness.api.subscribe();
     let mut id = None;
     let mut out = Vec::new();
@@ -407,24 +568,40 @@ pub async fn record(root: &Path, name: &str, requests: &[Value], events: bool) -
         if resolved.to_string().contains("\"$entry\"") {
             // The journal's ids, read for the request's own worktree.
             let params = substitute(&resolved["params"], &root_s, id);
-            let ask = |method: &str| serde_json::from_value::<Request>(json!({ "method": method, "params": { "repo": params["repo"], "worktree": params["worktree"] } })).map_err(|e| e.to_string());
-            let state = harness.api.dispatch(ask("journalState")?).await.map_err(|e| e.message)?;
-            let history = harness.api.dispatch(ask("journalHistory")?).await.map_err(|e| e.message)?;
+            let ask = |method: &str| {
+                serde_json::from_value::<Request>(json!({ "method": method, "params": { "repo": params["repo"], "worktree": params["worktree"] } })).map_err(|e| e.to_string())
+            };
+            let state = harness
+                .api
+                .dispatch(ask("journalState")?)
+                .await
+                .map_err(|e| e.message)?;
+            let history = harness
+                .api
+                .dispatch(ask("journalHistory")?)
+                .await
+                .map_err(|e| e.message)?;
             let pick = |which: &str| -> Result<u64, String> {
                 let v = match which {
                     "undo" => &state["undo"]["entry"],
                     "redo" => &state["redo"]["entry"],
                     "banner" => &state["banners"][0]["entry"],
                     other => match other.strip_prefix("label:") {
-                        Some(label) => history.as_array().and_then(|rows| rows.iter().find(|r| r["label"] == label)).map(|r| &r["entry"]).unwrap_or(&Value::Null),
+                        Some(label) => history
+                            .as_array()
+                            .and_then(|rows| rows.iter().find(|r| r["label"] == label))
+                            .map(|r| &r["entry"])
+                            .unwrap_or(&Value::Null),
                         None => return Err(format!("$entry {other}")),
                     },
                 };
-                v.as_u64().ok_or_else(|| format!("no {which} entry for {req}"))
+                v.as_u64()
+                    .ok_or_else(|| format!("no {which} entry for {req}"))
             };
             resolved = resolve_entries(&resolved, &pick)?;
         }
-        let parsed: Request = serde_json::from_value(substitute(&resolved, &root_s, id)).map_err(|e| format!("bad request {req}: {e}"))?;
+        let parsed: Request = serde_json::from_value(substitute(&resolved, &root_s, id))
+            .map_err(|e| format!("bad request {req}: {e}"))?;
         let opens = req.get("method").and_then(Value::as_str) == Some("openRepo");
         while rx.try_recv().is_ok() {}
         let result = harness.api.dispatch(parsed).await;
@@ -441,7 +618,10 @@ pub async fn record(root: &Path, name: &str, requests: &[Value], events: bool) -
                 }
                 digest_large_strings(&mut ok);
                 mask_versions(&mut ok);
-                mask_untimed(req.get("method").and_then(Value::as_str).unwrap_or(""), &mut ok);
+                mask_untimed(
+                    req.get("method").and_then(Value::as_str).unwrap_or(""),
+                    &mut ok,
+                );
                 json!({ "request": resolved, "response": ok })
             }
             Err(e) => {
@@ -456,7 +636,11 @@ pub async fn record(root: &Path, name: &str, requests: &[Value], events: bool) -
         let mut emitted = Vec::new();
         for ev in settle(&mut rx).await? {
             let mut ev = serde_json::to_value(ev).map_err(|e| e.to_string())?;
-            if ev.get("type").and_then(Value::as_str).is_some_and(|t| UNRECORDED.contains(&t)) {
+            if ev
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| UNRECORDED.contains(&t))
+            {
                 continue;
             }
             normalise(&mut ev, &root_s, name, &pieces);
@@ -492,18 +676,33 @@ pub fn rewrite_base(v: &mut Value, from: &str, to: &str) {
 
 /// Records the requests in `requests_json` (an array) for the fixture `name` into
 /// `out_dir/<n>.json`, replacing the `.json` files there.
-pub async fn write(requests_json: &Path, name: &str, root: &Path, out_dir: &Path, events: bool) -> Result<(), String> {
-    let text = std::fs::read_to_string(requests_json).map_err(|e| format!("{}: {e}", requests_json.display()))?;
-    let requests: Vec<Value> = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", requests_json.display()))?;
+pub async fn write(
+    requests_json: &Path,
+    name: &str,
+    root: &Path,
+    out_dir: &Path,
+    events: bool,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(requests_json)
+        .map_err(|e| format!("{}: {e}", requests_json.display()))?;
+    let requests: Vec<Value> =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", requests_json.display()))?;
     let answers = record(root, name, &requests, events).await?;
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(out_dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(out_dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         if entry.path().extension().is_some_and(|x| x == "json") {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
         }
     }
     for (n, a) in answers.iter().enumerate() {
-        std::fs::write(out_dir.join(format!("{n}.json")), serde_json::to_string_pretty(a).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
+        std::fs::write(
+            out_dir.join(format!("{n}.json")),
+            serde_json::to_string_pretty(a).map_err(|e| e.to_string())? + "\n",
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -520,20 +719,47 @@ mod tests {
     #[test]
     fn entries_resolve_inside_requests() {
         let v = json!({"method": "undo", "params": {"entry": {"$entry": "undo"}}});
-        assert_eq!(resolve_entries(&v, &|w: &str| if w == "undo" { Ok(7) } else { Err(w.into()) }).unwrap(), json!({"method": "undo", "params": {"entry": 7}}));
+        assert_eq!(
+            resolve_entries(&v, &|w: &str| if w == "undo" {
+                Ok(7)
+            } else {
+                Err(w.into())
+            })
+            .unwrap(),
+            json!({"method": "undo", "params": {"entry": 7}})
+        );
     }
 
     #[test]
     fn a_folder_beside_the_main_worktree_is_beside_the_demos() {
         let pieces = vec!["repo".to_string(), "wt-hotfix".to_string()];
-        assert_eq!(rewrite_paths("/t/f/repo-demo-wt and /t/f/repo/x and /t/f/wt-hotfix", "/t/f", "basic", &pieces), "/demo/basic-demo-wt and /demo/basic/x and /demo/.extra/basic/wt-hotfix");
+        assert_eq!(
+            rewrite_paths(
+                "/t/f/repo-demo-wt and /t/f/repo/x and /t/f/wt-hotfix",
+                "/t/f",
+                "basic",
+                &pieces
+            ),
+            "/demo/basic-demo-wt and /demo/basic/x and /demo/.extra/basic/wt-hotfix"
+        );
     }
 
     #[test]
     fn scenario_paths_stay_in_the_fixture_tree() {
-        assert!(check_paths(&json!({"params": {"path": "$wt:wt-demo", "worktree": "$wt"}})).is_ok());
-        for bad in ["$wt:../elsewhere", "$wt:/tmp/x", "$wt:", "$wt:a//b", "$wt:a/../../b"] {
-            assert!(check_paths(&json!([{"params": {"path": bad}}])).is_err(), "{bad}");
+        assert!(
+            check_paths(&json!({"params": {"path": "$wt:wt-demo", "worktree": "$wt"}})).is_ok()
+        );
+        for bad in [
+            "$wt:../elsewhere",
+            "$wt:/tmp/x",
+            "$wt:",
+            "$wt:a//b",
+            "$wt:a/../../b",
+        ] {
+            assert!(
+                check_paths(&json!([{"params": {"path": bad}}])).is_err(),
+                "{bad}"
+            );
         }
     }
 
@@ -542,11 +768,26 @@ mod tests {
         use gitnex_core::events::{AppEvent, OpOutcome};
         let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let kind = gitnex_core::events::OpKind::Commit;
-        tx.send(AppEvent::OpStarted { op: 3, kind, repo: Some(1), label: "commit".into(), interactive: true }).unwrap();
+        tx.send(AppEvent::OpStarted {
+            op: 3,
+            kind,
+            repo: Some(1),
+            label: "commit".into(),
+            interactive: true,
+        })
+        .unwrap();
         let late = tx.clone();
         let sender = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            late.send(AppEvent::OpFinished { op: 3, kind, repo: Some(1), outcome: OpOutcome::Ok, message: None, command: None }).unwrap();
+            late.send(AppEvent::OpFinished {
+                op: 3,
+                kind,
+                repo: Some(1),
+                outcome: OpOutcome::Ok,
+                message: None,
+                command: None,
+            })
+            .unwrap();
         });
         let got = settle(&mut rx).await.unwrap();
         sender.await.unwrap();
@@ -558,30 +799,49 @@ mod tests {
     fn versions_are_masked_only_where_they_hash_the_worktree_path() {
         let mut answer = json!({"journal": {}, "staging": {}, "outcome": {"version": "kept"}, "wip": {"version": "a1", "staged": {"version": "b2", "files": []}, "unstaged": {"version": "c3"}}});
         mask_versions(&mut answer);
-        assert_eq!(answer, json!({"journal": {}, "staging": {}, "outcome": {"version": "kept"}, "wip": {"version": VERSION, "staged": {"version": VERSION, "files": []}, "unstaged": {"version": VERSION}}}));
+        assert_eq!(
+            answer,
+            json!({"journal": {}, "staging": {}, "outcome": {"version": "kept"}, "wip": {"version": VERSION, "staged": {"version": VERSION, "files": []}, "unstaged": {"version": VERSION}}})
+        );
         // A `wip` outside a write's answer (no journal and staging beside it) is left as it is.
         let mut read = json!({"wip": {"version": "a1"}});
         mask_versions(&mut read);
         assert_eq!(read, json!({"wip": {"version": "a1"}}));
         let mut ev = json!({"type": "repoChanged", "versions": {"/demo/basic": "a1", "/demo/.extra/basic/wt-x": "b2"}, "version": "kept"});
         mask_versions(&mut ev);
-        assert_eq!(ev, json!({"type": "repoChanged", "versions": {"/demo/basic": VERSION, "/demo/.extra/basic/wt-x": VERSION}, "version": "kept"}));
+        assert_eq!(
+            ev,
+            json!({"type": "repoChanged", "versions": {"/demo/basic": VERSION, "/demo/.extra/basic/wt-x": VERSION}, "version": "kept"})
+        );
         let mut other = json!({"type": "refsUpdated", "versions": {"x": "a1"}});
         mask_versions(&mut other);
-        assert_eq!(other, json!({"type": "refsUpdated", "versions": {"x": "a1"}}));
+        assert_eq!(
+            other,
+            json!({"type": "refsUpdated", "versions": {"x": "a1"}})
+        );
     }
 
     #[test]
     fn untimed_fields_are_masked_only_where_the_method_has_them() {
         let mut accounts = json!([{"account": {"host": "h", "addedAt": 5, "storage": "file", "versionCheckedAt": 6, "user": {"fetchedAt": 7}}}]);
         mask_untimed("forgeAccounts", &mut accounts);
-        assert_eq!(accounts, json!([{"account": {"host": "h", "addedAt": UNTIMED, "storage": UNTIMED, "versionCheckedAt": UNTIMED, "user": {"fetchedAt": 7}}}]));
+        assert_eq!(
+            accounts,
+            json!([{"account": {"host": "h", "addedAt": UNTIMED, "storage": UNTIMED, "versionCheckedAt": UNTIMED, "user": {"fetchedAt": 7}}}])
+        );
         let mut cached = json!({"savedAt": 1, "badges": {"fetchedAt": 2, "pollIntervalSecs": null}, "list": null});
         mask_untimed("forgeCachedMrs", &mut cached);
-        assert_eq!(cached, json!({"savedAt": UNTIMED, "badges": {"fetchedAt": UNTIMED, "pollIntervalSecs": UNTIMED}, "list": null}));
+        assert_eq!(
+            cached,
+            json!({"savedAt": UNTIMED, "badges": {"fetchedAt": UNTIMED, "pollIntervalSecs": UNTIMED}, "list": null})
+        );
         let mut other = json!({"fetchedAt": 3});
         mask_untimed("fetch", &mut other);
-        assert_eq!(other, json!({"fetchedAt": 3}), "another method's field of that name is kept");
+        assert_eq!(
+            other,
+            json!({"fetchedAt": 3}),
+            "another method's field of that name is kept"
+        );
     }
 
     #[test]
@@ -589,7 +849,10 @@ mod tests {
         let refs = |repo: u32| json!({"type": "refsUpdated", "repo": repo});
         assert!(collapses(Some(&refs(1)), &refs(1)));
         assert!(!collapses(Some(&refs(1)), &refs(2)));
-        assert!(!collapses(Some(&json!({"type": "journalChanged", "repo": 1})), &refs(1)));
+        assert!(!collapses(
+            Some(&json!({"type": "journalChanged", "repo": 1})),
+            &refs(1)
+        ));
         assert!(!collapses(None, &refs(1)));
     }
 
@@ -611,7 +874,11 @@ mod tests {
     #[test]
     fn the_fake_forges_address_is_the_forges() {
         let mut v = json!({"webUrl": "http://127.0.0.1:9/gitlab/orbital/x"});
-        rewrite_base(&mut v, "http://127.0.0.1:9/gitlab", "https://gitlab.example.com");
+        rewrite_base(
+            &mut v,
+            "http://127.0.0.1:9/gitlab",
+            "https://gitlab.example.com",
+        );
         assert_eq!(v, json!({"webUrl": "https://gitlab.example.com/orbital/x"}));
     }
 
@@ -619,6 +886,9 @@ mod tests {
     fn hashes_resolve_inside_requests() {
         let v = json!({"method": "writeWorktreeFile", "params": {"base": {"$hash": "repo/a.txt"}, "keep": [{"$hash": "repo/b.txt"}]}});
         let got = resolve_hashes(&v, &|p: &str| Ok(format!("hash-of-{p}"))).unwrap();
-        assert_eq!(got, json!({"method": "writeWorktreeFile", "params": {"base": "hash-of-repo/a.txt", "keep": ["hash-of-repo/b.txt"]}}));
+        assert_eq!(
+            got,
+            json!({"method": "writeWorktreeFile", "params": {"base": "hash-of-repo/a.txt", "keep": ["hash-of-repo/b.txt"]}})
+        );
     }
 }

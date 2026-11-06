@@ -57,6 +57,12 @@ beforeEach(() => {
 afterEach(() => useToast.getState().dismiss());
 
 describe("the MR/PR view's reviewers and assignees", () => {
+  it('offers only reviewers for Bitbucket, not unsupported assignees or labels', () => {
+    show('bitbucket', mr);
+    expect(screen.getByRole('button', { name: 'Add reviewer' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add assignee' })).toBeNull();
+    expect(screen.queryByText('Labels')).toBeNull();
+  });
   it('adds an assignee at once from the cached people search, then sends the change', async () => {
     let answer!: (m: ForgeMr) => void;
     api.forgeEditMr.mockReturnValueOnce(new Promise((r) => { answer = r; }));

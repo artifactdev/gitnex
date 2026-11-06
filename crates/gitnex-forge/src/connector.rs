@@ -2,7 +2,8 @@
 //! endpoints its host has (the defaults, or the harness's fake forge).
 
 use crate::avatar_cache::DiskAvatarCache;
-use crate::endpoints::{default_endpoints, HostEndpoints};
+use crate::bitbucket::BitbucketProvider;
+use crate::endpoints::{HostEndpoints, default_endpoints};
 use crate::forgejo::ForgejoProvider;
 use crate::github::GitHubProvider;
 use crate::gitlab::GitLabProvider;
@@ -35,7 +36,12 @@ pub struct Forge {
 
 impl Forge {
     pub fn new(cfg: ForgeConfig) -> Self {
-        Self { cfg, caches: Mutex::default(), image_bases: HashMap::new(), changes: None }
+        Self {
+            cfg,
+            caches: Mutex::default(),
+            image_bases: HashMap::new(),
+            changes: None,
+        }
     }
 
     /// Every provider's fresh answers end when `changes` grows (the harness reseeded its fake).
@@ -56,15 +62,30 @@ impl Forge {
     fn cache(&self, host: &str) -> Option<Arc<DiskAvatarCache>> {
         let dir = self.cfg.avatar_dir.as_ref()?;
         let mut caches = self.caches.lock().expect("avatar caches poisoned");
-        Some(caches.entry(host.to_string()).or_insert_with(|| Arc::new(DiskAvatarCache::new(dir.join(host.replace(':', "_"))))).clone())
+        Some(
+            caches
+                .entry(host.to_string())
+                .or_insert_with(|| Arc::new(DiskAvatarCache::new(dir.join(host.replace(':', "_")))))
+                .clone(),
+        )
     }
 }
 
 impl ForgeConnector for Forge {
-    fn connect(&self, kind: ForgeKind, host: &str, token: Secret) -> Result<Arc<dyn ForgeProvider>, GbError> {
+    fn connect(
+        &self,
+        kind: ForgeKind,
+        host: &str,
+        token: Secret,
+    ) -> Result<Arc<dyn ForgeProvider>, GbError> {
         let endpoints = match self.cfg.overrides.get(host) {
             Some(e) => e.clone(),
-            None if self.cfg.only_overrides => return Err(GbError::new(GbErrorKind::InvalidInput, format!("{host} isn't reachable from this build (tests use the fake forge)"))),
+            None if self.cfg.only_overrides => {
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("{host} isn't reachable from this build (tests use the fake forge)"),
+                ));
+            }
             None => default_endpoints(kind, host),
         };
         let cache = self.cache(host);
@@ -94,7 +115,47 @@ impl ForgeConnector for Forge {
                     None => p,
                 })
             }
+            ForgeKind::Bitbucket => Arc::new(BitbucketProvider::new(
+                host,
+                &endpoints,
+                token,
+                self.changes.clone(),
+            )),
         })
+    }
+
+    fn connect_account(
+        &self,
+        kind: ForgeKind,
+        host: &str,
+        base_url: Option<&str>,
+        token: Secret,
+    ) -> Result<Arc<dyn ForgeProvider>, GbError> {
+        if kind != ForgeKind::Bitbucket {
+            return self.connect(kind, host, token);
+        }
+        let base = gitnex_core::forge::accounts::normalize_bitbucket_base_url(
+            base_url.unwrap_or(&format!("https://{host}")),
+            host,
+        )?;
+        let endpoints = match self.cfg.overrides.get(host) {
+            Some(e) => e.clone(),
+            None if self.cfg.only_overrides => {
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("{host} isn't reachable from this build (tests use the fake forge)"),
+                ));
+            }
+            None => HostEndpoints {
+                api: format!("{base}/rest/api/1.0"),
+                web: base.clone(),
+                avatars: None,
+            },
+        };
+        Ok(Arc::new(
+            BitbucketProvider::new(host, &endpoints, token, self.changes.clone())
+                .with_installation_base(&base),
+        ))
     }
 
     // --- 5A T2 ---
@@ -103,7 +164,10 @@ impl ForgeConnector for Forge {
         Box::pin(crate::images::fetch_public(url, self.cfg.only_overrides))
     }
     fn public_video<'a>(&'a self, url: &'a str) -> ForgeFuture<'a, ForgeImage> {
-        Box::pin(crate::images::fetch_public_video(url, self.cfg.only_overrides))
+        Box::pin(crate::images::fetch_public_video(
+            url,
+            self.cfg.only_overrides,
+        ))
     }
 
     /// `detect::detect` at the host's web address (the harness: its fake's, and no other host).
@@ -115,7 +179,11 @@ impl ForgeConnector for Forge {
         };
         Box::pin(async move {
             let Some(base) = base else { return Ok(None) };
-            tokio::task::spawn_blocking(move || crate::detect::detect(&base)).await.map_err(|e| GbError::other(format!("asking {host} which forge it runs failed: {e}")))
+            tokio::task::spawn_blocking(move || crate::detect::detect(&base))
+                .await
+                .map_err(|e| {
+                    GbError::other(format!("asking {host} which forge it runs failed: {e}"))
+                })
         })
     }
     // --- end 5A T2 ---
@@ -128,16 +196,56 @@ mod tests {
     #[test]
     fn only_overridden_hosts_are_reachable_when_the_harness_says_so() {
         let mut overrides = HashMap::new();
-        overrides.insert("gitlab.example.com".to_string(), HostEndpoints { api: "http://127.0.0.1:9/gitlab/api/v4".into(), web: "http://127.0.0.1:9/gitlab".into(), avatars: None });
-        let f = Forge::new(ForgeConfig { overrides, only_overrides: true, avatar_dir: None });
-        let p = f.connect(ForgeKind::GitLab, "gitlab.example.com", Secret::new("glpat-FAKE-test-token")).unwrap();
-        assert_eq!((p.kind(), p.host()), (ForgeKind::GitLab, "gitlab.example.com"));
-        let e = f.connect(ForgeKind::GitLab, "gitlab.com", Secret::new("x")).err().unwrap();
-        assert_eq!(e.message, "gitlab.com isn't reachable from this build (tests use the fake forge)");
-        let app = Forge::new(ForgeConfig { overrides: HashMap::new(), only_overrides: false, avatar_dir: None });
-        assert_eq!(app.connect(ForgeKind::GitHub, "github.com", Secret::new("x")).unwrap().kind(), ForgeKind::GitHub);
-        let p = app.connect(ForgeKind::Forgejo, "forgejo.example.org", Secret::new("x")).unwrap();
-        assert_eq!((p.kind(), p.host()), (ForgeKind::Forgejo, "forgejo.example.org"));
+        overrides.insert(
+            "gitlab.example.com".to_string(),
+            HostEndpoints {
+                api: "http://127.0.0.1:9/gitlab/api/v4".into(),
+                web: "http://127.0.0.1:9/gitlab".into(),
+                avatars: None,
+            },
+        );
+        let f = Forge::new(ForgeConfig {
+            overrides,
+            only_overrides: true,
+            avatar_dir: None,
+        });
+        let p = f
+            .connect(
+                ForgeKind::GitLab,
+                "gitlab.example.com",
+                Secret::new("glpat-FAKE-test-token"),
+            )
+            .unwrap();
+        assert_eq!(
+            (p.kind(), p.host()),
+            (ForgeKind::GitLab, "gitlab.example.com")
+        );
+        let e = f
+            .connect(ForgeKind::GitLab, "gitlab.com", Secret::new("x"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            e.message,
+            "gitlab.com isn't reachable from this build (tests use the fake forge)"
+        );
+        let app = Forge::new(ForgeConfig {
+            overrides: HashMap::new(),
+            only_overrides: false,
+            avatar_dir: None,
+        });
+        assert_eq!(
+            app.connect(ForgeKind::GitHub, "github.com", Secret::new("x"))
+                .unwrap()
+                .kind(),
+            ForgeKind::GitHub
+        );
+        let p = app
+            .connect(ForgeKind::Forgejo, "forgejo.example.org", Secret::new("x"))
+            .unwrap();
+        assert_eq!(
+            (p.kind(), p.host()),
+            (ForgeKind::Forgejo, "forgejo.example.org")
+        );
     }
 
     // --- 5A T2 ---
@@ -145,22 +253,72 @@ mod tests {
     fn image_bases_replace_githubs_defaults_for_that_host() {
         use gitnex_core::forge::ForgeProject;
         let mut overrides = HashMap::new();
-        overrides.insert("github.com".to_string(), HostEndpoints { api: "http://127.0.0.1:9/github".into(), web: "http://127.0.0.1:9/github-web".into(), avatars: Some("http://127.0.0.1:9/github-avatars".into()) });
-        let f = Forge::new(ForgeConfig { overrides, only_overrides: true, avatar_dir: None }).with_image_bases("github.com", vec!["http://127.0.0.1:9/github-images".into()]);
-        let p = f.connect(ForgeKind::GitHub, "github.com", Secret::new("ghp_x")).unwrap();
-        let project = ForgeProject { kind: ForgeKind::GitHub, id: 1, host: "github.com".into(), path: "o/r".into(), name: "r".into(), owner: "o".into(), web_url: "http://127.0.0.1:9/github-web/o/r".into(), default_branch: None, clone_https: String::new(), clone_ssh: String::new(), fork_of: None, updated_at: None, archived: false, owner_avatar_url: None };
-        assert!(p.image(&project, "http://127.0.0.1:9/github-images/1/a.png?jwt=x").is_some());
-        assert!(p.image(&project, "https://private-user-images.githubusercontent.com/1/a.png").is_none(), "the real host isn't reachable from the harness");
+        overrides.insert(
+            "github.com".to_string(),
+            HostEndpoints {
+                api: "http://127.0.0.1:9/github".into(),
+                web: "http://127.0.0.1:9/github-web".into(),
+                avatars: Some("http://127.0.0.1:9/github-avatars".into()),
+            },
+        );
+        let f = Forge::new(ForgeConfig {
+            overrides,
+            only_overrides: true,
+            avatar_dir: None,
+        })
+        .with_image_bases(
+            "github.com",
+            vec!["http://127.0.0.1:9/github-images".into()],
+        );
+        let p = f
+            .connect(ForgeKind::GitHub, "github.com", Secret::new("ghp_x"))
+            .unwrap();
+        let project = ForgeProject {
+            kind: ForgeKind::GitHub,
+            id: 1,
+            host: "github.com".into(),
+            path: "o/r".into(),
+            name: "r".into(),
+            owner: "o".into(),
+            web_url: "http://127.0.0.1:9/github-web/o/r".into(),
+            default_branch: None,
+            clone_https: String::new(),
+            clone_ssh: String::new(),
+            fork_of: None,
+            updated_at: None,
+            archived: false,
+            owner_avatar_url: None,
+        };
+        assert!(
+            p.image(&project, "http://127.0.0.1:9/github-images/1/a.png?jwt=x")
+                .is_some()
+        );
+        assert!(
+            p.image(
+                &project,
+                "https://private-user-images.githubusercontent.com/1/a.png"
+            )
+            .is_none(),
+            "the real host isn't reachable from the harness"
+        );
     }
     // --- end 5A T2 ---
 
     /// One token in memory.
     struct OneToken;
     impl gitnex_core::forge::TokenStore for OneToken {
-        fn put(&self, _: &gitnex_core::forge::AccountKey, _: &Secret) -> Result<gitnex_core::forge::TokenStorage, GbError> {
+        fn put(
+            &self,
+            _: &gitnex_core::forge::AccountKey,
+            _: &Secret,
+        ) -> Result<gitnex_core::forge::TokenStorage, GbError> {
             Ok(gitnex_core::forge::TokenStorage::Keyring)
         }
-        fn get(&self, _: &gitnex_core::forge::AccountKey, _: gitnex_core::forge::TokenStorage) -> Result<Option<Secret>, GbError> {
+        fn get(
+            &self,
+            _: &gitnex_core::forge::AccountKey,
+            _: gitnex_core::forge::TokenStorage,
+        ) -> Result<Option<Secret>, GbError> {
             Ok(Some(Secret::new("glpat-FAKE-test-token")))
         }
         fn delete(&self, _: &gitnex_core::forge::AccountKey) -> Result<(), GbError> {
@@ -170,29 +328,83 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_forge_is_skipped_for_avatars_and_shown_in_settings() {
-        use crate::test_server::{closed_base, Canned, TestServer};
+        use crate::test_server::{Canned, TestServer, closed_base};
         use gitnex_core::forge::accounts::{AccountStatus, ForgeAccount};
         use gitnex_core::forge::hub::ForgeHub;
         use gitnex_core::forge::{ForgeUser, TokenStorage};
         use gitnex_core::settings::SettingsStore;
         const HOST: &str = "gitlab.example.com";
         let base = closed_base();
-        let overrides = HashMap::from([(HOST.to_string(), HostEndpoints { api: format!("{base}/api/v4"), web: base.clone(), avatars: None })]);
-        let forge = Arc::new(Forge::new(ForgeConfig { overrides, only_overrides: true, avatar_dir: None }));
+        let overrides = HashMap::from([(
+            HOST.to_string(),
+            HostEndpoints {
+                api: format!("{base}/api/v4"),
+                web: base.clone(),
+                avatars: None,
+            },
+        )]);
+        let forge = Arc::new(Forge::new(ForgeConfig {
+            overrides,
+            only_overrides: true,
+            avatar_dir: None,
+        }));
         let now_secs = crate::time::unix_now();
         let hub = ForgeHub::new(forge, Arc::new(OneToken), Arc::new(move || now_secs * 1000));
         let store = SettingsStore::in_memory();
-        let user = ForgeUser { id: 1, username: "ada".into(), name: "Ada".into(), avatar_url: None, web_url: String::new(), email: None, emails: vec![] };
-        store.set_forge_accounts("default", vec![ForgeAccount { id: HOST.into(), host: HOST.into(), kind: ForgeKind::GitLab, user, storage: TokenStorage::Keyring, version: None, version_checked_at: now_secs, added_at: now_secs }]).unwrap();
-        let remotes = [gitnex_core::payload::RemotePayload { name: "origin".into(), host: Some(HOST.into()), path: Some("group/project".into()), host_kind: gitnex_core::remotes::HostKind::GitLab, main: false, account: None }];
-        assert!(hub.avatar(&store, &remotes, "ada@example.com").await.is_none());
+        let user = ForgeUser {
+            id: 1,
+            username: "ada".into(),
+            name: "Ada".into(),
+            avatar_url: None,
+            web_url: String::new(),
+            email: None,
+            emails: vec![],
+        };
+        store
+            .set_forge_accounts(
+                "default",
+                vec![ForgeAccount {
+                    id: HOST.into(),
+                    host: HOST.into(),
+                    kind: ForgeKind::GitLab,
+                    base_url: None,
+                    user,
+                    storage: TokenStorage::Keyring,
+                    version: None,
+                    version_checked_at: now_secs,
+                    added_at: now_secs,
+                }],
+            )
+            .unwrap();
+        let remotes = [gitnex_core::payload::RemotePayload {
+            name: "origin".into(),
+            host: Some(HOST.into()),
+            path: Some("group/project".into()),
+            host_kind: gitnex_core::remotes::HostKind::GitLab,
+            main: false,
+            account: None,
+        }];
+        assert!(
+            hub.avatar(&store, &remotes, "ada@example.com")
+                .await
+                .is_none()
+        );
         let status = hub.accounts(&store)[0].status.clone();
-        assert!(matches!(&status, AccountStatus::Unreachable { message } if message.starts_with("Couldn't reach gitlab.example.com")), "{status:?}");
+        assert!(
+            matches!(&status, AccountStatus::Unreachable { message } if message.starts_with("Couldn't reach gitlab.example.com")),
+            "{status:?}"
+        );
         // The port answers now; within the cooldown nothing is sent to it.
-        let s = TestServer::start_at(base.trim_start_matches("http://"), |_, _| Canned::json(200, "{}"));
+        let s = TestServer::start_at(base.trim_start_matches("http://"), |_, _| {
+            Canned::json(200, "{}")
+        });
         let started = std::time::Instant::now();
         for _ in 0..3 {
-            assert!(hub.avatar(&store, &remotes, "ada@example.com").await.is_none());
+            assert!(
+                hub.avatar(&store, &remotes, "ada@example.com")
+                    .await
+                    .is_none()
+            );
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(s.hits(), 0);

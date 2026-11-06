@@ -605,6 +605,8 @@ The app builds and runs on macOS (Apple Silicon checked, macOS 12 or later), but
 `GitNex.app`: CEF loads its framework and starts its helper processes from inside the bundle, so
 a bare `target/debug/GitNex` can't start. Needs Xcode's command line tools, CMake, Ninja, Node
 and the pinned Tauri CLI (`cargo install tauri-cli --version =3.0.0-alpha.5 --locked`).
+Install CMake and Ninja with `brew install cmake ninja` and make sure they are on `PATH` before
+building with CEF.
 
 - **A local app:** `./build-macos-app.sh` (from the repository root) builds `GitNex.app` in a
   temporary target directory (compiling into a network volume can corrupt build artifacts),

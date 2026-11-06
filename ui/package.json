@@ -63,5 +63,8 @@
   "overrides": {
     "dompurify": "^3.4.17",
     "katex": "^0.18.2"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
   }
 }

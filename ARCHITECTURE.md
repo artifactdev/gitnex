@@ -37,7 +37,8 @@ contract (`forge/`: the normalized types the UI sees, the `ForgeProvider` trait,
 accounts, the cache). Core never speaks HTTP; it defines traits that the other crates implement.
 
 **`gitnex-forge`** implements that contract for real forges: `github.rs` (GitHub REST, and GraphQL where REST lacks it),
-`gitlab.rs` (GitLab REST v4), `forgejo.rs` (Forgejo's API v1, Gitea's), one HTTP client per account (`http.rs`), the token store
+`gitlab.rs` (GitLab REST v4), `forgejo.rs` (Forgejo's API v1, Gitea's),
+`bitbucket.rs` (Bitbucket Data Center / Server REST), one HTTP client per account (`http.rs`), the token store
 (`tokens.rs`), avatar and Markdown-image fetching, and Gravatar (`gravatar.rs`). It depends on core,
 never the other way round.
 
@@ -474,7 +475,13 @@ with an Open in browser action. A diff shows the old and new pages side by side.
 
 ## Forge layer
 
-GitHub, GitLab and Forgejo are the providers (`gitnex-forge`), all over personal access tokens. Core
+GitHub, GitLab, Forgejo and Bitbucket Data Center / Server are the providers (`gitnex-forge`),
+all over personal access tokens. Bitbucket Cloud is a different API and is not included.
+Bitbucket keeps native project-key/repository-slug identities separate from HTTPS clone paths
+(`scm/…`) and web paths (`projects/…/repos/…`, or `users/…/repos/…` for personal repositories).
+Its configured HTTPS installation base preserves custom ports and context paths. Token-restricted
+merges hand off to the system browser, never to a local git merge/push.
+Core
 holds the `ForgeHub` (`forge/hub.rs`): the active profile's accounts (any number per host, a
 private and a work one, say), a provider per account built on first use, and each account's last
 known status. An account's id names its host: the host itself for the account a host had first,

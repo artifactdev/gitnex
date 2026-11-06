@@ -22,7 +22,7 @@ import type { MenuRow, Variant } from './types';
 
 type Action = Extract<MenuRow, { kind: 'action' }>;
 const row = (r: Omit<Action, 'kind'>): MenuRow => ({ kind: 'action', ...r });
-const forgeName = (f: ProjectRemote) => (f.hostKind === 'gitlab' ? 'GitLab' : f.hostKind === 'forgejo' ? 'Forgejo' : 'GitHub');
+const forgeName = (f: ProjectRemote) => (f.hostKind === 'gitlab' ? 'GitLab' : f.hostKind === 'forgejo' ? 'Forgejo' : f.hostKind === 'bitbucket' ? 'Bitbucket' : 'GitHub');
 
 /** `Copy path | Rel | Abs |`, for a file or a folder. */
 function copyPath(id: string, path: string, root: string, env: MenuEnv): MenuRow {

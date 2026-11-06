@@ -6,7 +6,7 @@ vi.mock('./fileContext', async (orig) => {
   fc.resolveRepoPath = vi.fn(m.resolveRepoPath);
   return { resolveRepoPath: (...a: Parameters<typeof m.resolveRepoPath>) => fc.resolveRepoPath(...a) };
 });
-import { blobUrl, forgePageOf, targetOfHref, targetOfReference, type LinkEnv } from './links';
+import { blobUrl, forgePageOf, issueUrl, targetOfHref, targetOfReference, webRoot, type LinkEnv } from './links';
 import type { MarkdownContext, MdReferenceNode } from './types';
 
 const SHA = 'abc1234def5678abc1234def5678abc1234def56';
@@ -19,6 +19,22 @@ const file: MarkdownContext = { kind: 'file', tabId: 't', commit: 'c0ffee1', pat
 const ref = (refKind: MdReferenceNode['refKind'], value: string, over: Partial<MdReferenceNode> = {}): MdReferenceNode => ({ type: 'reference', refKind, project: null, number: null, sha: null, user: null, value, ...over });
 
 describe('where a reference goes (spec #5 §4.1)', () => {
+  it('only treats native web paths as Bitbucket when that provider is selected', () => {
+    const p = { path: 'team/projects/ORBIT/repos/widget', webUrl: 'https://code.example.com/team/projects/ORBIT/repos/widget' };
+    expect(webRoot(p, 'gitlab')).toBe('https://code.example.com');
+    expect(webRoot({ path: 'ORBIT/widget', webUrl: p.webUrl }, 'bitbucket')).toBe('https://code.example.com/team');
+    expect(issueUrl('bitbucket', p.webUrl, 7)).toBeNull();
+  });
+  it('uses native Bitbucket links under a context path without inventing issues', () => {
+    const b: LinkEnv = { kind: 'bitbucket', project: { path: 'ORBIT/widget', webUrl: 'https://bitbucket.example.com/bitbucket/projects/ORBIT/repos/widget', defaultBranch: 'main' }, fullSha: () => null };
+    expect(targetOfReference(b, ref('mr', '#7', { number: 7 }))).toEqual({ kind: 'mr', number: 7, webUrl: `${b.project!.webUrl}/pull-requests/7` });
+    expect(targetOfReference(b, ref('mr', '~nova/widget#8', { project: '~nova/widget', number: 8 }))).toEqual({ kind: 'external', url: 'https://bitbucket.example.com/bitbucket/users/nova/repos/widget/pull-requests/8' });
+    expect(targetOfReference(b, ref('issue', '#7', { number: 7 }))).toEqual({ kind: 'inert' });
+    expect(targetOfReference(b, ref('mention', '@nova', { user: 'nova' }))).toEqual({ kind: 'external', url: 'https://bitbucket.example.com/bitbucket/users/nova' });
+    expect(targetOfHref(b, forge, `${b.project!.webUrl}/pull-requests/7/overview`)).toMatchObject({ kind: 'mr', number: 7 });
+    expect(targetOfHref(b, forge, `${b.project!.webUrl}/commits/${SHA}`)).toMatchObject({ kind: 'commit', sha: SHA });
+    expect(blobUrl('bitbucket', b.project!.webUrl, 'feat/x#1', './a dir/file.md')).toBe(`${b.project!.webUrl}/browse/a%20dir/file.md?at=feat%2Fx%231`);
+  });
   it('GitLab: !n in this project opens in-app; another project’s and #n issues open in the browser', () => {
     expect(targetOfReference(gl, ref('mr', '!12', { number: 12 }))).toEqual({ kind: 'mr', number: 12, webUrl: 'https://gitlab.example.com/group/project/-/merge_requests/12' });
     expect(targetOfReference(gl, ref('mr', 'Group/Project!12', { project: 'Group/Project', number: 12 }))).toMatchObject({ kind: 'mr', number: 12 });

@@ -595,7 +595,7 @@ export const api = {
   forgeAccounts: () => call<ForgeAccountView[]>({ method: 'forgeAccounts' }),
   /** Checks the token against the host and keeps it (system keyring, else the 0600 file). `account`
    * replaces that account's token; omitted, it replaces the same user's or adds another account. */
-  addForgeAccount: (host: string, kind: ForgeKind, token: string, account?: string) => call<ForgeAccountView>({ method: 'addForgeAccount', params: { host, kind, token, account: account ?? null } }),
+  addForgeAccount: (host: string, kind: ForgeKind, token: string, account?: string) => call<ForgeAccountView>({ method: 'addForgeAccount', params: { host, kind, token, account: account ?? null, baseUrl: kind === 'bitbucket' ? host : undefined } }),
   /** Removes one account and its token; `account` omitted removes the host's first. */
   removeForgeAccount: (host: string, account?: string) => call<null>({ method: 'removeForgeAccount', params: { host, account: account ?? null } }),
   /** The forge's prefilled "new token" page: open it with `openUrl`. */
@@ -665,6 +665,7 @@ export const api = {
   forgeUpdateBranch: (repo: number, number: number, how: BranchUpdate, expectedSha: string | null) => call<ForgeMr>({ method: 'forgeUpdateBranch', params: { repo, number, how, expectedSha } }),
   forgeEditMr: (repo: number, number: number, edit: MrEdit) => call<ForgeMr>({ method: 'forgeEditMr', params: { repo, number, edit } }),
   forgeSetDraft: (repo: number, number: number, draft: boolean) => call<ForgeMr>({ method: 'forgeSetDraft', params: { repo, number, draft } }),
+  forgeSetClosed: (repo: number, number: number, closed: boolean) => call<ForgeMr>({ method: 'forgeSetClosed', params: { repo, number, closed } }),
   /** The common ancestor of two commits; null when the repo lacks one of them. */
   mergeBase: (repo: number, a: string, b: string) => call<string | null>({ method: 'mergeBase', params: { repo, a, b } }),
   // --- end 4B T1 ---

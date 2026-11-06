@@ -48,7 +48,7 @@ current code; each point names where to look.
 
 ### Forge tokens
 
-- GitHub, GitLab and Forgejo personal access tokens are kept in the system keyring, through the Secret
+- GitHub, GitLab, Forgejo and Bitbucket personal access tokens are kept in the system keyring, through the Secret
   Service D-Bus API (GNOME Keyring, KWallet, KeePassXC…) via the `keyring` crate
   (`crates/gitnex-forge/src/tokens.rs`). Each is an item in the default collection with the
   attributes `service` = `gitnex` and `username` = `<profile id>/<host>` for a host's first
@@ -70,6 +70,10 @@ current code; each point names where to look.
   token query parameters, `Authorization` headers and known GitHub and GitLab token formats.
 - Removing an account (Settings › Accounts) deletes its token from the keyring and from the
   fallback file. It doesn't revoke the token on the forge.
+- Bitbucket Data Center / Server uses user personal access tokens (also called user HTTP access
+  tokens), not browser session cookies. Account setup does not install a git credential helper,
+  change git credentials or override merge checks. Merges restricted by token authentication
+  open the PR's page in the system browser; GitNex never substitutes a local merge and push.
 
 ### Credential prompts
 

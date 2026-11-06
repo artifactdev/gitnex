@@ -14,6 +14,15 @@ const d: MrDraft = {
 };
 
 describe('"Continue editing on…" (spec #4 §4 "4C", ruling 14)', () => {
+  it('opens the Bitbucket native creation page and reports fields that do not travel', () => {
+    const b: ForgeProject = { ...gitlab, kind: 'bitbucket', path: 'ORBIT/widget', webUrl: 'https://bitbucket.example.com/bitbucket/projects/ORBIT/repos/widget' };
+    expect(newMrUrl(b, { project: b.path, branch: 'feat/x#1' }, d)).toEqual({
+      url: `${b.webUrl}/pull-requests?create&sourceBranch=feat%2Fx%231&targetBranch=main`,
+      withoutDescription: true, withoutMore: true,
+    });
+    expect(newMrUrl(b, { project: '~nova/widget', branch: 'feat/x' }, d).url).toBe(`${b.webUrl}/pull-requests?create`);
+    expect(newMrUrl(b, { project: b.path, branch: 'x'.repeat(MAX_URL_LENGTH) }, d).url).toBe(`${b.webUrl}/pull-requests?create`);
+  });
   it("GitLab's new-MR page takes the branches, the title (draft as its prefix) and the description", () => {
     expect(newMrUrl(gitlab, { project: 'group/project', branch: 'feature/login' }, d)).toEqual({
       url: 'https://gitlab.example.com/group/project/-/merge_requests/new?merge_request%5Bsource_branch%5D=feature%2Flogin&merge_request%5Btarget_branch%5D=main&merge_request%5Btitle%5D=Draft%3A%20Add%20login&merge_request%5Bdescription%5D=Why%3F%0A%0A-%20a',

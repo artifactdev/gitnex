@@ -6,6 +6,7 @@ export interface ProjectRemote {
   host: string;
   path: string;
   hostKind: HostKind;
+  baseUrl?: string;
 }
 
 /** The profile's host → forge type overrides (spec §14.4, `Profile.hostOverrides`). */
@@ -20,9 +21,17 @@ export function effectiveKind(host: string | null | undefined, detected: HostKin
 
 /** The remote that forge links point at: the first with a parsed host and path. Remotes arrive
  * `origin` first (spec §14.4). `overrides` are the profile's host-type overrides. */
-export function projectRemote(remotes: RemotePayload[], overrides: HostOverrides = {}): ProjectRemote | null {
+export function projectRemote(remotes: RemotePayload[], overrides: HostOverrides = {}, bases: Readonly<Record<string, string | undefined>> = {}): ProjectRemote | null {
   const r = remotes.find((x) => x.host && x.path);
-  return r ? { host: r.host!, path: r.path!, hostKind: effectiveKind(r.host, r.hostKind, overrides) } : null;
+  if (!r) return null;
+  const configured = bases[r.host!] ?? bases[r.host!.toLowerCase()];
+  const remote: ProjectRemote = { host: r.host!, path: r.path!, hostKind: effectiveKind(r.host, configured ? 'bitbucket' : r.hostKind, overrides) };
+  if (remote.hostKind === 'bitbucket') {
+    const scm = /^(?:(.*)\/)?scm\/([^/]+\/[^/]+)$/.exec(remote.path);
+    remote.baseUrl = configured ?? `https://${remote.host}${scm?.[1] ? `/${scm[1]}` : ''}`;
+    if (scm) remote.path = scm[2];
+  }
+  return remote;
 }
 
 /** Percent-encodes each `/`-separated segment, keeping the separators themselves, so a branch or
@@ -33,7 +42,14 @@ function encodeSegments(p: string): string {
 
 /** `https://{host}/{path}`. `project`, when given, replaces `r.path`. */
 function baseUrl(r: ProjectRemote, project?: string | null): string {
+  if (r.hostKind === 'bitbucket') return bitbucketRepoUrl(r.baseUrl ?? `https://${r.host}`, project ?? r.path);
   return `https://${r.host}/${project ?? r.path}`;
+}
+
+export function bitbucketRepoUrl(base: string, project: string): string {
+  const [key, slug] = project.split('/');
+  const owner = key.startsWith('~') ? `users/${encodeURIComponent(key.slice(1))}` : `projects/${encodeURIComponent(key)}`;
+  return `${base.replace(/\/+$/, '')}/${owner}/repos/${encodeURIComponent(slug ?? '')}`;
 }
 
 /** A full commit SHA (SHA-1 or SHA-256), not a branch name. */
@@ -46,6 +62,10 @@ export function fileUrl(r: ProjectRemote, ref: string, file: string, lines?: { a
   if (r.hostKind === 'generic') return null;
   const encRef = encodeSegments(ref);
   const encFile = encodeSegments(file);
+  if (r.hostKind === 'bitbucket') {
+    const anchor = lines ? `#${lines.a}${lines.a === lines.b ? '' : `-${lines.b}`}` : '';
+    return `${baseUrl(r)}/browse/${encFile}?at=${encodeURIComponent(ref)}${anchor}`;
+  }
   if (r.hostKind === 'gitlab') {
     const url = `${baseUrl(r)}/-/blob/${encRef}/${encFile}`;
     if (!lines) return url;
@@ -66,12 +86,14 @@ export function repoUrl(r: ProjectRemote): string | null {
 export function branchUrl(r: ProjectRemote, branch: string): string | null {
   if (r.hostKind === 'generic') return null;
   const enc = encodeSegments(branch);
+  if (r.hostKind === 'bitbucket') return `${baseUrl(r)}/browse?at=${encodeURIComponent(`refs/heads/${branch}`)}`;
   if (r.hostKind === 'forgejo') return `${baseUrl(r)}/src/branch/${enc}`;
   return r.hostKind === 'gitlab' ? `${baseUrl(r)}/-/tree/${enc}` : `${baseUrl(r)}/tree/${enc}`;
 }
 
 export function commitUrl(r: ProjectRemote, sha: string): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'bitbucket') return `${baseUrl(r)}/commits/${encodeURIComponent(sha)}`;
   return r.hostKind === 'gitlab' ? `${baseUrl(r)}/-/commit/${sha}` : `${baseUrl(r)}/commit/${sha}`;
 }
 
@@ -80,11 +102,12 @@ export function commitUrl(r: ProjectRemote, sha: string): string | null {
  * `group/sub/project` or `owner/repo` override) replaces `r.path` when it's non-null. */
 export function mergeRequestUrl(r: ProjectRemote, project: string | null, n: number): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'bitbucket') return `${baseUrl(r, project)}/pull-requests/${n}`;
   if (r.hostKind === 'forgejo') return `${baseUrl(r, project)}/pulls/${n}`;
   return r.hostKind === 'gitlab' ? `${baseUrl(r, project)}/-/merge_requests/${n}` : `${baseUrl(r, project)}/pull/${n}`;
 }
 
 export function issueUrl(r: ProjectRemote, project: string | null, n: number): string | null {
-  if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'generic' || r.hostKind === 'bitbucket') return null;
   return r.hostKind === 'gitlab' ? `${baseUrl(r, project)}/-/issues/${n}` : `${baseUrl(r, project)}/issues/${n}`;
 }

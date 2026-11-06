@@ -1,7 +1,7 @@
 # Privacy
 
 GitNex has no accounts, servers or cloud service of its own. It talks only to your git remotes,
-to the GitHub, GitLab and Forgejo accounts you add, to Gravatar and GitHub's avatar host, to the
+to the GitHub, GitLab, Forgejo and Bitbucket accounts you add, to Gravatar and GitHub's avatar host, to the
 AI endpoint or local tool you configure for commit messages, and to GitHub for its own updates.
 This page lists every network request the app makes, what each one sends, and how to turn it off.
 It also lists what GitNex keeps on your computer and how to delete it.
@@ -50,7 +50,7 @@ core.
 - Signature checks run your own `gpg` or `ssh-keygen` through git, with your configuration.
   GitNex doesn't ask them to fetch keys, but a gpg set up to retrieve keys automatically will.
 
-### Forge APIs (GitHub, GitLab and Forgejo)
+### Forge APIs (GitHub, GitLab, Forgejo and Bitbucket)
 
 GitNex only calls a forge API for an account you add in Settings › Accounts. Without one, it
 makes no forge requests (apart from images you choose to load, below).
@@ -59,6 +59,9 @@ makes no forge requests (apart from images you choose to load, below).
   - GitHub: `https://api.github.com`.
   - GitLab: `https://<your host>/api/v4`.
   - Forgejo: `https://<your host>/api/v1`.
+  - Bitbucket Data Center / Server: your configured HTTPS installation base, including its
+    port and context path, under `/rest/api/1.0` and `/rest/build-status/1.0`. Bitbucket Cloud
+    is not contacted by this integration.
 - **Sends:**
   - your token, in the `Authorization` header and only to that account's host;
   - the project paths of your repositories' remotes on that host, and branch names, to find
@@ -67,6 +70,9 @@ makes no forge requests (apart from images you choose to load, below).
     on a credential prompt may ask with each of them in turn;
   - what you ask for: MR/PR reads, comments, approvals, edits, new MRs/PRs, merges, retargets,
     and the people or labels you search for.
+  - Bitbucket merges open the PR's page in your system browser instead of sending a merge
+    request with the token. This sends the PR URL to your browser, not the token; the browser's
+    own Bitbucket login is independent of GitNex.
 - **When:**
   - for the shown tab's repository, when the tab opens and after GitNex writes something to the
     forge;
@@ -82,12 +88,14 @@ makes no forge requests (apart from images you choose to load, below).
     the window gets the focus still happen.
 
 **Which forge a host runs.** When you enter a host in Settings › Accounts › Add account that its
-name doesn't place (not github.com, gitlab.com, codeberg.org or a name with gitlab, forgejo or
-gitea in it), that no Hosts setting covers, and whose forge you haven't picked, GitNex asks that
+name doesn't place (not github.com, gitlab.com, codeberg.org or a name with gitlab, forgejo,
+gitea or bitbucket in it, or a Stash host label), that no Hosts setting covers, and whose forge you haven't picked, GitNex asks that
 host once which forge it runs: `GET https://<host>/api/v1/version` (Forgejo, Gitea), then, if it
 answered but not as one, `GET https://<host>/api/v4/version` (GitLab). It asks when you leave the
 Host field or click Create token or Add account, never while you type, so a half-typed name isn't
 asked. No token, no cookie, and no redirect is followed; only the host you entered is asked.
+For Bitbucket on an arbitrary hostname or below a context path, select Bitbucket explicitly;
+GitNex does not infer a provider from a generic authentication error.
 
 ### AI commit messages (optional)
 

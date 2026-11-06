@@ -50,11 +50,12 @@ export function PendingReview({ tabId, kind, mr, session, ask, children }: { tab
         <div className="mr-pending-head">
           <MessageSquare className="mr-pending-icon" size={14} aria-hidden />
           <h3 id={head} className="mr-pending-title">{n > 0 ? <>Your review <span className="mr-pending-count">· {n} pending</span></> : 'Your pending review'}</h3>
-          <HoverTooltip content={`Delete ${pendingText(n)} from ${forgeName(kind)}`}>
+          <HoverTooltip content={kind === 'bitbucket' ? `Discard ${pendingText(n)} kept locally` : `Delete ${pendingText(n)} from ${forgeName(kind)}`}>
             <button type="button" className="mr-button mr-pending-discard" onClick={() => void discardPending(tabId, kind, v.session)}><Trash2 size={12} aria-hidden />Discard</button>
           </HoverTooltip>
         </div>
       )}
+      {on && kind === 'bitbucket' && <p className="mr-dim">Pending comments are kept locally for this session, not on Bitbucket. Submit them before restarting GitNex.</p>}
       {on && rows.length > 0 && (
         <ul className="mr-pending-list" aria-label="Pending comments">
           {rows.map(({ draft, at }) => (

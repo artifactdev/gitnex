@@ -2,26 +2,29 @@
 
 use crate::askpass::AskpassServer;
 use crate::avatar::{AvatarPayload, AvatarProvider};
-use crate::blob::{diff_contents_renamed, is_dotgit, safe_join, worktree_attrs, Side};
+use crate::blob::{Side, diff_contents_renamed, is_dotgit, safe_join, worktree_attrs};
 use crate::commit::{parse_commit, parse_oid, read_commit_message};
 use crate::details::{commit_details, read_commit, remotes};
-use crate::diff::{file_list, DiffSpec};
+use crate::diff::{DiffSpec, file_list};
 use crate::error::{GbError, GbErrorKind};
 use crate::events::{AppEvent, EventBus};
 use crate::git::{GitCli, GitInvocation};
-use crate::links::{validate_web_url, UrlOpener};
+use crate::links::{UrlOpener, validate_web_url};
 use crate::log::CommandLog;
 use crate::openers::chooser::Chooser;
 use crate::openers::default_app::DefaultApp;
 use crate::openers::folder_picker::FolderPicker;
+use crate::openers::{
+    CHOOSER_ID, CUSTOM_ID, DEFAULT_APP_ID, DetectEnv, Launcher, Opener, OpenerKind, OpenerPayload,
+    template_opener,
+};
 use crate::ops::{OpId, OpRegistry};
-use crate::openers::{template_opener, DetectEnv, Launcher, Opener, OpenerKind, OpenerPayload, CHOOSER_ID, CUSTOM_ID, DEFAULT_APP_ID};
 use crate::payload::{BlobSource, RepoSummary};
 use crate::redact::Secret;
 use crate::scan::ScannedRepo;
 use crate::settings::{AppSettings, EditorChoice, PinSetting, Profile, SettingsStore};
 use crate::signature::signature_status;
-use crate::snapshot::{build_graph_with_text, BuildOptions};
+use crate::snapshot::{BuildOptions, build_graph_with_text};
 use crate::tree::tree_files;
 use crate::worktree::list_worktrees;
 use serde::Deserialize;
@@ -30,7 +33,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, OnceCell};
+use tokio::sync::{OnceCell, broadcast};
 use ts_rs::TS;
 
 fn default_fork_page() -> u32 {
@@ -41,17 +44,32 @@ fn default_fork_per_page() -> u32 {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "method",
+    content = "params",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 #[ts(export)]
 pub enum Request {
-    OpenRepo { path: String },
+    OpenRepo {
+        path: String,
+    },
     /// A frontend error or notice for the log file (spec §16.2).
-    LogFrontend { level: crate::logging::FrontendLevel, message: String, stack: Option<String> },
-    SetDebugLogging { debug: bool },
+    LogFrontend {
+        level: crate::logging::FrontendLevel,
+        message: String,
+        stack: Option<String>,
+    },
+    SetDebugLogging {
+        debug: bool,
+    },
     /// The log directory, or `null` where there is no file logging (the harness).
     LogsDir,
     /// Plain-text diagnostics for "Copy diagnostics" (secrets scrubbed).
-    Diagnostics { ui: crate::diagnostics::UiDiagnostics },
+    Diagnostics {
+        ui: crate::diagnostics::UiDiagnostics,
+    },
     /// Shows the log directory in the file manager.
     OpenLogsFolder,
     /// The graph snapshot. `pin` (the repo's pin setting): `auto` or absent is the default
@@ -128,13 +146,24 @@ pub enum Request {
     TakeOpenRequests,
     /// The full message of one commit (read-only, via gix): loaded lazily by the graph's
     /// full-message tooltip and the details panel, instead of shipping every body with the graph.
-    CommitMessage { repo: u32, id: String },
+    CommitMessage {
+        repo: u32,
+        id: String,
+    },
     /// The details panel's header: parents, author, committer, co-authors, signed (spec §9.1).
-    CommitDetails { repo: u32, id: String },
+    CommitDetails {
+        repo: u32,
+        id: String,
+    },
     /// Every remote's parsed host and path, `origin` first (for forge links, spec §14.4).
-    Remotes { repo: u32 },
+    Remotes {
+        repo: u32,
+    },
     /// The changed-file list for a commit, a compare, a worktree diff or WIP (spec §9.3, §9.4, §8.6).
-    FileList { repo: u32, spec: DiffSpec },
+    FileList {
+        repo: u32,
+        spec: DiffSpec,
+    },
     /// Both sides of one file diff, decoded for the viewer (spec §10.2, §10.4).
     /// `oldPath`: a rename's source path (an image format change reads its old side as an image).
     DiffContents {
@@ -149,22 +178,42 @@ pub enum Request {
     },
     /// Both sides of a binary file as hex dumps, each capped at `hex::HEX_CAP` bytes (UX round 2,
     /// lane I): `HexDumpPayload`.
-    HexDump { repo: u32, path: String, old: BlobSource, new: BlobSource },
+    HexDump {
+        repo: u32,
+        path: String,
+        old: BlobSource,
+        new: BlobSource,
+    },
     /// Every file at a commit, sorted bytewise ("View all files", spec §9.3; the palette, §11.2).
-    TreeFiles { repo: u32, id: String },
+    TreeFiles {
+        repo: u32,
+        id: String,
+    },
     /// UX G.2: the worktree's tracked files, sorted bytewise ("View all files" on the WIP row).
-    WorktreeFiles { repo: u32, worktree: String },
+    WorktreeFiles {
+        repo: u32,
+        worktree: String,
+    },
     /// What `path` is in the worktree, a file or a folder, tracked or not, from its metadata
     /// (Ctrl+V's go-to): `PathKind | null`.
-    WorktreePathKind { repo: u32, worktree: String, path: String },
+    WorktreePathKind {
+        repo: u32,
+        worktree: String,
+        path: String,
+    },
     /// A repository a tab shows but hasn't opened (Ctrl+V's go-to, matching a forge URL): the
     /// remotes and checked-out branch of the worktree at `path`, from its config and HEAD; no
     /// handle is kept: `RepoPeek`.
-    PeekRepo { path: String },
+    PeekRepo {
+        path: String,
+    },
     /// The commit's signature status, verified through the user's own gpg/ssh config (an
     /// OpenPGP signature by one gpg run) and cached per repository and commit id: a settled
     /// verdict for the process lifetime, an unknown or untrusted key briefly (spec §9.1).
-    Signature { repo: u32, id: String },
+    Signature {
+        repo: u32,
+        id: String,
+    },
     /// A cached avatar for an email, or `null` (the UI shows initials; spec §14.3).
     /// `repo`: the tab asking. Only the accounts on its remotes' hosts are asked (first by email,
     /// `ForgeHub::avatar`); without `repo`, no forge is. Its forge target, if any, is asked last who
@@ -183,21 +232,37 @@ pub enum Request {
     /// A forge user's or project owner's picture by the `avatarUrl` the forge gave, or `null`:
     /// fetched only from an account's own host or its forge's avatar host (`ForgeHub::avatar_at`),
     /// disk-cached like the others. Off with the forge-avatars setting.
-    ForgeAvatarImage { url: String },
+    ForgeAvatarImage {
+        url: String,
+    },
     // --- 5A T1 ---
     /// An image a rendered Markdown body links (spec #5 §4.2): `ForgeImage`. Without
     /// `userAllowed`, only from the target project's forge hosts (else `ask`, no request); with it
     /// (the user clicked "Load image from <host>"), from anywhere over https, never with a token.
-    ForgeImage { repo: u32, url: String, user_allowed: bool },
+    ForgeImage {
+        repo: u32,
+        url: String,
+        user_allowed: bool,
+    },
     // --- end 5A T1 ---
     /// A video a rendered Markdown body embeds (GitLab renders `![clip](/uploads/…/clip.webm)` as
     /// a video): `ForgeImage` with a `video/*` type, by `forgeImage`'s rules, up to 100 MB.
-    ForgeVideo { repo: u32, url: String, user_allowed: bool },
+    ForgeVideo {
+        repo: u32,
+        url: String,
+        user_allowed: bool,
+    },
     /// That video (fetched again), saved in the app's cache (`open_copy`: removed after a week)
     /// and opened with the system's default app, for a format the webview can't play; `null`.
-    ForgeOpenVideo { repo: u32, url: String, user_allowed: bool },
+    ForgeOpenVideo {
+        repo: u32,
+        url: String,
+        user_allowed: bool,
+    },
     /// Opens an `http(s)` link in the default browser (spec §14.4); returns `null`.
-    OpenUrl { url: String },
+    OpenUrl {
+        url: String,
+    },
     /// The installed font families, for the font pickers: `FontFamily[]`, sorted. Read once per
     /// session on first request (off the UI's path); `refresh` reads the font folders again, so
     /// a font installed meanwhile appears.
@@ -209,11 +274,15 @@ pub enum Request {
     ListOpeners,
     /// `ListOpeners` for one repository: the `custom` entry is listed only when that
     /// repository's effective editor (its own setting, else the profile's) is a Custom command.
-    ListOpenersFor { repo: u32 },
+    ListOpenersFor {
+        repo: u32,
+    },
     /// Checks a custom editor command template the way an open would build it (the shell-code
     /// guard, then the program lookup), so the settings can show a refusal inline. Returns `null`
     /// when the template would open, else the error.
-    ValidateEditorTemplate { template: String },
+    ValidateEditorTemplate {
+        template: String,
+    },
     /// Opens `path` (relative to `worktree`, one of this repo's worktrees) in the opener `id`d by
     /// `opener` (or `"other"`, the Open With chooser, or `"default-app"`, the file's default
     /// application, which a folder never opens in), at `line` when it supports one. `source` is
@@ -235,15 +304,26 @@ pub enum Request {
     /// App settings, the active profile and the profile list (spec §14.1): `StatePayload`.
     LoadState,
     /// Replaces the app settings (written debounced); returns `null`.
-    SaveSettings { settings: AppSettings },
+    SaveSettings {
+        settings: AppSettings,
+    },
     /// Replaces one existing profile (written debounced); returns `null`.
-    SaveProfile { profile: Box<Profile> },
+    SaveProfile {
+        profile: Box<Profile>,
+    },
     /// A new, empty profile: `ProfileMeta`.
-    CreateProfile { name: String, color: String },
+    CreateProfile {
+        name: String,
+        color: String,
+    },
     /// Makes `id` the active profile: the new `StatePayload`.
-    SwitchProfile { id: String },
+    SwitchProfile {
+        id: String,
+    },
     /// Deletes an inactive profile: the remaining `ProfileMeta[]`.
-    DeleteProfile { id: String },
+    DeleteProfile {
+        id: String,
+    },
     /// Local AI providers and CLIs found on this machine: `AiDetected[]`.
     AiDetect,
     /// Whether this profile has a token for its AI endpoint: `bool`.
@@ -256,9 +336,14 @@ pub enum Request {
     /// Forgets the AI endpoint token: `null`.
     AiClearToken,
     /// The models an OpenAI-compatible `endpoint` lists, using the stored token: `string[]`.
-    AiModels { endpoint: String },
+    AiModels {
+        endpoint: String,
+    },
     /// Generates a commit message from the worktree's staged changes: `AiCommitMessage`.
-    AiGenerateCommitMessage { repo: u32, worktree: String },
+    AiGenerateCommitMessage {
+        repo: u32,
+        worktree: String,
+    },
     /// The user's answer to a credential prompt (`authWaiting`); `null` cancels it. Returns `null`.
     AuthAnswer {
         #[ts(type = "number")]
@@ -292,22 +377,45 @@ pub enum Request {
     },
     /// Deletes the MR/PR heads Compare fetched (`refs/gitnex/compare/*`) once that Compare ends,
     /// so their commits leave the graph: `null`. Not an op, not journaled; `refsUpdated` when one went.
-    DropCompareRefs { repo: u32 },
+    DropCompareRefs {
+        repo: u32,
+    },
     // --- 4A T7 ---
     /// `git remote add <name> <url>` (spec #4 §4 4A): `WriteResult<null>`. Not journaled.
-    AddRemote { repo: u32, worktree: String, name: String, url: String },
+    AddRemote {
+        repo: u32,
+        worktree: String,
+        name: String,
+        url: String,
+    },
     // --- end 4A T7 ---
     /// `git remote remove <name>` (the Remote panel's right-click): `WriteResult<null>`. Journaled:
     /// Undo puts its config, its remote-tracking refs and the upstreams it took back.
-    RemoveRemote { repo: u32, worktree: String, name: String },
+    RemoveRemote {
+        repo: u32,
+        worktree: String,
+        name: String,
+    },
     /// `git remote set-url` to the SSH URL a credential prompt offered (`ErrorDetail::UseSsh`):
     /// `WriteResult<null>`. Not journaled; `switchRemoteBack` restores the URL it replaced.
-    SwitchRemoteToSsh { repo: u32, worktree: String, remote: String, url: String },
+    SwitchRemoteToSsh {
+        repo: u32,
+        worktree: String,
+        remote: String,
+        url: String,
+    },
     /// Points `remote` back at the HTTPS URL `switchRemoteToSsh` replaced this session, while it
     /// still has that SSH URL: `WriteResult<null>`.
-    SwitchRemoteBack { repo: u32, worktree: String, remote: String },
+    SwitchRemoteBack {
+        repo: u32,
+        worktree: String,
+        remote: String,
+    },
     /// `git submodule status --recursive` in `worktree`: `SubmoduleInfo[]`.
-    Submodules { repo: u32, worktree: String },
+    Submodules {
+        repo: u32,
+        worktree: String,
+    },
     /// `git submodule update --init --recursive`, of the submodule at `path` only when given:
     /// `WriteResult<SubmoduleOutcome>`. A network command, as a push; not journaled.
     SubmoduleUpdate {
@@ -322,7 +430,10 @@ pub enum Request {
         confirm: Option<bool>,
     },
     /// `git submodule sync --recursive`: `WriteResult<SubmoduleOutcome>`. Not journaled.
-    SubmoduleSync { repo: u32, worktree: String },
+    SubmoduleSync {
+        repo: u32,
+        worktree: String,
+    },
     /// `git submodule add [-b <branch>] -- <url> [<path>]` (the sidebar's Submodules +):
     /// `WriteResult<SubmoduleOutcome>`. A network command, under the write lock; not journaled.
     SubmoduleAdd {
@@ -338,54 +449,101 @@ pub enum Request {
     },
     /// `git rm -- <path>` of the submodule at `path`: its checkout, gitlink and `.gitmodules`
     /// entry, staged. `WriteResult<SubmoduleOutcome>`. Not journaled.
-    SubmoduleRemove { repo: u32, worktree: String, path: String },
+    SubmoduleRemove {
+        repo: u32,
+        worktree: String,
+        path: String,
+    },
     /// Clones `url` into the absolute `dest` (spec §13) and opens it: `RepoSummary`.
-    Clone { url: String, dest: String },
+    Clone {
+        url: String,
+        dest: String,
+    },
     /// A commit's diff (`git diff` against its first parent; `git show` for a root commit) as a
     /// `git apply`-ready patch: `PatchPayload`.
-    CreateCommitPatch { repo: u32, rev: String },
+    CreateCommitPatch {
+        repo: u32,
+        rev: String,
+    },
     /// The working tree's diff as a patch: `git diff` (unstaged) or `git diff --cached` (staged).
     /// Untracked files aren't in a diff. `PatchPayload`.
-    CreateWorktreePatch { repo: u32, worktree: String, staged: bool },
+    CreateWorktreePatch {
+        repo: u32,
+        worktree: String,
+        staged: bool,
+    },
     /// `git apply` of `patch` into `worktree`: `WriteResult<null>`. Not journaled; a patch that
     /// doesn't fit fails with git's reason and changes nothing.
-    ApplyPatch { repo: u32, worktree: String, patch: String },
+    ApplyPatch {
+        repo: u32,
+        worktree: String,
+        patch: String,
+    },
     /// `git init` a new repository at the absolute `path` and opens it: `RepoSummary`. The
     /// folder must not exist yet or be empty. `branch`: the initial branch (`None` or empty:
     /// git's own default). `readme`: write and commit a `README.md`; without it the initial
     /// commit is empty. Either way the first commit creates the branch.
-    InitRepo { path: String, branch: Option<String>, #[serde(default)] readme: bool },
+    InitRepo {
+        path: String,
+        branch: Option<String>,
+        #[serde(default)]
+        readme: bool,
+    },
     /// Every remote with its redacted URL, and the main worktree of a linked one: `RepoInfoPayload`.
-    RepoInfo { repo: u32 },
+    RepoInfo {
+        repo: u32,
+    },
     /// Branches, remotes, worktrees, stashes, tags and submodules (spec §6.4): `SidebarPayload`.
-    Sidebar { repo: u32 },
+    Sidebar {
+        repo: u32,
+    },
     /// When a remote-tracking ref was last pushed (or else last fetched): `LastPushPayload | null`.
-    LastPush { repo: u32, remote_ref: String },
+    LastPush {
+        repo: u32,
+        remote_ref: String,
+    },
     /// GitNex's and git's versions (spec §6.5): `AppInfoPayload`.
     AppInfo,
     /// The system folder picker, starting in `start`: the picked folder, or `null` (cancelled,
     /// or no picker on this desktop: the UI falls back to a typed path).
-    PickFolder { start: Option<String> },
+    PickFolder {
+        start: Option<String>,
+    },
     /// Settings export: asks the folder picker (starting at the profile's repos folder), then
     /// writes `contents` to `<dir>/<suggestedName>` without overwriting. The written path, or
     /// `null` when nothing was picked. Not a repository write.
-    SaveExport { suggested_name: String, contents: String },
+    SaveExport {
+        suggested_name: String,
+        contents: String,
+    },
     /// The repositories in `root` (absolute), two levels deep, newest first: `ScannedRepo[]`.
     /// Cached per root; `refresh` rescans.
-    ScanRepos { root: String, refresh: bool },
+    ScanRepos {
+        root: String,
+        refresh: bool,
+    },
     /// `ScanRepos` over several folders in parallel, merged and de-duplicated by path:
     /// `ScannedRepo[]`. Each folder is cached on its own; a folder that fails to scan is skipped.
-    ScanFolders { roots: Vec<String>, refresh: bool },
+    ScanFolders {
+        roots: Vec<String>,
+        refresh: bool,
+    },
     /// `~/repos` when it exists, else `null`.
     SuggestReposFolder,
     /// Starts the file watcher for this repo (the active tab's, spec §4.4); idempotent. `null`.
-    WatchRepo { repo: u32 },
+    WatchRepo {
+        repo: u32,
+    },
     /// Stops this repo's watcher; `null`.
-    UnwatchRepo { repo: u32 },
+    UnwatchRepo {
+        repo: u32,
+    },
     /// Stops every watcher (the UI's startup reset: none survive a reload); `null`.
     UnwatchAll,
     /// The action queue (spec #2 §3.6): `QueueStatePayload`.
-    QueueState { repo: u32 },
+    QueueState {
+        repo: u32,
+    },
     /// A queued item's ×: `true` if it was still queued.
     QueueRemove {
         repo: u32,
@@ -393,22 +551,38 @@ pub enum Request {
         id: u64,
     },
     /// Run the "not run" items after a stop, each re-resolving.
-    QueueResume { repo: u32 },
+    QueueResume {
+        repo: u32,
+    },
     /// Drop the "not run" items.
-    QueueClear { repo: u32 },
+    QueueClear {
+        repo: u32,
+    },
     /// Find (spec §8.7): the loaded window's commits whose message contains `query`
     /// (case-insensitive), or, for 4+ hex characters, whose id starts with it: `string[]`.
-    FindText { repo: u32, query: String },
+    FindText {
+        repo: u32,
+        query: String,
+    },
     /// The loaded window's commits that touched a path containing `query` (case-insensitive;
     /// `[]` under 2 characters). The first call per window builds the path index: `string[]`.
-    FindPaths { repo: u32, query: String },
+    FindPaths {
+        repo: u32,
+        query: String,
+    },
     /// Whether `sha` is in the first 10,000 commits, and the window that would include it:
     /// `LocateResult`, with its full `id` (a short hash resolves; one that several commits start
     /// with is `ambiguous`). Not a commit: `notFound`.
-    LocateCommit { repo: u32, sha: String },
+    LocateCommit {
+        repo: u32,
+        sha: String,
+    },
     /// "Search older history": commits outside the window whose message or paths match `query`,
     /// newest first: `HistoryHit[]`.
-    SearchHistory { repo: u32, query: String },
+    SearchHistory {
+        repo: u32,
+        query: String,
+    },
     // --- Undo / redo (2A T10) ---
     /// Undo the newest journal entry, `entry` being the one the toolbar showed (spec #2 §5.4):
     /// `WriteResult<UndoOutcome>`. `confirm`: "Undo anyway", each moved ref as the prompt showed it.
@@ -471,10 +645,16 @@ pub enum Request {
     },
     /// The Undo dropdown's rows, newest first: `HistoryRow[]` (each older one's dependency check
     /// runs here, when the dropdown opens, never with every `JournalState`).
-    JournalHistory { repo: u32, worktree: String },
+    JournalHistory {
+        repo: u32,
+        worktree: String,
+    },
     // --- end UX Y ---
     /// What Undo/Redo and the banners show for a worktree (§5.5).
-    JournalState { repo: u32, worktree: String },
+    JournalState {
+        repo: u32,
+        worktree: String,
+    },
     // --- end undo / redo (2A T10) ---
     // --- Autostash banners (2A T11) ---
     /// A banner's Apply, or a recovery banner's Restore (spec #2 §6.4, §5.1): `WriteResult<null>`.
@@ -506,12 +686,19 @@ pub enum Request {
     // --- The pause (2D T2) ---
     /// A worktree's paused merge or rebase ended outside GitNex (Deviation 4): settles it (its
     /// journal entry, its autostash). `WriteResult<null>`; nothing happens when none is over.
-    SettlePaused { repo: u32, worktree: String },
+    SettlePaused {
+        repo: u32,
+        worktree: String,
+    },
     // --- end the pause (2D T2) ---
     // --- 2D T12: conflicted files ---
     /// A conflicted file for the merge tool (read; spec #2 §13.3): `ConflictFilePayload`, or
     /// `null` when the path isn't conflicted.
-    ConflictFile { repo: u32, worktree: String, path: String },
+    ConflictFile {
+        repo: u32,
+        worktree: String,
+        path: String,
+    },
     // --- end 2D T12 ---
     // --- 2D T15 ---
     /// Resolve a conflicted file (spec #2 §13.3): `WriteResult<null>`. `base`: the hash
@@ -569,22 +756,43 @@ pub enum Request {
     },
     // --- 2B T6: save a working file (spec #2 §7.5); UX round 2 G.2: journaled, renamed ---
     /// `WriteResult<SaveOutcome>`; `Stale` when the file's bytes no longer hash to `base`.
-    WriteWorktreeFile { repo: u32, worktree: String, path: String, text: String, base: String },
+    WriteWorktreeFile {
+        repo: u32,
+        worktree: String,
+        path: String,
+        text: String,
+        base: String,
+    },
     // --- end 2B T6 ---
     /// A review comment's suggestion applied to the working copy (spec 2026-10-08): `text` is the
     /// file with the suggested lines in. A save under its own Undo entry ("apply the suggestion
     /// to …"), never merged with a save: `WriteResult<SaveOutcome>`, `Stale` as a save's.
     /// `expect`: HEAD as the UI saw it, at the MR's head; moved since, it's refused.
-    ApplySuggestion { repo: u32, worktree: String, path: String, text: String, base: String, expect: crate::write::types::Expect },
+    ApplySuggestion {
+        repo: u32,
+        worktree: String,
+        path: String,
+        text: String,
+        base: String,
+        expect: crate::write::types::Expect,
+    },
     // --- UX round 3 O.1 ---
     /// A new, empty file at `path` (folders made as needed): `WriteResult<SaveOutcome>`. Refused
     /// when it exists or isn't plainly inside the worktree. Journaled: Undo removes it.
-    CreateWorktreeFile { repo: u32, worktree: String, path: String },
+    CreateWorktreeFile {
+        repo: u32,
+        worktree: String,
+        path: String,
+    },
     // --- end UX round 3 O.1 ---
     // --- 2B T1: stage and unstage (spec #2 §7.2) ---
     /// Stage `paths` (`git add -A`): `WriteResult<null>`. An immediate write (§3.6), not
     /// journaled; the staging undo log records it (§7.6).
-    Stage { repo: u32, worktree: String, paths: Vec<String> },
+    Stage {
+        repo: u32,
+        worktree: String,
+        paths: Vec<String>,
+    },
     /// Unstage `paths`; `oldPaths`: a rename's sources, unstaged with it (§7.2).
     Unstage {
         repo: u32,
@@ -594,16 +802,31 @@ pub enum Request {
         #[ts(optional)]
         old_paths: Option<Vec<String>>,
     },
-    StageAll { repo: u32, worktree: String },
-    UnstageAll { repo: u32, worktree: String },
+    StageAll {
+        repo: u32,
+        worktree: String,
+    },
+    UnstageAll {
+        repo: u32,
+        worktree: String,
+    },
     // --- end 2B T1 ---
     // --- 2B T2: the staging undo log (spec #2 §7.6) ---
     /// Undo the worktree's newest staging step: `WriteResult<null>`. `Stale` when the index changed
     /// outside staging (the log is then cleared).
-    StagingUndo { repo: u32, worktree: String },
-    StagingRedo { repo: u32, worktree: String },
+    StagingUndo {
+        repo: u32,
+        worktree: String,
+    },
+    StagingRedo {
+        repo: u32,
+        worktree: String,
+    },
     /// The staging buttons' state when the WIP panel opens (read): `StagingUndoState`.
-    StagingState { repo: u32, worktree: String },
+    StagingState {
+        repo: u32,
+        worktree: String,
+    },
     // --- end 2B T2 ---
     // --- 2B T5: commit (spec #2 §8) ---
     /// Commit (or amend) what's staged, or with `stageAll` everything (§8.1): `WriteResult<CommitOutcome>`.
@@ -630,7 +853,10 @@ pub enum Request {
         expect: crate::write::types::Expect,
     },
     /// The HEAD pencil's force-push note (read): the upstream's short name when HEAD is on it, else `null`.
-    HeadOnUpstream { repo: u32, worktree: String },
+    HeadOnUpstream {
+        repo: u32,
+        worktree: String,
+    },
     // --- end 2B T5 ---
     // --- 2C T3: branches ---
     /// Create branch here / the toolbar Branch (spec #2 §9.1): `WriteResult<null>`.
@@ -659,11 +885,21 @@ pub enum Request {
         expect: crate::write::types::Expect,
     },
     /// Set upstream (§9.1); `upstream: null` unsets it. Not journaled: `WriteResult<null>`.
-    SetUpstream { repo: u32, worktree: String, branch: String, upstream: Option<crate::write::branch::UpstreamTarget> },
+    SetUpstream {
+        repo: u32,
+        worktree: String,
+        branch: String,
+        upstream: Option<crate::write::branch::UpstreamTarget>,
+    },
     // --- end 2C T3 ---
     // --- 2C T8: worktrees ---
     /// Create worktree (spec #2 §11.1): `WriteResult<WorktreeAdded>`. Not journaled.
-    WorktreeAdd { repo: u32, worktree: String, path: String, branch: crate::write::worktree::WorktreeBranch },
+    WorktreeAdd {
+        repo: u32,
+        worktree: String,
+        path: String,
+        branch: crate::write::worktree::WorktreeBranch,
+    },
     /// Remove (§11.1): `WriteResult<WorktreeRemoveOutcome>`. Runs in the main worktree.
     WorktreeRemove {
         repo: u32,
@@ -673,7 +909,10 @@ pub enum Request {
         force: bool,
     },
     /// The create dialog's default folder (§11.1), a read: `string`.
-    SuggestWorktreePath { repo: u32, branch: String },
+    SuggestWorktreePath {
+        repo: u32,
+        branch: String,
+    },
     // --- end 2C T8 ---
     // --- 2C T4: delete ---
     /// `Delete | Local | Remote | Both |` (spec #2 §9.2): `WriteResult<DeleteOutcome>`.
@@ -761,21 +1000,42 @@ pub enum Request {
     // --- end 3B T1 ---
     /// Who a commit here is made as (read; ux round 1): `CommitIdentity`, or `null` when git
     /// has none (it would refuse the commit).
-    CommitIdentity { repo: u32, worktree: String },
+    CommitIdentity {
+        repo: u32,
+        worktree: String,
+    },
     /// Settings › Git identity (read): `GitIdentityInfo`. Without a repository and worktree, the
     /// global and profile config only.
-    GitIdentity { repo: Option<u32>, worktree: Option<String> },
+    GitIdentity {
+        repo: Option<u32>,
+        worktree: Option<String>,
+    },
     // --- 2D T10: integrate ---
     /// What a merge or rebase of `target` would do (read; spec #2 §13.1): relation, predicted
     /// conflicts, stacked branches.
-    IntegratePreview { repo: u32, worktree: String, kind: crate::write::integrate::IntegrateKind, target: String },
+    IntegratePreview {
+        repo: u32,
+        worktree: String,
+        kind: crate::write::integrate::IntegrateKind,
+        target: String,
+    },
     // --- 3C T1 ---
     /// The interactive rebase editor's plan (read; spec #3 §3.3): `RebasePlanPayload`.
-    RebasePlan { repo: u32, worktree: String, branch: String, base: String },
+    RebasePlan {
+        repo: u32,
+        worktree: String,
+        branch: String,
+        base: String,
+    },
     // --- end 3C T1 ---
     // --- 3C T7 ---
     /// Conflict prediction for the editor's plan (read; spec #3 §3.2): `Prediction`.
-    PredictRebase { repo: u32, worktree: String, base: String, rows: Vec<crate::write::irebase::types::RebaseRow> },
+    PredictRebase {
+        repo: u32,
+        worktree: String,
+        base: String,
+        rows: Vec<crate::write::irebase::types::RebaseRow>,
+    },
     // --- end 3C T7 ---
     // --- 3C T3 ---
     /// The interactive rebase editor's Start (spec #3 §3.3): `WriteResult<IntegrateOutcome>`. `rows`
@@ -817,11 +1077,19 @@ pub enum Request {
         expect: crate::write::types::Expect,
     },
     /// The commit panel's Abort merge (§13.2): `WriteResult<IntegrateOutcome>`.
-    MergeAbort { repo: u32, worktree: String },
+    MergeAbort {
+        repo: u32,
+        worktree: String,
+    },
     // --- end 2D T10 ---
     // --- 2B T3: hunks and lines (spec #2 §7.3) ---
     /// A WIP file's hunks from git, with the blobs they came from (read-only): `HunksPayload`.
-    WipHunks { repo: u32, worktree: String, path: String, staged: bool },
+    WipHunks {
+        repo: u32,
+        worktree: String,
+        path: String,
+        staged: bool,
+    },
     /// Stage (or, `staged`, unstage) hunks or lines of one file: `WriteResult<null>`. `Stale` when
     /// `base` is no longer the file's.
     StagePatch {
@@ -836,12 +1104,22 @@ pub enum Request {
     // --- 2B T10 ---
     /// How many changed lines `selection` would stage (or unstage) and discard, after the
     /// no-newline tie, for the line bar's label (read-only): `SelectionLines`.
-    SelectionLines { repo: u32, worktree: String, path: String, staged: bool, selection: crate::write::patch::StageSelection },
+    SelectionLines {
+        repo: u32,
+        worktree: String,
+        path: String,
+        staged: bool,
+        selection: crate::write::patch::StageSelection,
+    },
     // --- end 2B T10 ---
     // --- 2B T4: discards (spec #2 §7.2–§7.4) ---
     /// Discard files, hunks or lines, every unstaged change, or everything: `WriteResult<null>`,
     /// journaled with `before` and `after` snapshots, so Undo and Redo restore them.
-    Discard { repo: u32, worktree: String, scope: crate::write::discard::DiscardScope },
+    Discard {
+        repo: u32,
+        worktree: String,
+        scope: crate::write::discard::DiscardScope,
+    },
     // --- end 2B T4 ---
     // --- 2D T11: push ---
     /// Push `branch` (spec #2 §12.3): `WriteResult<PushOutcome>`. `target` + `setUpstream`: the
@@ -909,7 +1187,11 @@ pub enum Request {
     },
     /// Add repository-relative `paths` to the worktree's `.gitignore`, creating it when needed:
     /// `WriteResult<GitignoreOutcome>`.
-    AddToGitignore { repo: u32, worktree: String, paths: Vec<String> },
+    AddToGitignore {
+        repo: u32,
+        worktree: String,
+        paths: Vec<String>,
+    },
     /// Apply, or Pop (§10): `WriteResult<StashApplyOutcome>`. `withoutIndex`: after "Apply
     /// without restoring what was staged?". A gone `oid` is `NotFound` "That stash is gone".
     StashApply {
@@ -922,7 +1204,11 @@ pub enum Request {
         without_index: Option<bool>,
     },
     /// Delete (§10): `WriteResult<null>`.
-    StashDrop { repo: u32, worktree: String, oid: String },
+    StashDrop {
+        repo: u32,
+        worktree: String,
+        oid: String,
+    },
     // --- end 2C T7 ---
     // --- 2C T6: reset ---
     /// `Reset X to this commit | Soft | Mixed | Hard |` (spec #2 §9.4): `WriteResult<null>`.
@@ -956,7 +1242,12 @@ pub enum Request {
         limit: u32,
     },
     /// `path` at `rev`, line by line (read): `BlamePayload`.
-    Blame { repo: u32, worktree: String, rev: String, path: String },
+    Blame {
+        repo: u32,
+        worktree: String,
+        rev: String,
+        path: String,
+    },
     // --- end 3A T2 ---
     // --- 3A T3: restore a file from a commit (spec #3 §3.8) ---
     /// `git restore --source=<sha> --worktree -- <path>`, or a path `sha` lacks deleted: unstaged,
@@ -983,22 +1274,46 @@ pub enum Request {
         recheck: Option<bool>,
     },
     /// Which of `paths` LFS stores, by `worktree`'s attributes (read): `string[]`.
-    LfsTracked { repo: u32, worktree: String, paths: Vec<String> },
+    LfsTracked {
+        repo: u32,
+        worktree: String,
+        paths: Vec<String>,
+    },
     /// `git lfs fetch`: `WriteResult<LfsTransferOutcome>`, not journaled.
-    LfsFetch { repo: u32, worktree: String },
+    LfsFetch {
+        repo: u32,
+        worktree: String,
+    },
     /// `git lfs fetch`, then `git lfs checkout` (skipped, `notSetUp`, without `git lfs install`):
     /// `WriteResult<LfsTransferOutcome>`, not journaled.
-    LfsPull { repo: u32, worktree: String },
+    LfsPull {
+        repo: u32,
+        worktree: String,
+    },
     /// One file's LFS objects at `refs` (commit ids; none: HEAD's), its path escaped as a git-lfs
     /// pattern (a comma is refused), then its checkout if the working tree has it as a pointer.
     /// `oids`: the objects the diff lacks; the outcome lists those still missing.
     /// `WriteResult<LfsTransferOutcome>`, not journaled.
-    LfsDownload { repo: u32, worktree: String, path: String, refs: Vec<String>, oids: Vec<String> },
+    LfsDownload {
+        repo: u32,
+        worktree: String,
+        path: String,
+        refs: Vec<String>,
+        oids: Vec<String>,
+    },
     /// `git lfs track <pattern>` (`*.<ext>` only): `.gitattributes` edited, journaled
     /// (`WriteResult<null>`).
-    LfsTrack { repo: u32, worktree: String, pattern: String },
+    LfsTrack {
+        repo: u32,
+        worktree: String,
+        pattern: String,
+    },
     /// `git lfs untrack <pattern>`: as `LfsTrack`.
-    LfsUntrack { repo: u32, worktree: String, pattern: String },
+    LfsUntrack {
+        repo: u32,
+        worktree: String,
+        pattern: String,
+    },
     // --- end Git LFS ---
     // --- 3B T3: tags ---
     /// Create tag here (spec #3 §3.9): lightweight, or annotated with `message`: `WriteResult<null>`.
@@ -1035,7 +1350,11 @@ pub enum Request {
     // --- Git flow ---
     /// Set git flow up (`gitflow.*` in the repository's config; the development branch at the
     /// production one if it's missing): `WriteResult<null>`.
-    GitflowInit { repo: u32, worktree: String, config: crate::write::gitflow::GitflowConfig },
+    GitflowInit {
+        repo: u32,
+        worktree: String,
+        config: crate::write::gitflow::GitflowConfig,
+    },
     /// Finish a feature, release or hotfix branch: `WriteResult<GitflowFinishOutcome>`.
     /// `tagMessage`: a release's or hotfix's tag is annotated with it (absent: lightweight).
     GitflowFinish {
@@ -1057,7 +1376,10 @@ pub enum Request {
     },
     /// The tag an earlier finish of release or hotfix `branch` put on production, which Finish
     /// keeps (no git process): `string | null`; null when git flow isn't set up.
-    GitflowFinishedTag { repo: u32, branch: String },
+    GitflowFinishedTag {
+        repo: u32,
+        branch: String,
+    },
     // --- end Git flow ---
     // --- 4A T5 ---
     /// The active profile's forge accounts, with what their last requests said (no network):
@@ -1074,6 +1396,10 @@ pub enum Request {
         /// The account to replace (`ForgeAccount.id`); `None` adds or matches by user.
         #[serde(default)]
         account: Option<String>,
+        /// Bitbucket's HTTPS installation URL, optionally including a context path.
+        #[serde(default)]
+        #[ts(optional)]
+        base_url: Option<String>,
     },
     /// Removes the named account and deletes its token; without `account`, the host's first: `null`.
     RemoveForgeAccount {
@@ -1082,18 +1408,31 @@ pub enum Request {
         account: Option<String>,
     },
     /// The forge's prefilled "new token" page for `host`: a URL for `openUrl`.
-    ForgeTokenPage { host: String, kind: crate::forge::ForgeKind, #[serde(default)] classic: bool },
+    ForgeTokenPage {
+        host: String,
+        kind: crate::forge::ForgeKind,
+        #[serde(default)]
+        classic: bool,
+    },
     /// The forge `host` runs (`HostKind`): by its name, else asked without a token
     /// (`ForgeConnector::detect_host`); `generic` when neither says.
-    DetectForge { host: String },
+    DetectForge {
+        host: String,
+    },
     // --- end 4A T5 ---
     // --- 4A T6 ---
     /// Every remote with its forge project, and the remote MRs/PRs target (spec #4 §3.3):
     /// `RepoProjects`. `refresh` asks the forges again (conditional requests).
-    ForgeRepoProjects { repo: u32, refresh: bool },
+    ForgeRepoProjects {
+        repo: u32,
+        refresh: bool,
+    },
     /// The project settings of `remote`'s project (squash, merge methods, delete source branch):
     /// `ForgeProjectSettings`.
-    ForgeProjectSettings { repo: u32, remote: String },
+    ForgeProjectSettings {
+        repo: u32,
+        remote: String,
+    },
     /// One page of `remote`'s project's forks, newest first: `ForkPage`.
     ForgeForks {
         repo: u32,
@@ -1106,11 +1445,21 @@ pub enum Request {
     // --- end 4A T6 ---
     // --- 4B T1 ---
     /// The repository's open MRs/PRs for the sidebar section (spec #4 §4 "4B"): `MrList`.
-    ForgeMrList { repo: u32, filter: crate::forge::MrFilter },
+    ForgeMrList {
+        repo: u32,
+        filter: crate::forge::MrFilter,
+    },
     /// The badges: `refs` are the local branches' upstreams, newest first: `BranchMrs`.
-    ForgeBranchMrs { repo: u32, refs: Vec<String> },
+    ForgeBranchMrs {
+        repo: u32,
+        refs: Vec<String>,
+    },
     /// The list and badges the last session left (`ForgeHub::cached_mrs`): no request.
-    ForgeCachedMrs { repo: u32, refs: Vec<String>, filter: crate::forge::MrFilter },
+    ForgeCachedMrs {
+        repo: u32,
+        refs: Vec<String>,
+        filter: crate::forge::MrFilter,
+    },
     /// One MR/PR's detail (hover card, MR/PR view): `Fresh<ForgeMrDetail>`.
     ForgeMrDetail {
         repo: u32,
@@ -1119,7 +1468,9 @@ pub enum Request {
     },
     /// A refresh: the target's provider forgets what it kept a moment ago, so the reads that
     /// follow ask the forge (`ForgeHub::expire_fresh`). Sends nothing itself.
-    ForgeRefresh { repo: u32 },
+    ForgeRefresh {
+        repo: u32,
+    },
     /// Its discussion, oldest first: `Fresh<ForgeDiscussion[]>`.
     ForgeMrDiscussions {
         repo: u32,
@@ -1127,7 +1478,10 @@ pub enum Request {
         number: u64,
     },
     /// A project on the target's forge by path (an MR's fork): `ForgeProject`.
-    ForgeProjectByPath { repo: u32, path: String },
+    ForgeProjectByPath {
+        repo: u32,
+        path: String,
+    },
     /// Replies in `discussion`, or starts one: `ForgeNote`.
     ForgeReply {
         repo: u32,
@@ -1158,7 +1512,10 @@ pub enum Request {
         review: crate::forge::ReviewSubmit,
     },
     /// How many reviewers and assignees `remote`'s project's MRs may have: `PeopleLimits`.
-    ForgePeopleLimits { repo: u32, remote: String },
+    ForgePeopleLimits {
+        repo: u32,
+        remote: String,
+    },
     /// Subscribes to the MR/PR's notifications, or unsubscribes: the state after (`boolean`).
     ForgeSetSubscribed {
         repo: u32,
@@ -1271,6 +1628,13 @@ pub enum Request {
         number: u64,
         edit: crate::forge::MrEdit,
     },
+    /// Close or reopen a pull request.
+    ForgeSetClosed {
+        repo: u32,
+        #[ts(type = "number")]
+        number: u64,
+        closed: bool,
+    },
     /// Draft ⇄ ready: `ForgeMr`.
     ForgeSetDraft {
         repo: u32,
@@ -1304,49 +1668,82 @@ pub enum Request {
         expected_sha: Option<String>,
     },
     /// The common ancestor of two commits (the MR/PR view's diff of a note's file): `string | null`.
-    MergeBase { repo: u32, a: String, b: String },
+    MergeBase {
+        repo: u32,
+        a: String,
+        b: String,
+    },
     // --- end 4B T1 ---
-      // --- 4C T5 ---
-      /// What the Create flyout needs (spec #4 §4 "4C"): `CreateContext`. `remote`: the target
-      /// project's remote; `source_remote`: where `branch` is pushed; `target`: the target branch.
-      ForgeCreateContext { repo: u32, remote: String, source_remote: String, branch: String, target: String },
-      /// People in `remote`'s project who can review or be assigned, matching `query`: `ForgeUser[]`.
-      ForgeSearchUsers { repo: u32, remote: String, query: String },
-      /// Repositories the active profile's forge accounts own or can access, matching `query`:
-      /// `ForgeRepoHit[]`. Never a public repository the token can merely see. No repository is
-      /// open: the Clone screen's search.
-      ForgeSearchRepos { query: String },
-      /// `remote`'s project's labels matching `query`: `ForgeLabel[]`.
-      ForgeLabels { repo: u32, remote: String, query: String },
-      /// Creates the MR/PR in `remote`'s project: `CreateOutcome` (spec #4 §3.5). A forge write:
-      /// the repository isn't touched, and the journal doesn't record it.
-      ForgeCreateMr { repo: u32, remote: String, req: crate::forge::CreateMr },
-      /// Retries the parts a GitHub create couldn't add: the parts still failing (`PartFailure[]`).
-      ForgeCompleteCreate {
-          repo: u32,
-          remote: String,
-          #[ts(type = "number")]
-          number: u64,
-          req: crate::forge::CreateMr,
-          parts: Vec<crate::forge::CreatePart>,
-      },
-      // --- end 4C T5 ---
-      // --- 4D T3 ---
-      /// A stack's MRs/PRs on the repo's target project (spec #4 §4 "4D"): `StackView`.
-      /// `branches` bottom → top; `base`: the forge branch the bottom targets (`main`);
-      /// `base_ref`: the local ref the stack sits on (`refs/remotes/origin/main`), for prefills.
-      ForgeStack { repo: u32, branches: Vec<String>, base: String, base_ref: String },
-      /// Rewrites the Stack table in each open MR/PR (managed stacks; an unchanged one isn't
-      /// sent): `StackSync`.
-      ForgeSyncStack { repo: u32, branches: Vec<String>, base: String },
-      /// Points MR/PR `number` at `target`: `ForgeMr`.
-      ForgeRetarget {
-          repo: u32,
-          #[ts(type = "number")]
-          number: u64,
-          target: String,
-      },
-      // --- end 4D T3 ---
+    // --- 4C T5 ---
+    /// What the Create flyout needs (spec #4 §4 "4C"): `CreateContext`. `remote`: the target
+    /// project's remote; `source_remote`: where `branch` is pushed; `target`: the target branch.
+    ForgeCreateContext {
+        repo: u32,
+        remote: String,
+        source_remote: String,
+        branch: String,
+        target: String,
+    },
+    /// People in `remote`'s project who can review or be assigned, matching `query`: `ForgeUser[]`.
+    ForgeSearchUsers {
+        repo: u32,
+        remote: String,
+        query: String,
+    },
+    /// Repositories the active profile's forge accounts own or can access, matching `query`:
+    /// `ForgeRepoHit[]`. Never a public repository the token can merely see. No repository is
+    /// open: the Clone screen's search.
+    ForgeSearchRepos {
+        query: String,
+    },
+    /// `remote`'s project's labels matching `query`: `ForgeLabel[]`.
+    ForgeLabels {
+        repo: u32,
+        remote: String,
+        query: String,
+    },
+    /// Creates the MR/PR in `remote`'s project: `CreateOutcome` (spec #4 §3.5). A forge write:
+    /// the repository isn't touched, and the journal doesn't record it.
+    ForgeCreateMr {
+        repo: u32,
+        remote: String,
+        req: crate::forge::CreateMr,
+    },
+    /// Retries the parts a GitHub create couldn't add: the parts still failing (`PartFailure[]`).
+    ForgeCompleteCreate {
+        repo: u32,
+        remote: String,
+        #[ts(type = "number")]
+        number: u64,
+        req: crate::forge::CreateMr,
+        parts: Vec<crate::forge::CreatePart>,
+    },
+    // --- end 4C T5 ---
+    // --- 4D T3 ---
+    /// A stack's MRs/PRs on the repo's target project (spec #4 §4 "4D"): `StackView`.
+    /// `branches` bottom → top; `base`: the forge branch the bottom targets (`main`);
+    /// `base_ref`: the local ref the stack sits on (`refs/remotes/origin/main`), for prefills.
+    ForgeStack {
+        repo: u32,
+        branches: Vec<String>,
+        base: String,
+        base_ref: String,
+    },
+    /// Rewrites the Stack table in each open MR/PR (managed stacks; an unchanged one isn't
+    /// sent): `StackSync`.
+    ForgeSyncStack {
+        repo: u32,
+        branches: Vec<String>,
+        base: String,
+    },
+    /// Points MR/PR `number` at `target`: `ForgeMr`.
+    ForgeRetarget {
+        repo: u32,
+        #[ts(type = "number")]
+        number: u64,
+        target: String,
+    },
+    // --- end 4D T3 ---
     /// Where the update stands (`updates.rs`): `UpdateState`.
     UpdateStatus,
     /// Checks GitHub for a newer release now (Check for updates): `UpdateState`.
@@ -1377,7 +1774,7 @@ impl Request {
             // --- 4B T1: forge calls and a read, never a repository write ---
             Request::ForgeMrList { .. } | Request::ForgeBranchMrs { .. } | Request::ForgeCachedMrs { .. } | Request::ForgeMrDetail { .. } | Request::ForgeMrDiscussions { .. } | Request::ForgeRefresh { .. }
             | Request::ForgeProjectByPath { .. } | Request::ForgeReply { .. } | Request::ForgeApprove { .. } | Request::ForgeRequestChanges { .. }
-            | Request::ForgeMerge { .. } | Request::ForgeEditMr { .. } | Request::ForgeSetDraft { .. } | Request::MergeBase { .. } => false,
+            | Request::ForgeMerge { .. } | Request::ForgeEditMr { .. } | Request::ForgeSetClosed { .. } | Request::ForgeSetDraft { .. } | Request::MergeBase { .. } => false,
             // --- end 4B T1 ---
             Request::ForgeSetAutoMerge { .. } | Request::ForgeCancelAutoMerge { .. } | Request::ForgeUpdateBranch { .. } => false,
             Request::ForgeReview { .. } | Request::ForgePeopleLimits { .. } | Request::ForgeSetSubscribed { .. } => false,
@@ -1612,7 +2009,11 @@ pub(crate) fn config_stamp(common_dir: &Path) -> Option<FileStamp> {
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
     #[cfg(not(unix))]
     let inode = 0;
-    Some(FileStamp { modified: meta.modified().ok()?, len: meta.len(), inode })
+    Some(FileStamp {
+        modified: meta.modified().ok()?,
+        len: meta.len(),
+        inode,
+    })
 }
 
 /// The object store's index slots, one per pack index or multi-pack index: gix fixes their
@@ -1622,7 +2023,10 @@ pub(crate) fn config_stamp(common_dir: &Path) -> Option<FileStamp> {
 /// read as missing, and the graph drops a fetched tip, or a fetched commit's parents. So twice
 /// the indices, at least 128, and a fresh handle once fewer than a quarter are free
 /// (`odb_nearly_full`, checked by `Api::handle`).
-const ODB_SLOTS: gix::odb::store::init::Slots = gix::odb::store::init::Slots::AsNeededByDiskState { multiplier: 2.0, minimum: 128 };
+const ODB_SLOTS: gix::odb::store::init::Slots = gix::odb::store::init::Slots::AsNeededByDiskState {
+    multiplier: 2.0,
+    minimum: 128,
+};
 
 /// How a repository handle opens (`ODB_SLOTS`).
 pub(crate) fn open_options() -> gix::open::Options {
@@ -1631,8 +2035,12 @@ pub(crate) fn open_options() -> gix::open::Options {
 
 /// `open_options`, for discovery's trust levels.
 fn discover_options() -> gix::sec::trust::Mapping<gix::open::Options> {
-    let gix::sec::trust::Mapping { full, reduced } = gix::sec::trust::Mapping::<gix::open::Options>::default();
-    gix::sec::trust::Mapping { full: full.object_store_slots(ODB_SLOTS), reduced: reduced.object_store_slots(ODB_SLOTS) }
+    let gix::sec::trust::Mapping { full, reduced } =
+        gix::sec::trust::Mapping::<gix::open::Options>::default();
+    gix::sec::trust::Mapping {
+        full: full.object_store_slots(ODB_SLOTS),
+        reduced: reduced.object_store_slots(ODB_SLOTS),
+    }
 }
 
 /// Fewer than a quarter of `repo`'s object-store slots are free (`ODB_SLOTS`): time to reopen.
@@ -1768,7 +2176,11 @@ impl OpenerSource {
     /// Detects now, on the blocking pool, and caches the result.
     async fn detect_now(&self) -> Result<Arc<Vec<Opener>>, GbError> {
         let detect = self.detect.clone();
-        let list = Arc::new(tokio::task::spawn_blocking(move || detect()).await.map_err(|e| GbError::other(format!("couldn't look for editors: {e}")))?);
+        let list = Arc::new(
+            tokio::task::spawn_blocking(move || detect())
+                .await
+                .map_err(|e| GbError::other(format!("couldn't look for editors: {e}")))?,
+        );
         *self.found.lock().expect("openers poisoned") = Some((Instant::now(), list.clone()));
         Ok(list)
     }
@@ -1788,13 +2200,25 @@ fn merge_base(repo: &gix::Repository, a: &str, b: &str) -> Result<Option<String>
     let oid = |s: &str| -> Result<gix::ObjectId, GbError> {
         let s = s.trim();
         if s.starts_with("refs/") {
-            let mut r = repo.find_reference(s).map_err(|_| GbError::new(GbErrorKind::NotFound, format!("{s} doesn't exist")))?;
-            return r.peel_to_id().map(|id| id.detach()).map_err(|_| GbError::new(GbErrorKind::NotFound, format!("{s} doesn't point at a commit")));
+            let mut r = repo
+                .find_reference(s)
+                .map_err(|_| GbError::new(GbErrorKind::NotFound, format!("{s} doesn't exist")))?;
+            return r.peel_to_id().map(|id| id.detach()).map_err(|_| {
+                GbError::new(
+                    GbErrorKind::NotFound,
+                    format!("{s} doesn't point at a commit"),
+                )
+            });
         }
-        gix::ObjectId::from_hex(s.as_bytes()).map_err(|_| GbError::new(GbErrorKind::InvalidInput, format!("{s} isn't a commit id")))
+        gix::ObjectId::from_hex(s.as_bytes())
+            .map_err(|_| GbError::new(GbErrorKind::InvalidInput, format!("{s} isn't a commit id")))
     };
     let (a, b) = (oid(a)?, oid(b)?);
-    Ok(repo.merge_base(a, b).ok().flatten().map(|m| m.detach().to_string()))
+    Ok(repo
+        .merge_base(a, b)
+        .ok()
+        .flatten()
+        .map(|m| m.detach().to_string()))
 }
 // --- end 4B T1 ---
 
@@ -1815,17 +2239,26 @@ fn variant_name(req: &Request) -> String {
 }
 
 fn name_in(debug: &str) -> String {
-    debug.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("?").to_string()
+    debug
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("?")
+        .to_string()
 }
 
 // --- UX R1 C.4: failed writes in the log ---
 /// A write request's repository id and worktree, read from its Debug text (writes name them
 /// `repo: 3` and `worktree: "/abs/path"`): what a failure's message is made relative to.
 fn write_scope(debug: &str) -> (Option<u32>, Option<PathBuf>) {
-    static REPO: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\brepo: (\d+)").unwrap());
-    static WORKTREE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"\bworktree: (?:Some\()?"((?:[^"\\]|\\.)*)""#).unwrap());
+    static REPO: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\brepo: (\d+)").unwrap());
+    static WORKTREE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"\bworktree: (?:Some\()?"((?:[^"\\]|\\.)*)""#).unwrap()
+    });
     let repo = REPO.captures(debug).and_then(|c| c[1].parse().ok());
-    let worktree = WORKTREE.captures(debug).map(|c| PathBuf::from(c[1].replace("\\\"", "\"").replace("\\\\", "\\")));
+    let worktree = WORKTREE
+        .captures(debug)
+        .map(|c| PathBuf::from(c[1].replace("\\\"", "\"").replace("\\\\", "\\")));
     (repo, worktree)
 }
 
@@ -1852,7 +2285,10 @@ fn relative_message(message: &str, roots: &[PathBuf], git_dir: Option<&Path>) ->
             next.push_str(&rest[..i]);
             let after = &rest[i + from.len()..];
             // A whole path only: `/r` isn't in `/r2`.
-            let whole = after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.')));
+            let whole = after
+                .chars()
+                .next()
+                .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.')));
             if !whole {
                 next.push_str(&from);
                 rest = after;
@@ -1871,7 +2307,10 @@ fn relative_message(message: &str, roots: &[PathBuf], git_dir: Option<&Path>) ->
 /// `CherryPick` → `cherryPick`, as the UI sends it.
 fn wire_method(variant: &str) -> String {
     let mut chars = variant.chars();
-    chars.next().map(|c| c.to_lowercase().chain(chars).collect()).unwrap_or_default()
+    chars
+        .next()
+        .map(|c| c.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 // --- end UX R1 C.4 ---
 
@@ -1892,8 +2331,12 @@ where
 
 /// Runs gix work on the blocking pool. A `gix::Repository` is `!Sync`, so it must never be held
 /// across an `.await` in `dispatch` (whose future has to be `Send`).
-pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, GbError> + Send + 'static) -> Result<T, GbError> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| GbError::other(format!("task failed: {e}")))?
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, GbError> + Send + 'static,
+) -> Result<T, GbError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| GbError::other(format!("task failed: {e}")))?
 }
 
 /// The raw text from an AI provider as the commit box's two fields: strips a code fence and a
@@ -1901,7 +2344,11 @@ pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, Gb
 fn parse_ai_message(raw: &str) -> Result<crate::ai::AiCommitMessage, GbError> {
     let raw = raw.trim();
     let text = if raw.starts_with("```") {
-        raw.lines().skip(1).filter(|l| !l.trim_start().starts_with("```")).collect::<Vec<_>>().join("\n")
+        raw.lines()
+            .skip(1)
+            .filter(|l| !l.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         raw.to_string()
     };
@@ -1910,10 +2357,16 @@ fn parse_ai_message(raw: &str) -> Result<crate::ai::AiCommitMessage, GbError> {
     let mut lines = text.lines();
     let summary = lines.next().unwrap_or_default().trim().to_string();
     if summary.is_empty() {
-        return Err(GbError::new(GbErrorKind::InvalidInput, "The AI returned an empty commit message"));
+        return Err(GbError::new(
+            GbErrorKind::InvalidInput,
+            "The AI returned an empty commit message",
+        ));
     }
     let description = lines.collect::<Vec<_>>().join("\n").trim().to_string();
-    Ok(crate::ai::AiCommitMessage { summary, description })
+    Ok(crate::ai::AiCommitMessage {
+        summary,
+        description,
+    })
 }
 
 /// `text` cut at `max` bytes without splitting a character.
@@ -1933,7 +2386,12 @@ impl Api {
         // A test or a harness that forgets `with_data_dir` never touches the user's data dir. No
         // writable temp dir (the app, which replaces it anyway, must not panic): a per-process one.
         let data_tmp = tempfile::tempdir().ok();
-        let data_dir = data_tmp.as_ref().map(|t| t.path().to_path_buf()).unwrap_or_else(|| std::env::temp_dir().join(format!("gitnex-data-{}", std::process::id())));
+        let data_dir = data_tmp
+            .as_ref()
+            .map(|t| t.path().to_path_buf())
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("gitnex-data-{}", std::process::id()))
+            });
         Self {
             cli,
             requests: Arc::new(crate::log::RequestLog::new(REQUEST_LOG_CAPACITY)),
@@ -2001,7 +2459,11 @@ impl Api {
     /// Updates from GitHub Releases, for `cfg.kind` (also the install kind About shows).
     pub fn with_updates(mut self, cfg: crate::updates::UpdateConfig) -> Self {
         self.install_kind = cfg.kind;
-        self.updates = Some(Arc::new(crate::updates::Updates::new(cfg, &self.app_version, self.bus.clone())));
+        self.updates = Some(Arc::new(crate::updates::Updates::new(
+            cfg,
+            &self.app_version,
+            self.bus.clone(),
+        )));
         self
     }
 
@@ -2013,12 +2475,19 @@ impl Api {
     }
 
     fn updates(&self) -> Result<&Arc<crate::updates::Updates>, GbError> {
-        self.updates.as_ref().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "Updates aren't available in this build"))
+        self.updates.as_ref().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "Updates aren't available in this build",
+            )
+        })
     }
 
     /// The automatic update check (Settings › Updates): `FIRST_CHECK_DELAY` after startup, then
     /// once a day, while the setting is on. The app spawns it; the harness and tests don't.
-    pub fn update_checks(self: &Arc<Self>) -> impl std::future::Future<Output = ()> + Send + 'static {
+    pub fn update_checks(
+        self: &Arc<Self>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let updates = self.updates.clone();
         let api = Arc::downgrade(self);
         async move {
@@ -2077,8 +2546,14 @@ impl Api {
     /// per process, at the repository's first open (`recover_journals`), so a write never takes
     /// another instance's in-flight entry for a crashed one.
     pub(crate) fn journal(&self, root: &Path) -> Result<crate::journal::JournalStore, GbError> {
-        let git_dir = crate::platform::fs::canonicalize(gix::open(root).map_err(crate::error::gix_err)?.git_dir())?;
-        Ok(crate::journal::JournalStore::new(&self.data_dir, &git_dir, root))
+        let git_dir = crate::platform::fs::canonicalize(
+            gix::open(root).map_err(crate::error::gix_err)?.git_dir(),
+        )?;
+        Ok(crate::journal::JournalStore::new(
+            &self.data_dir,
+            &git_dir,
+            root,
+        ))
     }
 
     /// This instance's journal owner, stamped on its pending entries (taken once, then held).
@@ -2098,19 +2573,42 @@ impl Api {
     /// write's pending entry is its owner: an entry whose owner still runs (this instance, or
     /// another one) is never recovered.
     fn recover_journals(&self, workdir: &Path, common_dir: &Path) {
-        if self.recovered.lock().expect("recovered poisoned").contains(common_dir) {
+        if self
+            .recovered
+            .lock()
+            .expect("recovered poisoned")
+            .contains(common_dir)
+        {
             return;
         }
         let writes = self.writes_for(common_dir);
-        let Ok(_idle) = writes.lock.try_lock() else { return };
-        if !self.recovered.lock().expect("recovered poisoned").insert(common_dir.to_path_buf()) {
+        let Ok(_idle) = writes.lock.try_lock() else {
+            return;
+        };
+        if !self
+            .recovered
+            .lock()
+            .expect("recovered poisoned")
+            .insert(common_dir.to_path_buf())
+        {
             return;
         }
         // Git dir → worktree root, deduped.
-        let mut worktrees: std::collections::BTreeMap<PathBuf, PathBuf> = std::collections::BTreeMap::new();
-        let canonical = |p: &Path| crate::platform::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let mut worktrees: std::collections::BTreeMap<PathBuf, PathBuf> =
+            std::collections::BTreeMap::new();
+        let canonical =
+            |p: &Path| crate::platform::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         // The main worktree: gix lists only the linked ones. Its git dir is the common dir.
-        let main_root = gix::open(common_dir).ok().and_then(|m| m.workdir().map(Path::to_path_buf)).or_else(|| common_dir.file_name().is_some_and(|n| n == ".git").then(|| common_dir.parent().map(Path::to_path_buf)).flatten());
+        let main_root = gix::open(common_dir)
+            .ok()
+            .and_then(|m| m.workdir().map(Path::to_path_buf))
+            .or_else(|| {
+                common_dir
+                    .file_name()
+                    .is_some_and(|n| n == ".git")
+                    .then(|| common_dir.parent().map(Path::to_path_buf))
+                    .flatten()
+            });
         if let Some(main_root) = main_root {
             worktrees.insert(canonical(common_dir), canonical(&main_root));
         }
@@ -2131,11 +2629,22 @@ impl Api {
         let stashes: Option<Vec<(String, String)>> = if common_dir.join("reftable").is_dir() {
             None
         } else {
-            crate::reflog::read_reflog(common_dir, "refs/stash").ok().map(|l| l.into_iter().map(|e| (e.new.to_string(), e.message)).collect())
+            crate::reflog::read_reflog(common_dir, "refs/stash")
+                .ok()
+                .map(|l| {
+                    l.into_iter()
+                        .map(|e| (e.new.to_string(), e.message))
+                        .collect()
+                })
         };
         // --- 2C T7: a recorded stash's commit, listed or not ---
         let objects = gix::open(common_dir).ok();
-        let exists = |oid: &str| objects.as_ref().zip(gix::ObjectId::from_hex(oid.as_bytes()).ok()).is_some_and(|(r, id)| r.has_object(id));
+        let exists = |oid: &str| {
+            objects
+                .as_ref()
+                .zip(gix::ObjectId::from_hex(oid.as_bytes()).ok())
+                .is_some_and(|(r, id)| r.has_object(id))
+        };
         // --- end 2C T7 ---
         for (git_dir, root) in worktrees {
             let store = crate::journal::JournalStore::new(&data, &git_dir, &root);
@@ -2155,7 +2664,16 @@ impl Api {
     }
 
     fn running_writes(&self) -> Vec<Arc<crate::ops::OpEntry>> {
-        self.ops.running().into_iter().filter(|o| !matches!(o.kind, crate::events::OpKind::Fetch | crate::events::OpKind::Clone)).collect()
+        self.ops
+            .running()
+            .into_iter()
+            .filter(|o| {
+                !matches!(
+                    o.kind,
+                    crate::events::OpKind::Fetch | crate::events::OpKind::Clone
+                )
+            })
+            .collect()
     }
 
     /// Whether a write op (anything but a fetch or a clone) is registered: queued or running.
@@ -2187,7 +2705,10 @@ impl Api {
 
     /// UX Y: the Undo dropdown's rows. A read: the journal is loaded (a copy, the lock released)
     /// and expired in memory; the dependency check runs outside the journal's lock.
-    pub(crate) fn journal_history(&self, root: &Path) -> Result<Vec<crate::journal::history::HistoryRow>, GbError> {
+    pub(crate) fn journal_history(
+        &self,
+        root: &Path,
+    ) -> Result<Vec<crate::journal::history::HistoryRow>, GbError> {
         let mut j = self.journal(root)?.load()?;
         let repo = gix::open(root).map_err(crate::error::gix_err)?;
         let busy = repo.state().and_then(crate::write::in_progress_name);
@@ -2197,7 +2718,10 @@ impl Api {
     }
 
     /// What Undo/Redo and the banners show; expired entries go first (§5.1).
-    pub(crate) fn journal_state(&self, root: &Path) -> Result<crate::journal::JournalState, GbError> {
+    pub(crate) fn journal_state(
+        &self,
+        root: &Path,
+    ) -> Result<crate::journal::JournalState, GbError> {
         let store = self.journal(root)?;
         let repo = gix::open(root).map_err(crate::error::gix_err)?;
         let busy = repo.state().and_then(crate::write::in_progress_name);
@@ -2213,27 +2737,56 @@ impl Api {
         // can't read (reftable, an I/O error) hides nothing, as in `recover_journals`.
         use crate::journal::BannerKind;
         let common = repo.common_dir();
-        let listed = (!common.join("reftable").is_dir()).then(|| crate::reflog::read_reflog(common, "refs/stash").ok()).flatten();
+        let listed = (!common.join("reftable").is_dir())
+            .then(|| crate::reflog::read_reflog(common, "refs/stash").ok())
+            .flatten();
         if let Some(listed) = listed {
-            let listed: std::collections::HashSet<String> = listed.into_iter().map(|e| e.new.to_string()).collect();
-            let unrestored = |k: BannerKind| matches!(k, BannerKind::AutostashRefused | BannerKind::AutostashConflicts | BannerKind::AutostashPartial);
-            state.banners.retain(|b| !unrestored(b.kind) || b.stash.as_ref().is_none_or(|oid| listed.contains(oid)));
+            let listed: std::collections::HashSet<String> =
+                listed.into_iter().map(|e| e.new.to_string()).collect();
+            let unrestored = |k: BannerKind| {
+                matches!(
+                    k,
+                    BannerKind::AutostashRefused
+                        | BannerKind::AutostashConflicts
+                        | BannerKind::AutostashPartial
+                )
+            };
+            state.banners.retain(|b| {
+                !unrestored(b.kind) || b.stash.as_ref().is_none_or(|oid| listed.contains(oid))
+            });
         }
         Ok(state)
     }
 
     /// Holds on every live watcher of the repository (one per tab's worktree).
     pub(crate) fn watch_holds(&self, common_dir: &Path) -> Vec<crate::watch::WatchHold> {
-        let ids: Vec<u32> = self.watchers.lock().expect("watchers poisoned").keys().copied().collect();
-        let mine: Vec<u32> = ids.into_iter().filter(|id| self.handle(*id).is_ok_and(|h| h.common_dir == common_dir)).collect();
+        let ids: Vec<u32> = self
+            .watchers
+            .lock()
+            .expect("watchers poisoned")
+            .keys()
+            .copied()
+            .collect();
+        let mine: Vec<u32> = ids
+            .into_iter()
+            .filter(|id| self.handle(*id).is_ok_and(|h| h.common_dir == common_dir))
+            .collect();
         let watchers = self.watchers.lock().expect("watchers poisoned");
-        mine.iter().filter_map(|id| watchers.get(id)).map(|w| w.hold()).collect()
+        mine.iter()
+            .filter_map(|id| watchers.get(id))
+            .map(|w| w.hold())
+            .collect()
     }
 
     /// The harness's reset: every queue cleared, every journal gone.
     #[cfg(any(test, feature = "testing"))]
     pub fn reset_writes(&self) {
-        for w in self.write_locks.lock().expect("write locks poisoned").values() {
+        for w in self
+            .write_locks
+            .lock()
+            .expect("write locks poisoned")
+            .values()
+        {
             w.queue.clear();
             w.queue.resume();
         }
@@ -2293,20 +2846,36 @@ impl Api {
     /// One folder's scan: absolute roots only, cached per root unless `refresh`.
     async fn scan_root(&self, root: String, refresh: bool) -> Result<Vec<ScannedRepo>, GbError> {
         if !Path::new(&root).is_absolute() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, format!("not an absolute folder: {root}")));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                format!("not an absolute folder: {root}"),
+            ));
         }
-        if !refresh && let Some(hit) = self.scans.lock().expect("scans poisoned").get(&root).cloned() {
+        if !refresh
+            && let Some(hit) = self
+                .scans
+                .lock()
+                .expect("scans poisoned")
+                .get(&root)
+                .cloned()
+        {
             return Ok(hit);
         }
         let dir = PathBuf::from(&root);
         let found = blocking(move || Ok(crate::scan::scan_repos(&dir))).await?;
-        self.scans.lock().expect("scans poisoned").insert(root, found.clone());
+        self.scans
+            .lock()
+            .expect("scans poisoned")
+            .insert(root, found.clone());
         Ok(found)
     }
 
     /// git's version, checked against `MIN_GIT` once and cached for the process lifetime.
     pub(crate) async fn git_version(&self) -> Result<(u32, u32, u32), GbError> {
-        self.version.get_or_try_init(|| self.cli.check_version()).await.copied()
+        self.version
+            .get_or_try_init(|| self.cli.check_version())
+            .await
+            .copied()
     }
 
     /// The custom editor (R5: the settings' Custom command, the repo's own over the profile's),
@@ -2314,16 +2883,28 @@ impl Api {
     /// shell's `PATH` when that's been captured (spec §5.3), else the app's.
     async fn custom_opener(&self, h: &RepoHandle, root: &Path) -> Result<Opener, GbError> {
         let profile = self.store.active_profile();
-        let own = profile.repos.get(&h.workdir.display().to_string()).and_then(|r| r.editor.clone());
+        let own = profile
+            .repos
+            .get(&h.workdir.display().to_string())
+            .and_then(|r| r.editor.clone());
         let Some(EditorChoice::Custom { template }) = own.or(profile.editor) else {
-            return Err(GbError::new(GbErrorKind::InvalidInput, "no custom editor command is set"));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "no custom editor command is set",
+            ));
         };
         let captured = self.cli.child_env().await;
         let root = root.to_path_buf();
         blocking(move || {
             let mut env = DetectEnv::from_system();
-            if let Some(path) = captured.as_ref().and_then(|vars| vars.iter().find(|(k, _)| k == "PATH")).map(|(_, v)| v.clone()) {
-                env.path = std::env::split_paths(&path).filter(|d| d.is_absolute()).collect();
+            if let Some(path) = captured
+                .as_ref()
+                .and_then(|vars| vars.iter().find(|(k, _)| k == "PATH"))
+                .map(|(_, v)| v.clone())
+            {
+                env.path = std::env::split_paths(&path)
+                    .filter(|d| d.is_absolute())
+                    .collect();
             }
             template_opener(CUSTOM_ID, "Custom", &template, root, &env)
         })
@@ -2333,20 +2914,49 @@ impl Api {
     /// The "Open in…" list. The `custom` entry is in it only when the Custom editor is the
     /// effective setting: the repository's own at `workdir`, else the profile's.
     async fn list_openers(&self, workdir: Option<String>) -> Result<serde_json::Value, GbError> {
-        let mut list: Vec<OpenerPayload> = self.openers(false).await?.iter().map(Opener::payload).collect();
+        let mut list: Vec<OpenerPayload> = self
+            .openers(false)
+            .await?
+            .iter()
+            .map(Opener::payload)
+            .collect();
         let profile = self.store.active_profile();
         let own = workdir.and_then(|w| profile.repos.get(&w).and_then(|r| r.editor.clone()));
         if matches!(own.or(profile.editor), Some(EditorChoice::Custom { .. })) {
-            let at = list.iter().position(|o| o.kind != OpenerKind::Editor).unwrap_or(list.len());
-            list.insert(at, OpenerPayload { id: CUSTOM_ID.into(), name: "Custom".into(), kind: OpenerKind::Editor });
+            let at = list
+                .iter()
+                .position(|o| o.kind != OpenerKind::Editor)
+                .unwrap_or(list.len());
+            list.insert(
+                at,
+                OpenerPayload {
+                    id: CUSTOM_ID.into(),
+                    name: "Custom".into(),
+                    kind: OpenerKind::Editor,
+                },
+            );
         }
         if self.default_app.is_some() {
             // After the editors, before the file manager: it opens the file, not its folder.
-            let at = list.iter().position(|o| o.kind != OpenerKind::Editor).unwrap_or(list.len());
-            list.insert(at, OpenerPayload { id: DEFAULT_APP_ID.into(), name: "Default app".into(), kind: OpenerKind::DefaultApp });
+            let at = list
+                .iter()
+                .position(|o| o.kind != OpenerKind::Editor)
+                .unwrap_or(list.len());
+            list.insert(
+                at,
+                OpenerPayload {
+                    id: DEFAULT_APP_ID.into(),
+                    name: "Default app".into(),
+                    kind: OpenerKind::DefaultApp,
+                },
+            );
         }
         if self.chooser.is_some() {
-            list.push(OpenerPayload { id: CHOOSER_ID.into(), name: "Other…".into(), kind: OpenerKind::Chooser });
+            list.push(OpenerPayload {
+                id: CHOOSER_ID.into(),
+                name: "Other…".into(),
+                kind: OpenerKind::Chooser,
+            });
         }
         to_json(list)
     }
@@ -2392,7 +3002,11 @@ impl Api {
     /// (non-interactive) op, `GCM_INTERACTIVE=never` too, so Git Credential Manager never shows
     /// its own prompt for a background fetch either.
     pub(crate) fn net_env(&self, op: OpId) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-        let mut env = self.askpass.get().map(|s| s.env_for(Some(op))).unwrap_or_default();
+        let mut env = self
+            .askpass
+            .get()
+            .map(|s| s.env_for(Some(op)))
+            .unwrap_or_default();
         if self.ops.get(op).is_some_and(|e| !e.interactive) {
             env.push(("GCM_INTERACTIVE".into(), "never".into()));
         }
@@ -2413,7 +3027,11 @@ impl Api {
     /// `-c user.*`; the user's extra config is included first, so these fields win when both set.
     fn apply_profile_git_config(&self) -> Result<(), GbError> {
         let profile = self.store.active_profile();
-        let extra = profile.extra_gitconfig.as_deref().filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+        let extra = profile
+            .extra_gitconfig
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .map(PathBuf::from);
         match self.profile_identity_gitconfig(&profile, extra.as_deref())? {
             Some(path) => self.cli.set_include_path(Some(path)),
             None => self.cli.set_include_path(extra),
@@ -2424,17 +3042,40 @@ impl Api {
     /// The generated include file for the profile's commit name/email, or `None` when it sets
     /// neither. Writes it under `<data dir>/gitconfig`, atomically, named by its content, and
     /// removes the previous one so a saved value change reaches the next git command.
-    fn profile_identity_gitconfig(&self, profile: &Profile, extra: Option<&Path>) -> Result<Option<PathBuf>, GbError> {
-        let name = profile.git_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let email = profile.git_email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    fn profile_identity_gitconfig(
+        &self,
+        profile: &Profile,
+        extra: Option<&Path>,
+    ) -> Result<Option<PathBuf>, GbError> {
+        let name = profile
+            .git_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let email = profile
+            .git_email
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         if name.is_none() && email.is_none() {
             return Ok(None);
         }
         use std::hash::{Hash, Hasher};
-        let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"));
-        let mut content = String::from("# Written by GitNex for this profile; edits are replaced.\n");
+        let quote = |v: &str| {
+            format!(
+                "\"{}\"",
+                v.replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+            )
+        };
+        let mut content =
+            String::from("# Written by GitNex for this profile; edits are replaced.\n");
         if let Some(extra) = extra {
-            content.push_str(&format!("[include]\n\tpath = {}\n", quote(&crate::platform::fs::to_git_path(extra))));
+            content.push_str(&format!(
+                "[include]\n\tpath = {}\n",
+                quote(&crate::platform::fs::to_git_path(extra))
+            ));
         }
         content.push_str("[user]\n");
         if let Some(name) = name {
@@ -2447,21 +3088,42 @@ impl Api {
         content.hash(&mut hasher);
         let dir = self.data_dir.join("gitconfig");
         let path = dir.join(format!("profile-{:016x}.gitconfig", hasher.finish()));
-        let _held = self.profile_gitconfig.lock().expect("profile gitconfig poisoned");
+        let _held = self
+            .profile_gitconfig
+            .lock()
+            .expect("profile gitconfig poisoned");
         if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
-            std::fs::create_dir_all(&dir).map_err(|e| GbError::other(format!("Couldn't prepare {}: {e}", dir.display())))?;
-            let mut tmp = tempfile::Builder::new().prefix(".profile-").suffix(".gitconfig").tempfile_in(&dir)
-                .map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| GbError::other(format!("Couldn't prepare {}: {e}", dir.display())))?;
+            let mut tmp = tempfile::Builder::new()
+                .prefix(".profile-")
+                .suffix(".gitconfig")
+                .tempfile_in(&dir)
+                .map_err(|e| {
+                    GbError::other(format!("Couldn't write the profile's git identity: {e}"))
+                })?;
             use std::io::Write as _;
-            tmp.write_all(content.as_bytes()).map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
-            tmp.as_file().sync_all().map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {e}")))?;
+            tmp.write_all(content.as_bytes()).map_err(|e| {
+                GbError::other(format!("Couldn't write the profile's git identity: {e}"))
+            })?;
+            tmp.as_file().sync_all().map_err(|e| {
+                GbError::other(format!("Couldn't write the profile's git identity: {e}"))
+            })?;
             let _ = std::fs::remove_file(&path);
-            tmp.persist(&path).map_err(|e| GbError::other(format!("Couldn't write the profile's git identity: {}", e.error)))?;
+            tmp.persist(&path).map_err(|e| {
+                GbError::other(format!(
+                    "Couldn't write the profile's git identity: {}",
+                    e.error
+                ))
+            })?;
             // Only the current file is useful; keep the directory tidy across value changes.
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for e in entries.flatten() {
                     let p = e.path();
-                    if p != path && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("profile-")) {
+                    if p != path
+                        && p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with("profile-"))
+                    {
                         let _ = std::fs::remove_file(p);
                     }
                 }
@@ -2482,7 +3144,11 @@ impl Api {
     // --- 4A T5 ---
     /// The forge connector and token store (gitnex-forge's `Forge` and `SystemTokenStore` in
     /// the app; the fake forge's and a temp file in the harness).
-    pub fn with_forge(mut self, connector: Arc<dyn crate::forge::ForgeConnector>, tokens: Arc<dyn crate::forge::TokenStore>) -> Self {
+    pub fn with_forge(
+        mut self,
+        connector: Arc<dyn crate::forge::ForgeConnector>,
+        tokens: Arc<dyn crate::forge::TokenStore>,
+    ) -> Self {
         let hub = crate::forge::hub::ForgeHub::new(connector, tokens, self.clock.clone());
         // The MR/PR cache across restarts (spec #4 §3.4), in the data dir: `with_data_dir` moves it.
         hub.set_cache_dir(self.data_dir.join("forge-cache"));
@@ -2492,7 +3158,11 @@ impl Api {
 
     /// The AI commit-message provider and the token store its endpoint token uses (the app's
     /// system keyring, else the owner-only file). Without them the AI requests refuse.
-    pub fn with_ai(mut self, provider: Arc<dyn crate::ai::AiProvider>, tokens: Arc<dyn crate::forge::TokenStore>) -> Self {
+    pub fn with_ai(
+        mut self,
+        provider: Arc<dyn crate::ai::AiProvider>,
+        tokens: Arc<dyn crate::forge::TokenStore>,
+    ) -> Self {
         self.ai = Some(provider);
         self.ai_tokens = Some(tokens);
         self
@@ -2506,7 +3176,12 @@ impl Api {
     }
 
     pub(crate) fn forge_hub(&self) -> Result<&Arc<crate::forge::hub::ForgeHub>, GbError> {
-        self.forge.as_ref().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "Forge accounts aren't available here"))
+        self.forge.as_ref().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "Forge accounts aren't available here",
+            )
+        })
     }
     // --- end 4A T5 ---
 
@@ -2517,25 +3192,44 @@ impl Api {
 
     /// Where `fontFamilies` gets its list (the harness: a fixed one, so tests don't depend on the
     /// machine's fonts).
-    pub fn with_font_source(mut self, source: Arc<dyn Fn() -> Vec<crate::fonts::FontFamily> + Send + Sync>) -> Self {
+    pub fn with_font_source(
+        mut self,
+        source: Arc<dyn Fn() -> Vec<crate::fonts::FontFamily> + Send + Sync>,
+    ) -> Self {
         self.font_source = source;
         self
     }
 
     /// The font families, listed on the blocking pool on first use (or `refresh`), then cached.
-    async fn font_families(&self, refresh: bool) -> Result<Arc<Vec<crate::fonts::FontFamily>>, GbError> {
+    async fn font_families(
+        &self,
+        refresh: bool,
+    ) -> Result<Arc<Vec<crate::fonts::FontFamily>>, GbError> {
         let mut cached = self.font_families.lock().await;
         if let Some(list) = cached.as_ref().filter(|_| !refresh) {
             return Ok(list.clone());
         }
         let source = self.font_source.clone();
-        let list = Arc::new(tokio::task::spawn_blocking(move || source()).await.map_err(|e| GbError::other(format!("couldn't list the fonts: {e}")))?);
+        let list = Arc::new(
+            tokio::task::spawn_blocking(move || source())
+                .await
+                .map_err(|e| GbError::other(format!("couldn't list the fonts: {e}")))?,
+        );
         *cached = Some(list.clone());
         Ok(list)
     }
 
-    pub fn with_openers(mut self, detect: Arc<dyn Fn() -> Vec<Opener> + Send + Sync>, launcher: Launcher) -> Self {
-        self.openers = Some(Arc::new(OpenerSource { detect, launcher, found: Mutex::new(None), refreshing: std::sync::atomic::AtomicBool::new(false) }));
+    pub fn with_openers(
+        mut self,
+        detect: Arc<dyn Fn() -> Vec<Opener> + Send + Sync>,
+        launcher: Launcher,
+    ) -> Self {
+        self.openers = Some(Arc::new(OpenerSource {
+            detect,
+            launcher,
+            found: Mutex::new(None),
+            refreshing: std::sync::atomic::AtomicBool::new(false),
+        }));
         self
     }
 
@@ -2591,12 +3285,22 @@ impl Api {
         let write = req.is_write();
         // The Debug tools' own traffic (the logs' 1 s polls, the log file's line per action) would
         // drown the request log.
-        let record = !matches!(req, Request::CommandLog | Request::RequestLog | Request::LogFrontend { .. });
+        let record = !matches!(
+            req,
+            Request::CommandLog | Request::RequestLog | Request::LogFrontend { .. }
+        );
         let started = Instant::now();
-        let started_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         // Boxed: `dispatch_inner` holds every request's future, so inline it would make each
         // caller's future (a Tauri command's, a test's) as large as the largest request's.
-        let (res, commands) = crate::log::with_command_scope(catch_panics(&method, Box::pin(self.dispatch_inner(req)))).await;
+        let (res, commands) = crate::log::with_command_scope(catch_panics(
+            &method,
+            Box::pin(self.dispatch_inner(req)),
+        ))
+        .await;
         if record {
             self.record_request(&method, &debug, started, started_ms, &res, commands);
         }
@@ -2614,7 +3318,15 @@ impl Api {
 
     /// One request in the request log: its method, identifying params (`params_summary`: no
     /// token, body or content), timing, outcome and the git commands it ran.
-    fn record_request(&self, variant: &str, debug: &str, started: Instant, started_ms: i64, res: &Result<serde_json::Value, GbError>, commands: Vec<u64>) {
+    fn record_request(
+        &self,
+        variant: &str,
+        debug: &str,
+        started: Instant,
+        started_ms: i64,
+        res: &Result<serde_json::Value, GbError>,
+        commands: Vec<u64>,
+    ) {
         let err = res.as_ref().err();
         self.requests.push(crate::log::RequestLogEntry {
             id: self.requests.next_id(),
@@ -2623,7 +3335,10 @@ impl Api {
             started_ms,
             duration_ms: started.elapsed().as_micros() as f64 / 1000.0,
             error: err.map(|e| e.kind),
-            error_message: err.map(|e| crate::log::truncate_utf8(&crate::redact::redact(&e.message), REQUEST_ERROR_LIMIT).to_string()),
+            error_message: err.map(|e| {
+                crate::log::truncate_utf8(&crate::redact::redact(&e.message), REQUEST_ERROR_LIMIT)
+                    .to_string()
+            }),
             commands,
         });
     }
@@ -2635,8 +3350,15 @@ impl Api {
         let (method, kind) = (wire_method(variant), format!("{:?}", e.kind));
         let (repo, worktree) = write_scope(debug);
         let handle = repo.and_then(|id| self.handle(id).ok());
-        let roots: Vec<PathBuf> = worktree.into_iter().chain(handle.as_ref().map(|h| h.workdir.clone())).collect();
-        let message = relative_message(crate::log::truncate_utf8(&e.message, crate::log::STDERR_LOG_LIMIT), &roots, handle.as_ref().map(|h| h.common_dir.as_path()));
+        let roots: Vec<PathBuf> = worktree
+            .into_iter()
+            .chain(handle.as_ref().map(|h| h.workdir.clone()))
+            .collect();
+        let message = relative_message(
+            crate::log::truncate_utf8(&e.message, crate::log::STDERR_LOG_LIMIT),
+            &roots,
+            handle.as_ref().map(|h| h.common_dir.as_path()),
+        );
         if e.kind == GbErrorKind::Cancelled {
             tracing::info!(target: "gitnex_core::write", method = %method, kind = %kind, "write cancelled: {message}");
         } else {
@@ -2646,7 +3368,11 @@ impl Api {
 
     async fn dispatch_inner(&self, req: Request) -> Result<serde_json::Value, GbError> {
         match req {
-            Request::LogFrontend { level, message, stack } => {
+            Request::LogFrontend {
+                level,
+                message,
+                stack,
+            } => {
                 crate::logging::log_frontend(level, &message, stack.as_deref());
                 to_json(())
             }
@@ -2659,36 +3385,78 @@ impl Api {
             Request::LogsDir => to_json(self.log.as_ref().map(|h| h.dir().display().to_string())),
             Request::Diagnostics { ui } => {
                 let git_version = self.cli.check_version().await.ok();
-                to_json(crate::diagnostics::format(&crate::diagnostics::DiagnosticsInput {
-                    app_version: &self.app_version,
-                    runtime: &self.runtime_info,
-                    git_version,
-                    os: crate::diagnostics::os_description(),
-                    session: crate::diagnostics::session_description(),
-                    ui: &ui,
-                }))
+                to_json(crate::diagnostics::format(
+                    &crate::diagnostics::DiagnosticsInput {
+                        app_version: &self.app_version,
+                        runtime: &self.runtime_info,
+                        git_version,
+                        os: crate::diagnostics::os_description(),
+                        session: crate::diagnostics::session_description(),
+                        ui: &ui,
+                    },
+                ))
             }
             Request::OpenLogsFolder => {
-                let dir = self.log.as_ref().map(|h| h.dir().to_path_buf()).ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "no log folder in this build"))?;
-                let launcher = self.openers.as_ref().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "opening folders isn't available here"))?.launcher.clone();
-                let find = |list: &[Opener]| list.iter().find(|o| o.kind == OpenerKind::FileManager).cloned();
+                let dir = self
+                    .log
+                    .as_ref()
+                    .map(|h| h.dir().to_path_buf())
+                    .ok_or_else(|| {
+                        GbError::new(GbErrorKind::InvalidInput, "no log folder in this build")
+                    })?;
+                let launcher = self
+                    .openers
+                    .as_ref()
+                    .ok_or_else(|| {
+                        GbError::new(
+                            GbErrorKind::InvalidInput,
+                            "opening folders isn't available here",
+                        )
+                    })?
+                    .launcher
+                    .clone();
+                let find = |list: &[Opener]| {
+                    list.iter()
+                        .find(|o| o.kind == OpenerKind::FileManager)
+                        .cloned()
+                };
                 let manager = match find(&self.openers(false).await?) {
                     Some(o) => o,
-                    None => find(&self.openers(true).await?).ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "no file manager on this machine"))?,
+                    None => find(&self.openers(true).await?).ok_or_else(|| {
+                        GbError::new(GbErrorKind::InvalidInput, "no file manager on this machine")
+                    })?,
                 };
                 let cmd = manager.command(&dir, None);
                 blocking(move || launcher(&cmd)).await?;
                 to_json(())
             }
             Request::OpenRepo { path } => to_json(self.open_repo(&path).await?),
-            Request::InitRepo { path, branch, readme } => to_json(self.init_repo(&path, branch, readme).await?),
-            Request::Graph { repo, limit, pin, rescan, active, view } => {
+            Request::InitRepo {
+                path,
+                branch,
+                readme,
+            } => to_json(self.init_repo(&path, branch, readme).await?),
+            Request::Graph {
+                repo,
+                limit,
+                pin,
+                rescan,
+                active,
+                view,
+            } => {
                 let h = self.handle(repo)?;
                 let mut opts = self.build_options(&h, limit, pin, active, view).await?;
                 // The watcher keeps the worktree shown responsive (the others throttled).
-                h.wip.set_active(opts.active.as_deref().unwrap_or(&h.workdir));
+                h.wip
+                    .set_active(opts.active.as_deref().unwrap_or(&h.workdir));
                 opts.rescan = rescan.unwrap_or(false) || !self.status_is_watched(repo);
-                let (payload, texts) = build_graph_with_text(h.repo.clone(), h.workdir.clone(), self.cli.clone(), opts).await?;
+                let (payload, texts) = build_graph_with_text(
+                    h.repo.clone(),
+                    h.workdir.clone(),
+                    self.cli.clone(),
+                    opts,
+                )
+                .await?;
                 {
                     // Find searches this window now; the path index carries over (find.rs).
                     let mut snapshot = h.snapshot.lock().expect("snapshot poisoned");
@@ -2698,33 +3466,88 @@ impl Api {
                 to_json(payload)
             }
             // --- branch presets ---
-            Request::GraphReveal { repo, limit, pin, active, view, key, below } => {
+            Request::GraphReveal {
+                repo,
+                limit,
+                pin,
+                active,
+                view,
+                key,
+                below,
+            } => {
                 let h = self.handle(repo)?;
-                let opts = self.build_options(&h, limit, pin, active, Some(view)).await?;
-                to_json(crate::snapshot::reveal_graph(h.repo.clone(), h.workdir.clone(), self.cli.clone(), opts, &key, below).await?)
+                let opts = self
+                    .build_options(&h, limit, pin, active, Some(view))
+                    .await?;
+                to_json(
+                    crate::snapshot::reveal_graph(
+                        h.repo.clone(),
+                        h.workdir.clone(),
+                        self.cli.clone(),
+                        opts,
+                        &key,
+                        below,
+                    )
+                    .await?,
+                )
             }
-            Request::BranchPresetPreview { repo, limit, pin, view } => {
+            Request::BranchPresetPreview {
+                repo,
+                limit,
+                pin,
+                view,
+            } => {
                 let h = self.handle(repo)?;
                 let opts = self.build_options(&h, limit, pin, None, Some(view)).await?;
-                to_json(crate::snapshot::preview_graph(h.repo.clone(), h.workdir.clone(), self.cli.clone(), opts).await?)
+                to_json(
+                    crate::snapshot::preview_graph(
+                        h.repo.clone(),
+                        h.workdir.clone(),
+                        self.cli.clone(),
+                        opts,
+                    )
+                    .await?,
+                )
             }
-            Request::GraphHiddenOwner { repo, limit, pin, active, view, sha } => {
+            Request::GraphHiddenOwner {
+                repo,
+                limit,
+                pin,
+                active,
+                view,
+                sha,
+            } => {
                 let h = self.handle(repo)?;
-                let opts = self.build_options(&h, limit, pin, active, Some(view)).await?;
-                to_json(crate::snapshot::hidden_owner(h.repo.clone(), h.workdir.clone(), self.cli.clone(), opts, &sha).await?)
+                let opts = self
+                    .build_options(&h, limit, pin, active, Some(view))
+                    .await?;
+                to_json(
+                    crate::snapshot::hidden_owner(
+                        h.repo.clone(),
+                        h.workdir.clone(),
+                        self.cli.clone(),
+                        opts,
+                        &sha,
+                    )
+                    .await?,
+                )
             }
             // --- end branch presets ---
             Request::FindText { repo, query } => to_json(self.find_text(repo, &query)?),
             Request::FindPaths { repo, query } => to_json(self.find_paths(repo, &query).await?),
             Request::LocateCommit { repo, sha } => to_json(self.locate_commit(repo, &sha).await?),
-            Request::SearchHistory { repo, query } => to_json(self.search_history(repo, &query).await?),
+            Request::SearchHistory { repo, query } => {
+                to_json(self.search_history(repo, &query).await?)
+            }
             Request::CommandLog => to_json(self.cli.log().entries()),
             Request::RequestLog => to_json(self.requests.entries()),
             Request::LaunchRepo => to_json(&self.launch_repo),
             Request::TakeOpenRequests => to_json(self.take_open_requests()),
             Request::CommitMessage { repo, id } => {
                 let h = self.handle(repo)?;
-                to_json(blocking(move || read_commit_message(&h.repo.to_thread_local(), &id)).await?)
+                to_json(
+                    blocking(move || read_commit_message(&h.repo.to_thread_local(), &id)).await?,
+                )
             }
             Request::CommitDetails { repo, id } => {
                 let h = self.handle(repo)?;
@@ -2751,35 +3574,85 @@ impl Api {
                             let _computing = h.wip.list_read(Path::new(worktree)).await;
                             match h.wip.fresh_lists(Path::new(worktree)) {
                                 Some(l) => l,
-                                None => crate::watch::read_and_keep_lists(&h.repo, &self.cli, &h.wip, &crate::platform::fs::canonicalize(Path::new(worktree))?).await?,
+                                None => {
+                                    crate::watch::read_and_keep_lists(
+                                        &h.repo,
+                                        &self.cli,
+                                        &h.wip,
+                                        &crate::platform::fs::canonicalize(Path::new(worktree))?,
+                                    )
+                                    .await?
+                                }
                             }
                         }
                     };
                     // Read: an inactive worktree's watcher keeps them current while they are.
                     h.wip.mark_served(Path::new(worktree));
-                    return to_json(if *staged { &*lists.staged } else { &*lists.unstaged });
+                    return to_json(if *staged {
+                        &*lists.staged
+                    } else {
+                        &*lists.unstaged
+                    });
                 }
                 let wt = match &spec {
-                    DiffSpec::Worktree { worktree, .. } | DiffSpec::Wip { worktree, .. } => Some(self.worktree_dir(&h, worktree).await?),
+                    DiffSpec::Worktree { worktree, .. } | DiffSpec::Wip { worktree, .. } => {
+                        Some(self.worktree_dir(&h, worktree).await?)
+                    }
                     DiffSpec::Commit { .. } | DiffSpec::Compare { .. } => None,
                 };
                 to_json(file_list(&h.repo, &self.cli, &h.workdir, &spec, wt.as_deref()).await?)
             }
-            Request::DiffContents { repo, path, old, new, force, old_path } => {
+            Request::DiffContents {
+                repo,
+                path,
+                old,
+                new,
+                force,
+                old_path,
+            } => {
                 let h = self.handle(repo)?;
                 let old = self.resolve_side(&h, &path, old).await?;
                 let new = self.resolve_side(&h, &path, new).await?;
                 let (repo, p, o, n) = (h.repo.clone(), path.clone(), old.clone(), new.clone());
-                let mut c = blocking(move || diff_contents_renamed(&repo.to_thread_local(), &p, old_path.as_deref(), &o, &n, force)).await?;
+                let mut c = blocking(move || {
+                    diff_contents_renamed(
+                        &repo.to_thread_local(),
+                        &p,
+                        old_path.as_deref(),
+                        &o,
+                        &n,
+                        force,
+                    )
+                })
+                .await?;
                 // A binary shows as a capped hex dump: no large-file prompt, whatever its size.
-                crate::hex::ungate_binary(&h.repo, &self.cli, &h.workdir, &path, &old, &new, &mut c).await?;
+                crate::hex::ungate_binary(
+                    &h.repo, &self.cli, &h.workdir, &path, &old, &new, &mut c,
+                )
+                .await?;
                 to_json(c)
             }
-            Request::HexDump { repo, path, old, new } => {
+            Request::HexDump {
+                repo,
+                path,
+                old,
+                new,
+            } => {
                 let h = self.handle(repo)?;
                 let old = self.resolve_side(&h, &path, old).await?;
                 let new = self.resolve_side(&h, &path, new).await?;
-                to_json(crate::hex::hex_dump(&h.repo, &self.cli, &h.workdir, &path, old, new, crate::hex::HEX_CAP).await?)
+                to_json(
+                    crate::hex::hex_dump(
+                        &h.repo,
+                        &self.cli,
+                        &h.workdir,
+                        &path,
+                        old,
+                        new,
+                        crate::hex::HEX_CAP,
+                    )
+                    .await?,
+                )
             }
             Request::TreeFiles { repo, id } => {
                 let h = self.handle(repo)?;
@@ -2791,12 +3664,18 @@ impl Api {
                 let root = self.worktree_dir(&h, &worktree).await?;
                 to_json(blocking(move || crate::tree::worktree_files(&root)).await?)
             }
-            Request::WorktreePathKind { repo, worktree, path } => {
+            Request::WorktreePathKind {
+                repo,
+                worktree,
+                path,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 to_json(blocking(move || crate::tree::path_kind(&root, &path)).await?)
             }
-            Request::PeekRepo { path } => to_json(blocking(move || crate::details::peek_repo(Path::new(&path))).await?),
+            Request::PeekRepo { path } => {
+                to_json(blocking(move || crate::details::peek_repo(Path::new(&path))).await?)
+            }
             Request::Signature { repo, id } => {
                 let h = self.handle(repo)?;
                 let id = parse_oid(&id)?;
@@ -2804,15 +3683,30 @@ impl Api {
                 let (repo_handle, include) = (h.repo.clone(), self.cli.include_path());
                 let stamp = blocking(move || {
                     let repo = repo_handle.to_thread_local();
-                    Ok(crate::signature::config_stamp(repo.git_dir(), repo.common_dir(), include.as_deref(), crate::signature::config_files(&repo)))
+                    Ok(crate::signature::config_stamp(
+                        repo.git_dir(),
+                        repo.common_dir(),
+                        include.as_deref(),
+                        crate::signature::config_files(&repo),
+                    ))
                 })
                 .await?;
-                if let Some(s) = self.signatures.lock().expect("signatures poisoned").get(&cache_key, &stamp) {
+                if let Some(s) = self
+                    .signatures
+                    .lock()
+                    .expect("signatures poisoned")
+                    .get(&cache_key, &stamp)
+                {
                     return to_json(s);
                 }
                 let signed = parse_commit(&read_commit(&h.repo.to_thread_local(), id)?)?.signed;
-                let s = signature_status(&self.cli, &h.workdir, &self.tmp_dir()?, id, signed).await?;
-                self.signatures.lock().expect("signatures poisoned").put(cache_key, s.clone(), stamp);
+                let s =
+                    signature_status(&self.cli, &h.workdir, &self.tmp_dir()?, id, signed).await?;
+                self.signatures.lock().expect("signatures poisoned").put(
+                    cache_key,
+                    s.clone(),
+                    stamp,
+                );
                 to_json(s)
             }
             Request::Avatar { email, repo, name } => {
@@ -2822,7 +3716,9 @@ impl Api {
                 if forge_avatars
                     && let (Some(hub), Some(repo)) = (&self.forge, repo)
                     && let Ok(h) = self.handle(repo)
-                    && let Some(found) = hub.avatar(&self.store, &self.forge_remotes_of(&h), &email).await
+                    && let Some(found) = hub
+                        .avatar(&self.store, &self.forge_remotes_of(&h), &email)
+                        .await
                 {
                     return to_json(Some(found));
                 }
@@ -2840,7 +3736,14 @@ impl Api {
                 if forge_avatars
                     && let (Some(hub), Some(repo)) = (&self.forge, repo)
                     && let Ok(h) = self.handle(repo)
-                    && let Some(found) = hub.author_avatar(&self.store, &self.forge_remotes_of(&h), &email, name.as_deref()).await
+                    && let Some(found) = hub
+                        .author_avatar(
+                            &self.store,
+                            &self.forge_remotes_of(&h),
+                            &email,
+                            name.as_deref(),
+                        )
+                        .await
                 {
                     return to_json(Some(found));
                 }
@@ -2859,33 +3762,79 @@ impl Api {
             Request::ForgeAvatarImage { url } => {
                 let settings = self.store.state().settings;
                 match &self.forge {
-                    Some(hub) if settings.forge_avatars => to_json(hub.avatar_at(&self.store, &url, settings.gravatar).await),
+                    Some(hub) if settings.forge_avatars => {
+                        to_json(hub.avatar_at(&self.store, &url, settings.gravatar).await)
+                    }
                     _ => to_json(Option::<AvatarPayload>::None),
                 }
             }
             // --- 5A T1 ---
-            Request::ForgeImage { repo, url, user_allowed } => {
+            Request::ForgeImage {
+                repo,
+                url,
+                user_allowed,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.image(&self.store, &list, &url, user_allowed).await?)
+                to_json(
+                    self.forge_hub()?
+                        .image(&self.store, &list, &url, user_allowed)
+                        .await?,
+                )
             }
             // --- end 5A T1 ---
-            Request::ForgeVideo { repo, url, user_allowed } => {
+            Request::ForgeVideo {
+                repo,
+                url,
+                user_allowed,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.video(&self.store, &list, &url, user_allowed).await?)
+                to_json(
+                    self.forge_hub()?
+                        .video(&self.store, &list, &url, user_allowed)
+                        .await?,
+                )
             }
-            Request::ForgeOpenVideo { repo, url, user_allowed } => {
+            Request::ForgeOpenVideo {
+                repo,
+                url,
+                user_allowed,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                let cache = self.open_cache.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "videos can't be opened here"))?;
-                let opener = self.url_opener.clone().ok_or_else(|| GbError::other("opening files isn't available here"))?;
-                let (mime, base64) = match self.forge_hub()?.video(&self.store, &list, &url, user_allowed).await? {
+                let cache = self.open_cache.clone().ok_or_else(|| {
+                    GbError::new(GbErrorKind::InvalidInput, "videos can't be opened here")
+                })?;
+                let opener = self
+                    .url_opener
+                    .clone()
+                    .ok_or_else(|| GbError::other("opening files isn't available here"))?;
+                let (mime, base64) = match self
+                    .forge_hub()?
+                    .video(&self.store, &list, &url, user_allowed)
+                    .await?
+                {
                     crate::forge::ForgeImage::Found { mime, base64 } => (mime, base64),
-                    crate::forge::ForgeImage::Missing { reason } => return Err(GbError::new(GbErrorKind::NotFound, format!("Couldn't load the video: {reason}"))),
-                    _ => return Err(GbError::new(GbErrorKind::NotFound, "Couldn't load the video")),
+                    crate::forge::ForgeImage::Missing { reason } => {
+                        return Err(GbError::new(
+                            GbErrorKind::NotFound,
+                            format!("Couldn't load the video: {reason}"),
+                        ));
+                    }
+                    _ => {
+                        return Err(GbError::new(
+                            GbErrorKind::NotFound,
+                            "Couldn't load the video",
+                        ));
+                    }
                 };
-                let (key, name) = (crate::forge::image::video_key(&url), crate::forge::image::video_file_name(&url, &mime));
+                let (key, name) = (
+                    crate::forge::image::video_key(&url),
+                    crate::forge::image::video_file_name(&url, &mime),
+                );
                 let path = blocking(move || {
                     use base64::Engine;
-                    let bytes = base64::engine::general_purpose::STANDARD.decode(base64).map_err(|e| GbError::other(e.to_string()))?;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(base64)
+                        .map_err(|e| GbError::other(e.to_string()))?;
                     crate::open_copy::write_copy(&cache, &key, &name, &bytes)
                 })
                 .await?;
@@ -2902,45 +3851,79 @@ impl Api {
                 let captured = self.cli.child_env().await;
                 blocking(move || {
                     let mut env = DetectEnv::from_system();
-                    if let Some(path) = captured.as_ref().and_then(|vars| vars.iter().find(|(k, _)| k == "PATH")).map(|(_, v)| v.clone()) {
-                        env.path = std::env::split_paths(&path).filter(|d| d.is_absolute()).collect();
+                    if let Some(path) = captured
+                        .as_ref()
+                        .and_then(|vars| vars.iter().find(|(k, _)| k == "PATH"))
+                        .map(|(_, v)| v.clone())
+                    {
+                        env.path = std::env::split_paths(&path)
+                            .filter(|d| d.is_absolute())
+                            .collect();
                     }
                     template_opener(CUSTOM_ID, "Custom", &template, "/", &env).map(|_| ())
                 })
                 .await?;
                 to_json(())
             }
-            Request::OpenIn { repo, worktree, path, line, opener, source, fallback } => {
+            Request::OpenIn {
+                repo,
+                worktree,
+                path,
+                line,
+                opener,
+                source,
+                fallback,
+            } => {
                 let h = self.handle(repo)?;
                 if line == Some(0) {
                     return Err(GbError::new(GbErrorKind::InvalidInput, "lines start at 1"));
                 }
-                let unavailable = || GbError::new(GbErrorKind::InvalidInput, "opening files isn't available here");
+                let unavailable = || {
+                    GbError::new(
+                        GbErrorKind::InvalidInput,
+                        "opening files isn't available here",
+                    )
+                };
                 if opener == CHOOSER_ID {
                     let chooser = self.chooser.clone().ok_or_else(unavailable)?;
                     let root = self.worktree_dir(&h, &worktree).await?;
-                    let target = self.open_in_file(&h, &root, &path, source, fallback).await?;
+                    let target = self
+                        .open_in_file(&h, &root, &path, source, fallback)
+                        .await?;
                     blocking(move || chooser(&target)).await?;
                     return to_json(());
                 }
                 if opener == DEFAULT_APP_ID {
                     let default_app = self.default_app.clone().ok_or_else(unavailable)?;
                     let root = self.worktree_dir(&h, &worktree).await?;
-                    let target = self.open_in_file(&h, &root, &path, source, fallback).await?;
+                    let target = self
+                        .open_in_file(&h, &root, &path, source, fallback)
+                        .await?;
                     // A folder's own handler is the file manager, which "Show in" already is.
                     if target.is_dir() {
-                        return Err(GbError::new(GbErrorKind::InvalidInput, format!("{path} is a folder")));
+                        return Err(GbError::new(
+                            GbErrorKind::InvalidInput,
+                            format!("{path} is a folder"),
+                        ));
                     }
                     // Never a file the OS would run (SECURITY.md), by its shown name and by what
                     // it resolves to; an old version's copy by the name it's shown under.
                     blocking(move || {
-                        crate::openers::default_app::check_not_a_program(Path::new(&path), &target)?;
+                        crate::openers::default_app::check_not_a_program(
+                            Path::new(&path),
+                            &target,
+                        )?;
                         default_app(&target)
                     })
                     .await?;
                     return to_json(());
                 }
-                let launcher = self.openers.as_ref().ok_or_else(unavailable)?.launcher.clone();
+                let launcher = self
+                    .openers
+                    .as_ref()
+                    .ok_or_else(unavailable)?
+                    .launcher
+                    .clone();
                 let root = self.worktree_dir(&h, &worktree).await?;
                 let o = if opener == CUSTOM_ID {
                     self.custom_opener(&h, &root).await?
@@ -2949,15 +3932,30 @@ impl Api {
                     let find = |list: &[Opener]| list.iter().find(|o| o.id == opener).cloned();
                     match find(&self.openers(false).await?) {
                         Some(o) => o,
-                        None => find(&self.openers(true).await?).ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, format!("no opener {opener:?} on this machine")))?,
+                        None => find(&self.openers(true).await?).ok_or_else(|| {
+                            GbError::new(
+                                GbErrorKind::InvalidInput,
+                                format!("no opener {opener:?} on this machine"),
+                            )
+                        })?,
                     }
                 };
                 // A file manager that can show the file selected (File Explorer) gets the file
                 // while it's in the working tree; the others, or a file that's gone, its folder.
-                let reveal = (o.kind == OpenerKind::FileManager).then(|| worktree_file(&root, &path).ok().filter(|f| f.is_file()).and_then(|f| o.reveal_command(&f))).flatten();
+                let reveal = (o.kind == OpenerKind::FileManager)
+                    .then(|| {
+                        worktree_file(&root, &path)
+                            .ok()
+                            .filter(|f| f.is_file())
+                            .and_then(|f| o.reveal_command(&f))
+                    })
+                    .flatten();
                 let target = match o.kind {
                     OpenerKind::FileManager => folder_target(&root, &path)?,
-                    OpenerKind::Editor | OpenerKind::Chooser | OpenerKind::DefaultApp => self.open_in_file(&h, &root, &path, source, fallback).await?,
+                    OpenerKind::Editor | OpenerKind::Chooser | OpenerKind::DefaultApp => {
+                        self.open_in_file(&h, &root, &path, source, fallback)
+                            .await?
+                    }
                 };
                 if o.kind == OpenerKind::Editor {
                     // Spec §5.3: editors start with the login shell's environment, which the
@@ -2970,7 +3968,10 @@ impl Api {
             }
             Request::OpenUrl { url } => {
                 validate_web_url(&url)?;
-                let opener = self.url_opener.clone().ok_or_else(|| GbError::other("opening links isn't available here"))?;
+                let opener = self
+                    .url_opener
+                    .clone()
+                    .ok_or_else(|| GbError::other("opening links isn't available here"))?;
                 // Off the runtime's workers: Windows's waits for the shell to start the handler.
                 blocking(move || opener(&url)).await?;
                 to_json(())
@@ -2992,7 +3993,9 @@ impl Api {
                 self.apply_profile_git_config()?;
                 to_json(())
             }
-            Request::CreateProfile { name, color } => to_json(self.store.create_profile(&name, &color)?),
+            Request::CreateProfile { name, color } => {
+                to_json(self.store.create_profile(&name, &color)?)
+            }
             Request::SwitchProfile { id } => {
                 let mut st = self.store.switch_profile(&id)?;
                 st.profile.migrate_repos_folders(self.home.as_deref());
@@ -3002,7 +4005,11 @@ impl Api {
             Request::DeleteProfile { id } => {
                 // --- 4A T5: its tokens go with it ---
                 let gone = self.store.profile(&id);
-                let ai_key = crate::forge::AccountKey { profile: id.clone(), host: "ai".into(), id: "commit".into() };
+                let ai_key = crate::forge::AccountKey {
+                    profile: id.clone(),
+                    host: "ai".into(),
+                    id: "commit".into(),
+                };
                 let ai_tokens = self.ai_tokens.clone();
                 let left = self.store.delete_profile(&id)?;
                 if let (Some(hub), Some(p)) = (&self.forge, gone) {
@@ -3026,14 +4033,20 @@ impl Api {
                 to_json(())
             }
             Request::AiModels { endpoint } => to_json(self.ai_models(endpoint).await?),
-            Request::AiGenerateCommitMessage { repo, worktree } => to_json(self.ai_commit_message(repo, &worktree).await?),
+            Request::AiGenerateCommitMessage { repo, worktree } => {
+                to_json(self.ai_commit_message(repo, &worktree).await?)
+            }
             Request::AuthAnswer { prompt, answer } => {
-                let server = self.askpass.get().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "askpass is not running"))?;
+                let server = self.askpass.get().ok_or_else(|| {
+                    GbError::new(GbErrorKind::InvalidInput, "askpass is not running")
+                })?;
                 server.answer(prompt, answer)?;
                 to_json(())
             }
             Request::AuthUseSsh { prompt } => {
-                let server = self.askpass.get().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "askpass is not running"))?;
+                let server = self.askpass.get().ok_or_else(|| {
+                    GbError::new(GbErrorKind::InvalidInput, "askpass is not running")
+                })?;
                 server.use_ssh(prompt)?;
                 to_json(())
             }
@@ -3041,17 +4054,45 @@ impl Api {
                 self.ops.cancel(op);
                 to_json(())
             }
-            Request::Fetch { repo, background, remote, mr_head } => to_json(self.fetch_remote(repo, background, remote, mr_head).await?),
+            Request::Fetch {
+                repo,
+                background,
+                remote,
+                mr_head,
+            } => to_json(self.fetch_remote(repo, background, remote, mr_head).await?),
             Request::DropCompareRefs { repo } => to_json(self.drop_compare_refs(repo).await?),
             // --- 4A T7 ---
-            Request::AddRemote { repo, worktree, name, url } => {
-                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::remotes::AddRemote { name, url }).await?;
+            Request::AddRemote {
+                repo,
+                worktree,
+                name,
+                url,
+            } => {
+                let done = crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::remotes::AddRemote { name, url },
+                )
+                .await?;
                 self.reopen_repo(repo)?;
                 to_json(done)
             }
             // --- end 4A T7 ---
-            Request::RemoveRemote { repo, worktree, name } => {
-                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::remotes::RemoveRemote { name }).await;
+            Request::RemoveRemote {
+                repo,
+                worktree,
+                name,
+            } => {
+                let done = crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::remotes::RemoveRemote { name },
+                )
+                .await;
                 // The handle's config snapshot still lists it, even after a removal that failed
                 // half-way. A failed reopen doesn't make the removal a failure: the handle is
                 // only stale until the next one.
@@ -3060,26 +4101,128 @@ impl Api {
                 }
                 to_json(done?)
             }
-            Request::SwitchRemoteToSsh { repo, worktree, remote, url } => {
-                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::remotes::SwitchRemoteUrl { name: remote, ssh: Some(url) }).await?;
+            Request::SwitchRemoteToSsh {
+                repo,
+                worktree,
+                remote,
+                url,
+            } => {
+                let done = crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::remotes::SwitchRemoteUrl {
+                        name: remote,
+                        ssh: Some(url),
+                    },
+                )
+                .await?;
                 self.reopen_repo(repo)?;
                 to_json(done)
             }
-            Request::SwitchRemoteBack { repo, worktree, remote } => {
-                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::remotes::SwitchRemoteUrl { name: remote, ssh: None }).await?;
+            Request::SwitchRemoteBack {
+                repo,
+                worktree,
+                remote,
+            } => {
+                let done = crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::remotes::SwitchRemoteUrl {
+                        name: remote,
+                        ssh: None,
+                    },
+                )
+                .await?;
                 self.reopen_repo(repo)?;
                 to_json(done)
             }
-            Request::Submodules { repo, worktree } => to_json(self.submodules(repo, &worktree).await?),
-            Request::SubmoduleUpdate { repo, worktree, path, confirm } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::submodules::UpdateSubmodules { path, confirm: confirm.unwrap_or(false) }).await?),
-            Request::SubmoduleSync { repo, worktree } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::submodules::SyncSubmodules).await?),
-            Request::SubmoduleAdd { repo, worktree, url, path, branch } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::submodules::AddSubmodule { url, path, branch }).await?),
-            Request::SubmoduleRemove { repo, worktree, path } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::submodules::RemoveSubmodule { path }).await?),
+            Request::Submodules { repo, worktree } => {
+                to_json(self.submodules(repo, &worktree).await?)
+            }
+            Request::SubmoduleUpdate {
+                repo,
+                worktree,
+                path,
+                confirm,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::submodules::UpdateSubmodules {
+                        path,
+                        confirm: confirm.unwrap_or(false),
+                    },
+                )
+                .await?,
+            ),
+            Request::SubmoduleSync { repo, worktree } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::submodules::SyncSubmodules,
+                )
+                .await?,
+            ),
+            Request::SubmoduleAdd {
+                repo,
+                worktree,
+                url,
+                path,
+                branch,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::submodules::AddSubmodule { url, path, branch },
+                )
+                .await?,
+            ),
+            Request::SubmoduleRemove {
+                repo,
+                worktree,
+                path,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::submodules::RemoveSubmodule { path },
+                )
+                .await?,
+            ),
             // --- 4A T5 ---
-            Request::ForgeAccounts => to_json(self.forge.as_ref().map(|f| f.accounts(&self.store)).unwrap_or_default()),
-            Request::AddForgeAccount { host, kind, token, account } => to_json(self.forge_hub()?.add_account(&self.store, &host, kind, token, account).await?),
+            Request::ForgeAccounts => to_json(
+                self.forge
+                    .as_ref()
+                    .map(|f| f.accounts(&self.store))
+                    .unwrap_or_default(),
+            ),
+            Request::AddForgeAccount {
+                host,
+                kind,
+                token,
+                account,
+                base_url,
+            } => to_json(
+                self.forge_hub()?
+                    .add_account_with_base(&self.store, &host, kind, token, account, base_url)
+                    .await?,
+            ),
             Request::RemoveForgeAccount { host, account } => {
-                self.forge_hub()?.remove_account(&self.store, &host, account).await?;
+                self.forge_hub()?
+                    .remove_account(&self.store, &host, account)
+                    .await?;
                 to_json(())
             }
             Request::DetectForge { host } => {
@@ -3094,13 +4237,20 @@ impl Api {
                     Some(ForgeKind::Forgejo) => HostKind::Forgejo,
                     Some(ForgeKind::GitLab) => HostKind::GitLab,
                     Some(ForgeKind::GitHub) => HostKind::GitHub,
+                    Some(ForgeKind::Bitbucket) => HostKind::Bitbucket,
                     None => HostKind::Generic,
                 })
             }
-            Request::ForgeTokenPage { host, kind, classic } => {
+            Request::ForgeTokenPage {
+                host,
+                kind,
+                classic,
+            } => {
                 let host = crate::forge::accounts::normalize_host(&host)?;
                 crate::forge::accounts::check_kind_host(kind, &host)?;
-                to_json(crate::forge::accounts::token_page_url_for(kind, &host, classic))
+                to_json(crate::forge::accounts::token_page_url_for(
+                    kind, &host, classic,
+                ))
             }
             // --- end 4A T5 ---
             // --- 4A T6 ---
@@ -3123,17 +4273,34 @@ impl Api {
             }
             Request::ForgeProjectSettings { repo, remote } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.project_settings(&self.store, &list, &remote).await?)
+                to_json(
+                    self.forge_hub()?
+                        .project_settings(&self.store, &list, &remote)
+                        .await?,
+                )
             }
-            Request::ForgeForks { repo, remote, page, per_page } => {
+            Request::ForgeForks {
+                repo,
+                remote,
+                page,
+                per_page,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.forks_page(&self.store, &list, &remote, page, per_page).await?)
+                to_json(
+                    self.forge_hub()?
+                        .forks_page(&self.store, &list, &remote, page, per_page)
+                        .await?,
+                )
             }
             // --- end 4A T6 ---
             // --- 4B T1 ---
             Request::ForgeMrList { repo, filter } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.mr_list(&self.store, &list, filter).await?)
+                to_json(
+                    self.forge_hub()?
+                        .mr_list(&self.store, &list, filter)
+                        .await?,
+                )
             }
             Request::ForgeBranchMrs { repo, refs } => {
                 let h = self.handle(repo)?;
@@ -3141,23 +4308,41 @@ impl Api {
                 // Off the async workers (it reads every ref); a failure costs only the tips (no
                 // merged/closed badge this poll) and the stack-base skip, never the poll.
                 let (repo_h, asked) = (h.clone(), refs.clone());
-                let tips = blocking(move || crate::forge::mrs::badge_refs(&repo_h.repo.to_thread_local(), &asked)).await.unwrap_or_else(|e| {
+                let tips = blocking(move || {
+                    crate::forge::mrs::badge_refs(&repo_h.repo.to_thread_local(), &asked)
+                })
+                .await
+                .unwrap_or_else(|e| {
                     tracing::warn!("forge badges: couldn't read the refs' tips: {}", e.message);
                     Default::default()
                 });
-                to_json(self.forge_hub()?.branch_mrs(&self.store, &list, &refs, &tips).await?)
+                to_json(
+                    self.forge_hub()?
+                        .branch_mrs(&self.store, &list, &refs, &tips)
+                        .await?,
+                )
             }
             Request::ForgeCachedMrs { repo, refs, filter } => {
-                let Some(hub) = self.forge.clone() else { return to_json(None::<crate::forge::mrs::CachedMrs>) };
+                let Some(hub) = self.forge.clone() else {
+                    return to_json(None::<crate::forge::mrs::CachedMrs>);
+                };
                 let h = self.handle(repo)?;
                 let list = self.forge_remotes_of(&h);
                 let (repo_h, asked) = (h.clone(), refs.clone());
-                let tips = blocking(move || crate::forge::mrs::badge_refs(&repo_h.repo.to_thread_local(), &asked)).await.unwrap_or_default();
+                let tips = blocking(move || {
+                    crate::forge::mrs::badge_refs(&repo_h.repo.to_thread_local(), &asked)
+                })
+                .await
+                .unwrap_or_default();
                 to_json(hub.cached_mrs(&self.store, &list, &refs, &tips, filter))
             }
             Request::ForgeMrDetail { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.mr_detail(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .mr_detail(&self.store, &list, number)
+                        .await?,
+                )
             }
             Request::ForgeRefresh { repo } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
@@ -3166,99 +4351,224 @@ impl Api {
             }
             Request::ForgeMrDiscussions { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.mr_discussions(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .mr_discussions(&self.store, &list, number)
+                        .await?,
+                )
             }
             Request::ForgeProjectByPath { repo, path } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.project_by_path(&self.store, &list, &path).await?)
+                to_json(
+                    self.forge_hub()?
+                        .project_by_path(&self.store, &list, &path)
+                        .await?,
+                )
             }
-            Request::ForgeReply { repo, number, discussion, body } => {
+            Request::ForgeReply {
+                repo,
+                number,
+                discussion,
+                body,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.reply(&self.store, &list, number, crate::forge::NewNote { discussion, body }).await?)
+                to_json(
+                    self.forge_hub()?
+                        .reply(
+                            &self.store,
+                            &list,
+                            number,
+                            crate::forge::NewNote { discussion, body },
+                        )
+                        .await?,
+                )
             }
             Request::ForgeApprove { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                self.forge_hub()?.approve(&self.store, &list, number).await?;
+                self.forge_hub()?
+                    .approve(&self.store, &list, number)
+                    .await?;
                 to_json(())
             }
             Request::ForgeRequestChanges { repo, number, body } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                self.forge_hub()?.request_changes(&self.store, &list, number, body).await?;
+                self.forge_hub()?
+                    .request_changes(&self.store, &list, number, body)
+                    .await?;
                 to_json(())
             }
             // --- MR round 2 ---
-            Request::ForgeReview { repo, number, review } => {
+            Request::ForgeReview {
+                repo,
+                number,
+                review,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.review(&self.store, &list, number, review).await?)
+                to_json(
+                    self.forge_hub()?
+                        .review(&self.store, &list, number, review)
+                        .await?,
+                )
             }
             Request::ForgePeopleLimits { repo, remote } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.people_limits(&self.store, &list, &remote).await?)
+                to_json(
+                    self.forge_hub()?
+                        .people_limits(&self.store, &list, &remote)
+                        .await?,
+                )
             }
             Request::ForgeSetSubscribed { repo, number, on } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.set_subscribed(&self.store, &list, number, on).await?)
+                to_json(
+                    self.forge_hub()?
+                        .set_subscribed(&self.store, &list, number, on)
+                        .await?,
+                )
             }
             // --- end MR round 2 ---
             // --- comment actions ---
-            Request::ForgeReact { repo, number, note, name, on } => {
+            Request::ForgeReact {
+                repo,
+                number,
+                note,
+                name,
+                on,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.react(&self.store, &list, number, note, name, on).await?)
+                to_json(
+                    self.forge_hub()?
+                        .react(&self.store, &list, number, note, name, on)
+                        .await?,
+                )
             }
-            Request::ForgeEditNote { repo, number, note, body } => {
+            Request::ForgeEditNote {
+                repo,
+                number,
+                note,
+                body,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.edit_note(&self.store, &list, number, note, body).await?)
+                to_json(
+                    self.forge_hub()?
+                        .edit_note(&self.store, &list, number, note, body)
+                        .await?,
+                )
             }
             Request::ForgeDeleteNote { repo, number, note } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                self.forge_hub()?.delete_note(&self.store, &list, number, note).await?;
+                self.forge_hub()?
+                    .delete_note(&self.store, &list, number, note)
+                    .await?;
                 to_json(())
             }
-            Request::ForgeResolve { repo, number, discussion, resolved } => {
+            Request::ForgeResolve {
+                repo,
+                number,
+                discussion,
+                resolved,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.resolve(&self.store, &list, number, discussion, resolved).await?)
+                to_json(
+                    self.forge_hub()?
+                        .resolve(&self.store, &list, number, discussion, resolved)
+                        .await?,
+                )
             }
             // --- end comment actions ---
             // --- review comments ---
             Request::ForgeReviewDiff { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.review_diff(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .review_diff(&self.store, &list, number)
+                        .await?,
+                )
             }
             Request::ForgeReviewDrafts { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.review_drafts(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .review_drafts(&self.store, &list, number)
+                        .await?,
+                )
             }
-            Request::ForgeAddDraft { repo, number, comment } => {
+            Request::ForgeAddDraft {
+                repo,
+                number,
+                comment,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.add_draft(&self.store, &list, number, comment).await?)
+                to_json(
+                    self.forge_hub()?
+                        .add_draft(&self.store, &list, number, comment)
+                        .await?,
+                )
             }
-            Request::ForgeEditDraft { repo, number, id, body } => {
+            Request::ForgeEditDraft {
+                repo,
+                number,
+                id,
+                body,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.edit_draft(&self.store, &list, number, id, body).await?)
+                to_json(
+                    self.forge_hub()?
+                        .edit_draft(&self.store, &list, number, id, body)
+                        .await?,
+                )
             }
             Request::ForgeDeleteDraft { repo, number, id } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                self.forge_hub()?.delete_draft(&self.store, &list, number, id).await?;
+                self.forge_hub()?
+                    .delete_draft(&self.store, &list, number, id)
+                    .await?;
                 to_json(())
             }
-            Request::ForgeSubmitReview { repo, number, review } => {
+            Request::ForgeSubmitReview {
+                repo,
+                number,
+                review,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.submit_review(&self.store, &list, number, review).await?)
+                to_json(
+                    self.forge_hub()?
+                        .submit_review(&self.store, &list, number, review)
+                        .await?,
+                )
             }
             Request::ForgeDiscardReview { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.discard_review(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .discard_review(&self.store, &list, number)
+                        .await?,
+                )
             }
-            Request::ForgeCommentNow { repo, number, comment } => {
+            Request::ForgeCommentNow {
+                repo,
+                number,
+                comment,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.comment_now(&self.store, &list, number, comment).await?)
+                to_json(
+                    self.forge_hub()?
+                        .comment_now(&self.store, &list, number, comment)
+                        .await?,
+                )
             }
             // --- end review comments ---
-            Request::ForgeMerge { repo, number, options } => {
+            Request::ForgeMerge {
+                repo,
+                number,
+                options,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
                 // --- 4D T4: dependents first, so deleting the branch can't close them (Ruling 12) ---
                 let hub = self.forge_hub()?;
-                let guard = hub.before_merge(&self.store, &list, number, options.delete_source_branch).await?;
+                let guard = hub
+                    .before_merge(&self.store, &list, number, options.delete_source_branch)
+                    .await?;
                 // --- end 4D T4 ---
                 let merged = hub.merge(&self.store, &list, number, options).await;
                 // --- 4D T4 ---
@@ -3271,95 +4581,217 @@ impl Api {
             }
             Request::ForgeEditMr { repo, number, edit } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.edit_mr(&self.store, &list, number, edit).await?)
+                to_json(
+                    self.forge_hub()?
+                        .edit_mr(&self.store, &list, number, edit)
+                        .await?,
+                )
             }
-            Request::ForgeSetDraft { repo, number, draft } => {
+            Request::ForgeSetClosed {
+                repo,
+                number,
+                closed,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.set_draft(&self.store, &list, number, draft).await?)
+                to_json(
+                    self.forge_hub()?
+                        .set_closed(&self.store, &list, number, closed)
+                        .await?,
+                )
+            }
+            Request::ForgeSetDraft {
+                repo,
+                number,
+                draft,
+            } => {
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(
+                    self.forge_hub()?
+                        .set_draft(&self.store, &list, number, draft)
+                        .await?,
+                )
             }
             // --- auto-merge ---
-            Request::ForgeSetAutoMerge { repo, number, options } => {
+            Request::ForgeSetAutoMerge {
+                repo,
+                number,
+                options,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.set_auto_merge(&self.store, &list, number, options).await?)
+                to_json(
+                    self.forge_hub()?
+                        .set_auto_merge(&self.store, &list, number, options)
+                        .await?,
+                )
             }
             Request::ForgeCancelAutoMerge { repo, number } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.cancel_auto_merge(&self.store, &list, number).await?)
+                to_json(
+                    self.forge_hub()?
+                        .cancel_auto_merge(&self.store, &list, number)
+                        .await?,
+                )
             }
             // --- end auto-merge ---
-            Request::ForgeUpdateBranch { repo, number, how, expected_sha } => {
+            Request::ForgeUpdateBranch {
+                repo,
+                number,
+                how,
+                expected_sha,
+            } => {
                 let list = self.forge_remotes_of(&*self.handle(repo)?);
-                to_json(self.forge_hub()?.update_branch(&self.store, &list, number, how, expected_sha).await?)
+                to_json(
+                    self.forge_hub()?
+                        .update_branch(&self.store, &list, number, how, expected_sha)
+                        .await?,
+                )
             }
-            Request::MergeBase { repo, a, b } => to_json(merge_base(&self.handle(repo)?.repo.to_thread_local(), &a, &b)?),
+            Request::MergeBase { repo, a, b } => to_json(merge_base(
+                &self.handle(repo)?.repo.to_thread_local(),
+                &a,
+                &b,
+            )?),
             // --- end 4B T1 ---
-              // --- 4C T5 ---
-              Request::ForgeCreateContext { repo, remote, source_remote, branch, target } => {
-                  let hub = self.forge_hub()?;
-                  let h = self.handle(repo)?;
-                  let list = self.forge_remotes_of(&h);
-                  let ask = crate::forge::hub::CreateAsk { remote: &remote, source_remote: &source_remote, branch: &branch, target: &target };
-                  to_json(hub.create_context(&self.store, &self.cli, &h.workdir, &list, ask).await?)
-              }
-              Request::ForgeSearchUsers { repo, remote, query } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.search_users(&self.store, &list, &remote, &query).await?)
-              }
-              Request::ForgeSearchRepos { query } => to_json(self.forge_hub()?.search_repos(&self.store, &query).await?),
-              Request::ForgeLabels { repo, remote, query } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.labels(&self.store, &list, &remote, &query).await?)
-              }
-              Request::ForgeCreateMr { repo, remote, req } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.create_mr(&self.store, &list, &remote, &req).await?)
-              }
-              Request::ForgeCompleteCreate { repo, remote, number, req, parts } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.complete_create(&self.store, &list, &remote, number, &req, &parts).await?)
-              }
-              // --- end 4C T5 ---
-              // --- 4D T3 ---
-              Request::ForgeStack { repo, branches, base, base_ref } => {
-                  let hub = self.forge_hub()?;
-                  // Read the repository before any await: no gix handle crosses one.
-                  let (list, prefills) = {
-                      let h = self.handle(repo)?;
-                      let r = h.repo.to_thread_local();
-                      (self.forge_remotes_of(&h), crate::forge::stack::prefills(&r, &branches, &base_ref))
-                  };
-                  to_json(hub.stack_view(&self.store, &list, &branches, &base, prefills).await?)
-              }
-              Request::ForgeSyncStack { repo, branches, base } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.sync_stack(&self.store, &list, &branches, &base).await?)
-              }
-              Request::ForgeRetarget { repo, number, target } => {
-                  let hub = self.forge_hub()?;
-                  let list = self.forge_remotes_of(&*self.handle(repo)?);
-                  to_json(hub.retarget_mr(&self.store, &list, number, &target).await?)
-              }
-              // --- end 4D T3 ---
+            // --- 4C T5 ---
+            Request::ForgeCreateContext {
+                repo,
+                remote,
+                source_remote,
+                branch,
+                target,
+            } => {
+                let hub = self.forge_hub()?;
+                let h = self.handle(repo)?;
+                let list = self.forge_remotes_of(&h);
+                let ask = crate::forge::hub::CreateAsk {
+                    remote: &remote,
+                    source_remote: &source_remote,
+                    branch: &branch,
+                    target: &target,
+                };
+                to_json(
+                    hub.create_context(&self.store, &self.cli, &h.workdir, &list, ask)
+                        .await?,
+                )
+            }
+            Request::ForgeSearchUsers {
+                repo,
+                remote,
+                query,
+            } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(
+                    hub.search_users(&self.store, &list, &remote, &query)
+                        .await?,
+                )
+            }
+            Request::ForgeSearchRepos { query } => {
+                to_json(self.forge_hub()?.search_repos(&self.store, &query).await?)
+            }
+            Request::ForgeLabels {
+                repo,
+                remote,
+                query,
+            } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(hub.labels(&self.store, &list, &remote, &query).await?)
+            }
+            Request::ForgeCreateMr { repo, remote, req } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(hub.create_mr(&self.store, &list, &remote, &req).await?)
+            }
+            Request::ForgeCompleteCreate {
+                repo,
+                remote,
+                number,
+                req,
+                parts,
+            } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(
+                    hub.complete_create(&self.store, &list, &remote, number, &req, &parts)
+                        .await?,
+                )
+            }
+            // --- end 4C T5 ---
+            // --- 4D T3 ---
+            Request::ForgeStack {
+                repo,
+                branches,
+                base,
+                base_ref,
+            } => {
+                let hub = self.forge_hub()?;
+                // Read the repository before any await: no gix handle crosses one.
+                let (list, prefills) = {
+                    let h = self.handle(repo)?;
+                    let r = h.repo.to_thread_local();
+                    (
+                        self.forge_remotes_of(&h),
+                        crate::forge::stack::prefills(&r, &branches, &base_ref),
+                    )
+                };
+                to_json(
+                    hub.stack_view(&self.store, &list, &branches, &base, prefills)
+                        .await?,
+                )
+            }
+            Request::ForgeSyncStack {
+                repo,
+                branches,
+                base,
+            } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(hub.sync_stack(&self.store, &list, &branches, &base).await?)
+            }
+            Request::ForgeRetarget {
+                repo,
+                number,
+                target,
+            } => {
+                let hub = self.forge_hub()?;
+                let list = self.forge_remotes_of(&*self.handle(repo)?);
+                to_json(hub.retarget_mr(&self.store, &list, number, &target).await?)
+            }
+            // --- end 4D T3 ---
             Request::Clone { url, dest } => to_json(self.clone_repo(url, dest).await?),
             Request::CreateCommitPatch { repo, rev } => {
                 let h = self.handle(repo)?;
                 to_json(crate::patch::commit_patch(&self.cli, &h.workdir, &rev).await?)
             }
-            Request::CreateWorktreePatch { repo, worktree, staged } => {
+            Request::CreateWorktreePatch {
+                repo,
+                worktree,
+                staged,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 to_json(crate::patch::worktree_patch(&self.cli, &root, staged).await?)
             }
-            Request::ApplyPatch { repo, worktree, patch } => {
+            Request::ApplyPatch {
+                repo,
+                worktree,
+                patch,
+            } => {
                 if patch.len() > crate::patch::MAX_PATCH_BYTES {
-                    return Err(GbError::new(GbErrorKind::InvalidInput, "That patch is over 16 MiB"));
+                    return Err(GbError::new(
+                        GbErrorKind::InvalidInput,
+                        "That patch is over 16 MiB",
+                    ));
                 }
-                let done = crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::patch_apply::ApplyPatch { patch }).await?;
+                let done = crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::patch_apply::ApplyPatch { patch },
+                )
+                .await?;
                 to_json(done)
             }
             Request::RepoInfo { repo } => {
@@ -3368,40 +4800,78 @@ impl Api {
             }
             Request::Sidebar { repo } => {
                 let h = self.handle(repo)?;
-                let mut s = crate::shelldata::sidebar(&h.repo, &h.workdir, &self.submodules).await?;
-                crate::write::rewrites::annotate(&self.data_dir, &h.common_dir, &h.repo.to_thread_local(), &mut s.locals);
+                let mut s =
+                    crate::shelldata::sidebar(&h.repo, &h.workdir, &self.submodules).await?;
+                crate::write::rewrites::annotate(
+                    &self.data_dir,
+                    &h.common_dir,
+                    &h.repo.to_thread_local(),
+                    &mut s.locals,
+                );
                 to_json(s)
             }
             Request::LastPush { repo, remote_ref } => {
                 let h = self.handle(repo)?;
                 to_json(blocking(move || crate::shelldata::last_push(&h.repo, &remote_ref)).await?)
             }
-            Request::AppInfo => to_json(crate::shelldata::app_info_payload(self.git_version().await?, &self.app_version, self.install_kind, self.home.as_deref())),
-            Request::UpdateStatus => to_json(self.updates.as_ref().map_or(crate::updates::UpdateState::Idle, |u| u.state())),
+            Request::AppInfo => to_json(crate::shelldata::app_info_payload(
+                self.git_version().await?,
+                &self.app_version,
+                self.install_kind,
+                self.home.as_deref(),
+            )),
+            Request::UpdateStatus => to_json(
+                self.updates
+                    .as_ref()
+                    .map_or(crate::updates::UpdateState::Idle, |u| u.state()),
+            ),
             Request::UpdateCheck => {
                 let include_pre = self.store.state().settings.update_prereleases;
                 to_json(self.updates()?.check(include_pre, self.now()).await?)
             }
             Request::UpdateDownload => to_json(self.updates()?.start_download()?),
-            Request::UpdateCancel => to_json(self.updates.as_ref().map_or(crate::updates::UpdateState::Idle, |u| u.cancel_download())),
+            Request::UpdateCancel => to_json(
+                self.updates
+                    .as_ref()
+                    .map_or(crate::updates::UpdateState::Idle, |u| u.cancel_download()),
+            ),
             Request::UpdateInstall => to_json(self.updates()?.install().await?),
             Request::UpdateRestart => to_json(self.updates()?.restart()?),
             // The update machinery's runner starts the new process and quits this one.
             Request::RelaunchApp => {
-                let updates = self.updates.as_ref().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "GitNex can't restart itself here: start it again yourself"))?;
+                let updates = self.updates.as_ref().ok_or_else(|| {
+                    GbError::new(
+                        GbErrorKind::InvalidInput,
+                        "GitNex can't restart itself here: start it again yourself",
+                    )
+                })?;
                 to_json(updates.relaunch()?)
             }
             Request::PickFolder { start } => {
-                let Some(picker) = self.folder_picker.clone() else { return to_json(Option::<String>::None) };
+                let Some(picker) = self.folder_picker.clone() else {
+                    return to_json(Option::<String>::None);
+                };
                 let start = start.map(PathBuf::from).filter(|p| p.is_absolute());
                 let picked = blocking(move || Ok(picker(start.as_deref()))).await?;
                 to_json(picked.map(|p| p.display().to_string()))
             }
-            Request::SaveExport { suggested_name, contents } => {
+            Request::SaveExport {
+                suggested_name,
+                contents,
+            } => {
                 crate::export::check(&suggested_name, &contents)?;
-                let Some(picker) = self.folder_picker.clone() else { return to_json(Option::<String>::None) };
+                let Some(picker) = self.folder_picker.clone() else {
+                    return to_json(Option::<String>::None);
+                };
                 let state = self.store.state();
-                let start = state.profile.repos_folders.as_ref().and_then(|f| f.first()).or(state.profile.repos_folder.as_ref()).map(PathBuf::from).filter(|p| p.is_absolute());
+                let start = state
+                    .profile
+                    .repos_folders
+                    .as_ref()
+                    .and_then(|f| f.first())
+                    .or(state.profile.repos_folder.as_ref())
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute());
                 let written = blocking(move || match picker(start.as_deref()) {
                     Some(dir) => crate::export::write(&dir, &suggested_name, &contents).map(Some),
                     None => Ok(None),
@@ -3422,11 +4892,21 @@ impl Api {
             Request::ScanRepos { root, refresh } => to_json(self.scan_root(root, refresh).await?),
             Request::ScanFolders { roots, refresh } => {
                 let mut seen = std::collections::HashSet::new();
-                let roots: Vec<String> = roots.into_iter().filter(|r| seen.insert(r.clone())).collect();
-                let scans = futures_util::future::join_all(roots.into_iter().map(|r| self.scan_root(r, refresh))).await;
-                to_json(crate::scan::merge_scans(scans.into_iter().filter_map(Result::ok)))
+                let roots: Vec<String> = roots
+                    .into_iter()
+                    .filter(|r| seen.insert(r.clone()))
+                    .collect();
+                let scans = futures_util::future::join_all(
+                    roots.into_iter().map(|r| self.scan_root(r, refresh)),
+                )
+                .await;
+                to_json(crate::scan::merge_scans(
+                    scans.into_iter().filter_map(Result::ok),
+                ))
             }
-            Request::SuggestReposFolder => to_json(crate::scan::suggest_repos_folder(self.home.as_deref())),
+            Request::SuggestReposFolder => {
+                to_json(crate::scan::suggest_repos_folder(self.home.as_deref()))
+            }
             Request::WatchRepo { repo } => {
                 self.watch_repo(repo).await?;
                 to_json(())
@@ -3439,8 +4919,12 @@ impl Api {
                 self.unwatch_all();
                 to_json(())
             }
-            Request::QueueState { repo } => to_json(self.repo_writes(&*self.handle(repo)?).queue.state()),
-            Request::QueueRemove { repo, id } => to_json(self.repo_writes(&*self.handle(repo)?).queue.remove(id)),
+            Request::QueueState { repo } => {
+                to_json(self.repo_writes(&*self.handle(repo)?).queue.state())
+            }
+            Request::QueueRemove { repo, id } => {
+                to_json(self.repo_writes(&*self.handle(repo)?).queue.remove(id))
+            }
             Request::QueueResume { repo } => {
                 self.repo_writes(&*self.handle(repo)?).queue.resume();
                 to_json(())
@@ -3450,9 +4934,63 @@ impl Api {
                 to_json(())
             }
             // --- Undo / redo (2A T10) ---
-            Request::Undo { repo, worktree, entry, confirm, confirm_autostash, without_index, confirm_discard } => to_json(crate::journal::undo::undo_or_redo(self, repo, &worktree, crate::journal::undo::Direction::Undo, entry, confirm.unwrap_or_default(), confirm_autostash.unwrap_or(false), without_index.unwrap_or(false), confirm_discard.unwrap_or(false)).await?),
-            Request::Redo { repo, worktree, entry, confirm_autostash, without_index } => to_json(crate::journal::undo::undo_or_redo(self, repo, &worktree, crate::journal::undo::Direction::Redo, entry, Default::default(), confirm_autostash.unwrap_or(false), without_index.unwrap_or(false), false).await?),
-            Request::UndoEntry { repo, worktree, entry, confirm_autostash } => to_json(crate::journal::undo::undo_out_of_order(self, repo, &worktree, entry, confirm_autostash.unwrap_or(false)).await?), // UX Y
+            Request::Undo {
+                repo,
+                worktree,
+                entry,
+                confirm,
+                confirm_autostash,
+                without_index,
+                confirm_discard,
+            } => to_json(
+                crate::journal::undo::undo_or_redo(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::journal::undo::Direction::Undo,
+                    entry,
+                    confirm.unwrap_or_default(),
+                    confirm_autostash.unwrap_or(false),
+                    without_index.unwrap_or(false),
+                    confirm_discard.unwrap_or(false),
+                )
+                .await?,
+            ),
+            Request::Redo {
+                repo,
+                worktree,
+                entry,
+                confirm_autostash,
+                without_index,
+            } => to_json(
+                crate::journal::undo::undo_or_redo(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::journal::undo::Direction::Redo,
+                    entry,
+                    Default::default(),
+                    confirm_autostash.unwrap_or(false),
+                    without_index.unwrap_or(false),
+                    false,
+                )
+                .await?,
+            ),
+            Request::UndoEntry {
+                repo,
+                worktree,
+                entry,
+                confirm_autostash,
+            } => to_json(
+                crate::journal::undo::undo_out_of_order(
+                    self,
+                    repo,
+                    &worktree,
+                    entry,
+                    confirm_autostash.unwrap_or(false),
+                )
+                .await?,
+            ), // UX Y
             Request::JournalHistory { repo, worktree } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
@@ -3465,98 +5003,412 @@ impl Api {
             }
             // --- end undo / redo (2A T10) ---
             // --- Autostash banners (2A T11) ---
-            Request::ApplyKeptStash { repo, worktree, entry, without_index, confirm_autostash } => to_json(crate::journal::autostash::apply_kept(self, repo, &worktree, entry, without_index.unwrap_or(false), confirm_autostash.unwrap_or(false)).await?),
-            Request::DismissBanner { repo, worktree, entry, drop_stash } => to_json(crate::journal::autostash::dismiss(self, repo, &worktree, entry, drop_stash.unwrap_or(false)).await?),
+            Request::ApplyKeptStash {
+                repo,
+                worktree,
+                entry,
+                without_index,
+                confirm_autostash,
+            } => to_json(
+                crate::journal::autostash::apply_kept(
+                    self,
+                    repo,
+                    &worktree,
+                    entry,
+                    without_index.unwrap_or(false),
+                    confirm_autostash.unwrap_or(false),
+                )
+                .await?,
+            ),
+            Request::DismissBanner {
+                repo,
+                worktree,
+                entry,
+                drop_stash,
+            } => to_json(
+                crate::journal::autostash::dismiss(
+                    self,
+                    repo,
+                    &worktree,
+                    entry,
+                    drop_stash.unwrap_or(false),
+                )
+                .await?,
+            ),
             // --- end autostash banners (2A T11) ---
             // --- The pause (2D T2) ---
-            Request::SettlePaused { repo, worktree } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::SettleIntent).await?),
+            Request::SettlePaused { repo, worktree } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::SettleIntent,
+                )
+                .await?,
+            ),
             // --- 2C T3 ---
-            Request::CreateBranch { repo, worktree, name, start, start_ref, checkout, expect, confirm_autostash } => {
-                let confirm = crate::write::types::Confirm { autostash: confirm_autostash.unwrap_or(false) };
-                to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::branch::CreateBranch { name, start, start_ref, checkout, confirm }).await?)
+            Request::CreateBranch {
+                repo,
+                worktree,
+                name,
+                start,
+                start_ref,
+                checkout,
+                expect,
+                confirm_autostash,
+            } => {
+                let confirm = crate::write::types::Confirm {
+                    autostash: confirm_autostash.unwrap_or(false),
+                };
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        expect,
+                        crate::write::branch::CreateBranch {
+                            name,
+                            start,
+                            start_ref,
+                            checkout,
+                            confirm,
+                        },
+                    )
+                    .await?,
+                )
             }
-            Request::RenameBranch { repo, worktree, from, to, expect } => to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::branch::RenameBranch { from, to }).await?),
-            Request::SetUpstream { repo, worktree, branch, upstream } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::branch::SetUpstream { branch, upstream }).await?),
+            Request::RenameBranch {
+                repo,
+                worktree,
+                from,
+                to,
+                expect,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    expect,
+                    crate::write::branch::RenameBranch { from, to },
+                )
+                .await?,
+            ),
+            Request::SetUpstream {
+                repo,
+                worktree,
+                branch,
+                upstream,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::branch::SetUpstream { branch, upstream },
+                )
+                .await?,
+            ),
             // --- end 2C T3 ---
             // --- end the pause (2D T2) ---
             // --- 2D T12: conflicted files ---
-            Request::ConflictFile { repo, worktree, path } => to_json(crate::write::conflict::conflict_file(self, repo, &worktree, path).await?),
+            Request::ConflictFile {
+                repo,
+                worktree,
+                path,
+            } => to_json(crate::write::conflict::conflict_file(self, repo, &worktree, path).await?),
             // --- 3A T2 ---
-            Request::FileHistory { repo, worktree, path, rev, skip, limit } => to_json(crate::history::file_history(self, repo, &worktree, path, rev, skip, limit).await?),
-            Request::Blame { repo, worktree, rev, path } => to_json(crate::history::blame(self, repo, &worktree, rev, path).await?),
+            Request::FileHistory {
+                repo,
+                worktree,
+                path,
+                rev,
+                skip,
+                limit,
+            } => to_json(
+                crate::history::file_history(self, repo, &worktree, path, rev, skip, limit).await?,
+            ),
+            Request::Blame {
+                repo,
+                worktree,
+                rev,
+                path,
+            } => to_json(crate::history::blame(self, repo, &worktree, rev, path).await?),
             // --- end 3A T2 ---
             // --- 3A T3 ---
-            Request::RestoreFile { repo, worktree, sha, path, confirm } => to_json(crate::write::restore::restore_file(self, repo, &worktree, sha, path, confirm.unwrap_or(false)).await?),
+            Request::RestoreFile {
+                repo,
+                worktree,
+                sha,
+                path,
+                confirm,
+            } => to_json(
+                crate::write::restore::restore_file(
+                    self,
+                    repo,
+                    &worktree,
+                    sha,
+                    path,
+                    confirm.unwrap_or(false),
+                )
+                .await?,
+            ),
             Request::LfsStatus { repo, recheck } => {
                 let h = self.handle(repo)?;
                 let r = h.repo.clone();
                 let used = blocking(move || Ok(crate::lfs::uses_lfs(&r.to_thread_local()))).await?;
-                let cached = if recheck.unwrap_or(false) { None } else { self.lfs_version.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+                let cached = if recheck.unwrap_or(false) {
+                    None
+                } else {
+                    self.lfs_version
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone()
+                };
                 let version = match cached {
                     Some(v) => v,
                     None => {
                         let v = crate::lfs::installed(&self.cli, &h.workdir).await;
-                        *self.lfs_version.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.clone());
+                        *self.lfs_version.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(v.clone());
                         v
                     }
                 };
                 let patterns = crate::lfs::top_patterns(&h.workdir);
                 // A fresh read of the config: `git lfs install` may have run since the repo opened.
                 let filter = gix::open(&h.workdir).is_ok_and(|r| crate::lfs::filter_configured(&r));
-                to_json(crate::lfs::LfsStatusPayload { used, version, install_url: crate::lfs::INSTALL_URL.into(), patterns, filter })
+                to_json(crate::lfs::LfsStatusPayload {
+                    used,
+                    version,
+                    install_url: crate::lfs::INSTALL_URL.into(),
+                    patterns,
+                    filter,
+                })
             }
-            Request::LfsTracked { repo, worktree, paths } => {
+            Request::LfsTracked {
+                repo,
+                worktree,
+                paths,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 to_json(crate::lfs::tracked(&self.cli, &root, &paths).await?)
             }
-            Request::LfsFetch { repo, worktree } => to_json(crate::write::lfs::lfs_fetch(self, repo, &worktree).await?),
-            Request::LfsPull { repo, worktree } => to_json(crate::write::lfs::lfs_pull(self, repo, &worktree).await?),
-            Request::LfsDownload { repo, worktree, path, refs, oids } => to_json(crate::write::lfs::lfs_download(self, repo, &worktree, path, refs, oids).await?),
-            Request::LfsTrack { repo, worktree, pattern } => to_json(crate::write::lfs::lfs_track(self, repo, &worktree, pattern, false).await?),
-            Request::LfsUntrack { repo, worktree, pattern } => to_json(crate::write::lfs::lfs_track(self, repo, &worktree, pattern, true).await?),
+            Request::LfsFetch { repo, worktree } => {
+                to_json(crate::write::lfs::lfs_fetch(self, repo, &worktree).await?)
+            }
+            Request::LfsPull { repo, worktree } => {
+                to_json(crate::write::lfs::lfs_pull(self, repo, &worktree).await?)
+            }
+            Request::LfsDownload {
+                repo,
+                worktree,
+                path,
+                refs,
+                oids,
+            } => to_json(
+                crate::write::lfs::lfs_download(self, repo, &worktree, path, refs, oids).await?,
+            ),
+            Request::LfsTrack {
+                repo,
+                worktree,
+                pattern,
+            } => {
+                to_json(crate::write::lfs::lfs_track(self, repo, &worktree, pattern, false).await?)
+            }
+            Request::LfsUntrack {
+                repo,
+                worktree,
+                pattern,
+            } => to_json(crate::write::lfs::lfs_track(self, repo, &worktree, pattern, true).await?),
             // --- end 3A T3 ---
             // --- 2D T15 ---
-            Request::ResolveFile { repo, worktree, path, resolution, base, confirm_markers, confirm_discard } => {
+            Request::ResolveFile {
+                repo,
+                worktree,
+                path,
+                resolution,
+                base,
+                confirm_markers,
+                confirm_discard,
+            } => {
                 crate::blob::check_relative(&path)?;
-                to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::conflict::ResolveIntent { path, resolution, base, confirm_markers: confirm_markers.unwrap_or(false), confirm_discard: confirm_discard.unwrap_or(false) }).await?)
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        Default::default(),
+                        crate::write::conflict::ResolveIntent {
+                            path,
+                            resolution,
+                            base,
+                            confirm_markers: confirm_markers.unwrap_or(false),
+                            confirm_discard: confirm_discard.unwrap_or(false),
+                        },
+                    )
+                    .await?,
+                )
             }
-            Request::MarkResolved { repo, worktree, paths, confirm_markers } => {
+            Request::MarkResolved {
+                repo,
+                worktree,
+                paths,
+                confirm_markers,
+            } => {
                 if paths.is_empty() {
-                    return Err(GbError::new(GbErrorKind::InvalidInput, "no files to mark resolved"));
+                    return Err(GbError::new(
+                        GbErrorKind::InvalidInput,
+                        "no files to mark resolved",
+                    ));
                 }
                 for p in &paths {
                     crate::blob::check_relative(p)?;
                 }
-                to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::conflict::MarkResolvedIntent { paths, confirm_markers: confirm_markers.unwrap_or(false) }).await?)
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        Default::default(),
+                        crate::write::conflict::MarkResolvedIntent {
+                            paths,
+                            confirm_markers: confirm_markers.unwrap_or(false),
+                        },
+                    )
+                    .await?,
+                )
             }
             // --- end 2D T15 ---
             // --- end 2D T12 ---
             #[cfg(any(test, feature = "testing"))]
-            Request::TestWrite { repo, worktree, expect, intent } => {
+            Request::TestWrite {
+                repo,
+                worktree,
+                expect,
+                intent,
+            } => {
                 // A workspace build unifies `testing` into the app's core: without a write guard
                 // (only the harness sets one) a test write is refused, whatever was compiled in.
                 if self.write_guard.is_none() {
-                    return Err(GbError::new(GbErrorKind::InvalidInput, "test writes need a write guard (the harness)"));
+                    return Err(GbError::new(
+                        GbErrorKind::InvalidInput,
+                        "test writes need a write guard (the harness)",
+                    ));
                 }
                 crate::write::test_intents::run(self, repo, &worktree, expect, intent).await
             }
-            Request::WriteWorktreeFile { repo, worktree, path, text, base } => to_json(crate::write::files::write_worktree_file(self, repo, &worktree, path, text, base).await?),
-            Request::CreateWorktreeFile { repo, worktree, path } => to_json(crate::write::files::create_worktree_file(self, repo, &worktree, path).await?),
-            Request::ApplySuggestion { repo, worktree, path, text, base, expect } => to_json(crate::write::files::apply_suggestion(self, repo, &worktree, path, text, base, expect).await?),
-            Request::RemoveIndexLock { repo, path, mtime_ms, ino, dev } => {
-                crate::write::index_lock::remove_index_lock(self, repo, &path, mtime_ms, ino, dev).await?;
+            Request::WriteWorktreeFile {
+                repo,
+                worktree,
+                path,
+                text,
+                base,
+            } => to_json(
+                crate::write::files::write_worktree_file(self, repo, &worktree, path, text, base)
+                    .await?,
+            ),
+            Request::CreateWorktreeFile {
+                repo,
+                worktree,
+                path,
+            } => to_json(
+                crate::write::files::create_worktree_file(self, repo, &worktree, path).await?,
+            ),
+            Request::ApplySuggestion {
+                repo,
+                worktree,
+                path,
+                text,
+                base,
+                expect,
+            } => to_json(
+                crate::write::files::apply_suggestion(
+                    self, repo, &worktree, path, text, base, expect,
+                )
+                .await?,
+            ),
+            Request::RemoveIndexLock {
+                repo,
+                path,
+                mtime_ms,
+                ino,
+                dev,
+            } => {
+                crate::write::index_lock::remove_index_lock(self, repo, &path, mtime_ms, ino, dev)
+                    .await?;
                 to_json(())
             }
             // --- 2B T1 ---
-            Request::Stage { repo, worktree, paths } => to_json(crate::write::stage::stage_paths(self, repo, &worktree, crate::write::stage::Which::Stage, paths, Vec::new()).await?),
-            Request::Unstage { repo, worktree, paths, old_paths } => to_json(crate::write::stage::stage_paths(self, repo, &worktree, crate::write::stage::Which::Unstage, paths, old_paths.unwrap_or_default()).await?),
-            Request::StageAll { repo, worktree } => to_json(crate::write::stage::stage_all(self, repo, &worktree, crate::write::stage::Which::Stage).await?),
-            Request::UnstageAll { repo, worktree } => to_json(crate::write::stage::stage_all(self, repo, &worktree, crate::write::stage::Which::Unstage).await?),
+            Request::Stage {
+                repo,
+                worktree,
+                paths,
+            } => to_json(
+                crate::write::stage::stage_paths(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::stage::Which::Stage,
+                    paths,
+                    Vec::new(),
+                )
+                .await?,
+            ),
+            Request::Unstage {
+                repo,
+                worktree,
+                paths,
+                old_paths,
+            } => to_json(
+                crate::write::stage::stage_paths(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::stage::Which::Unstage,
+                    paths,
+                    old_paths.unwrap_or_default(),
+                )
+                .await?,
+            ),
+            Request::StageAll { repo, worktree } => to_json(
+                crate::write::stage::stage_all(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::stage::Which::Stage,
+                )
+                .await?,
+            ),
+            Request::UnstageAll { repo, worktree } => to_json(
+                crate::write::stage::stage_all(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::stage::Which::Unstage,
+                )
+                .await?,
+            ),
             // --- end 2B T1 ---
             // --- 2B T2 ---
-            Request::StagingUndo { repo, worktree } => to_json(crate::journal::staging::staging_undo(self, repo, &worktree, crate::journal::staging::Dir::Undo).await?),
-            Request::StagingRedo { repo, worktree } => to_json(crate::journal::staging::staging_undo(self, repo, &worktree, crate::journal::staging::Dir::Redo).await?),
+            Request::StagingUndo { repo, worktree } => to_json(
+                crate::journal::staging::staging_undo(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::journal::staging::Dir::Undo,
+                )
+                .await?,
+            ),
+            Request::StagingRedo { repo, worktree } => to_json(
+                crate::journal::staging::staging_undo(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::journal::staging::Dir::Redo,
+                )
+                .await?,
+            ),
             Request::StagingState { repo, worktree } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
@@ -3564,8 +5416,36 @@ impl Api {
             }
             // --- end 2B T2 ---
             // --- 2B T5 ---
-            Request::Commit { repo, worktree, summary, description, amend, stage_all, expect } => to_json(crate::write::commit::commit(self, repo, &worktree, summary, description, amend, stage_all, expect).await?),
-            Request::EditHeadMessage { repo, worktree, message, expect } => to_json(crate::write::commit::edit_head_message(self, repo, &worktree, message, expect).await?),
+            Request::Commit {
+                repo,
+                worktree,
+                summary,
+                description,
+                amend,
+                stage_all,
+                expect,
+            } => to_json(
+                crate::write::commit::commit(
+                    self,
+                    repo,
+                    &worktree,
+                    summary,
+                    description,
+                    amend,
+                    stage_all,
+                    expect,
+                )
+                .await?,
+            ),
+            Request::EditHeadMessage {
+                repo,
+                worktree,
+                message,
+                expect,
+            } => to_json(
+                crate::write::commit::edit_head_message(self, repo, &worktree, message, expect)
+                    .await?,
+            ),
             Request::HeadOnUpstream { repo, worktree } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
@@ -3573,20 +5453,55 @@ impl Api {
             }
             // --- end 2B T5 ---
             // --- 2C T8: worktrees ---
-            Request::WorktreeAdd { repo, worktree, path, branch } => {
+            Request::WorktreeAdd {
+                repo,
+                worktree,
+                path,
+                branch,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 let path = std::path::PathBuf::from(path);
                 let shown = crate::write::worktree::shown(&root, &path).await;
-                to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::worktree::WorktreeAdd { path, branch, shown }).await?)
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        Default::default(),
+                        crate::write::worktree::WorktreeAdd {
+                            path,
+                            branch,
+                            shown,
+                        },
+                    )
+                    .await?,
+                )
             }
-            Request::WorktreeRemove { repo, worktree, path, force } => {
+            Request::WorktreeRemove {
+                repo,
+                worktree,
+                path,
+                force,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
-                let cwd = crate::write::worktree::remove_cwd(&root).await?.display().to_string();
+                let cwd = crate::write::worktree::remove_cwd(&root)
+                    .await?
+                    .display()
+                    .to_string();
                 let path = std::path::PathBuf::from(path);
                 let shown = crate::write::worktree::shown(&root, &path).await;
-                to_json(crate::write::run_write(self, repo, &cwd, Default::default(), crate::write::worktree::WorktreeRemove { path, force, shown }).await?)
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &cwd,
+                        Default::default(),
+                        crate::write::worktree::WorktreeRemove { path, force, shown },
+                    )
+                    .await?,
+                )
             }
             Request::SuggestWorktreePath { repo, branch } => {
                 let h = self.handle(repo)?;
@@ -3594,15 +5509,106 @@ impl Api {
             }
             // --- end 2C T8 ---
             // --- 2C T4 ---
-            Request::DeleteBranch { repo, worktree, branch, local, remote, force, expect } => to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::branch_delete::DeleteBranch::new(branch, local, remote, force)).await?),
+            Request::DeleteBranch {
+                repo,
+                worktree,
+                branch,
+                local,
+                remote,
+                force,
+                expect,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    expect,
+                    crate::write::branch_delete::DeleteBranch::new(branch, local, remote, force),
+                )
+                .await?,
+            ),
             // --- end 2C T4 ---
             // --- 2D T9: integrate ---
-            Request::Integrate { repo, worktree, kind, target, update_refs, ff_only, expect, confirm } => to_json(crate::write::integrate::integrate(self, repo, &worktree, kind, target, update_refs, ff_only, expect, confirm).await?),
-            Request::RebaseControl { repo, worktree, action, message } => to_json(crate::write::rebase::control(self, repo, &worktree, action, message).await?),
-            Request::PickControl { repo, worktree, action, message } => to_json(crate::write::pick::control(self, repo, &worktree, action, message).await?),
+            Request::Integrate {
+                repo,
+                worktree,
+                kind,
+                target,
+                update_refs,
+                ff_only,
+                expect,
+                confirm,
+            } => to_json(
+                crate::write::integrate::integrate(
+                    self,
+                    repo,
+                    &worktree,
+                    kind,
+                    target,
+                    update_refs,
+                    ff_only,
+                    expect,
+                    confirm,
+                )
+                .await?,
+            ),
+            Request::RebaseControl {
+                repo,
+                worktree,
+                action,
+                message,
+            } => to_json(
+                crate::write::rebase::control(self, repo, &worktree, action, message).await?,
+            ),
+            Request::PickControl {
+                repo,
+                worktree,
+                action,
+                message,
+            } => {
+                to_json(crate::write::pick::control(self, repo, &worktree, action, message).await?)
+            }
             // --- 3B T1 ---
-            Request::CherryPick { repo, worktree, oids, no_commit, expect, confirm } => to_json(crate::write::sequence::sequence(self, repo, &worktree, crate::write::sequence::SequenceKind::CherryPick, oids, no_commit, expect, confirm).await?),
-            Request::Revert { repo, worktree, oids, no_commit, expect, confirm } => to_json(crate::write::sequence::sequence(self, repo, &worktree, crate::write::sequence::SequenceKind::Revert, oids, no_commit, expect, confirm).await?),
+            Request::CherryPick {
+                repo,
+                worktree,
+                oids,
+                no_commit,
+                expect,
+                confirm,
+            } => to_json(
+                crate::write::sequence::sequence(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::sequence::SequenceKind::CherryPick,
+                    oids,
+                    no_commit,
+                    expect,
+                    confirm,
+                )
+                .await?,
+            ),
+            Request::Revert {
+                repo,
+                worktree,
+                oids,
+                no_commit,
+                expect,
+                confirm,
+            } => to_json(
+                crate::write::sequence::sequence(
+                    self,
+                    repo,
+                    &worktree,
+                    crate::write::sequence::SequenceKind::Revert,
+                    oids,
+                    no_commit,
+                    expect,
+                    confirm,
+                )
+                .await?,
+            ),
             // --- end 3B T1 ---
             Request::CommitIdentity { repo, worktree } => {
                 let h = self.handle(repo)?;
@@ -3611,81 +5617,395 @@ impl Api {
             }
             // --- end 2D T9 ---
             // --- 2D T10: integrate ---
-            Request::IntegratePreview { repo, worktree, kind, target } => to_json(crate::write::integrate::preview(self, repo, &worktree, kind, target).await?),
-            Request::RebasePlan { repo, worktree, branch, base } => to_json(crate::write::irebase::plan::rebase_plan(self, repo, &worktree, &branch, &base).await?),
-            Request::PredictRebase { repo, worktree, base, rows } => to_json(crate::write::irebase::predict::predict(self, repo, &worktree, &base, rows).await?),
+            Request::IntegratePreview {
+                repo,
+                worktree,
+                kind,
+                target,
+            } => to_json(
+                crate::write::integrate::preview(self, repo, &worktree, kind, target).await?,
+            ),
+            Request::RebasePlan {
+                repo,
+                worktree,
+                branch,
+                base,
+            } => to_json(
+                crate::write::irebase::plan::rebase_plan(self, repo, &worktree, &branch, &base)
+                    .await?,
+            ),
+            Request::PredictRebase {
+                repo,
+                worktree,
+                base,
+                rows,
+            } => to_json(
+                crate::write::irebase::predict::predict(self, repo, &worktree, &base, rows).await?,
+            ),
             // --- 3C T3 ---
-            Request::InteractiveRebase { repo, worktree, branch, base, expect, rows, chips, confirm } => to_json(crate::write::irebase::run::interactive_rebase(self, repo, &worktree, branch, base, expect, rows, chips, confirm).await?),
+            Request::InteractiveRebase {
+                repo,
+                worktree,
+                branch,
+                base,
+                expect,
+                rows,
+                chips,
+                confirm,
+            } => to_json(
+                crate::write::irebase::run::interactive_rebase(
+                    self, repo, &worktree, branch, base, expect, rows, chips, confirm,
+                )
+                .await?,
+            ),
             // --- end 3C T3 ---
             // --- 3C T6 ---
-            Request::RewordCommit { repo, worktree, oid, message, expect, confirm } => to_json(crate::write::irebase::reword::reword_commit(self, repo, &worktree, oid, message, expect, confirm).await?),
+            Request::RewordCommit {
+                repo,
+                worktree,
+                oid,
+                message,
+                expect,
+                confirm,
+            } => to_json(
+                crate::write::irebase::reword::reword_commit(
+                    self, repo, &worktree, oid, message, expect, confirm,
+                )
+                .await?,
+            ),
             // --- end 3C T6 ---
-            Request::FastForward { repo, worktree, branch, to, expect } => to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::integrate::FastForwardIntent { branch, to }).await?),
-            Request::MergeAbort { repo, worktree } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::integrate::MergeAbortIntent).await?),
+            Request::FastForward {
+                repo,
+                worktree,
+                branch,
+                to,
+                expect,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    expect,
+                    crate::write::integrate::FastForwardIntent { branch, to },
+                )
+                .await?,
+            ),
+            Request::MergeAbort { repo, worktree } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::integrate::MergeAbortIntent,
+                )
+                .await?,
+            ),
             // --- end 2D T10 ---
             // --- 2B T3 ---
-            Request::WipHunks { repo, worktree, path, staged } => {
+            Request::WipHunks {
+                repo,
+                worktree,
+                path,
+                staged,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 to_json(crate::hunks::wip_hunks(&self.cli, &root, &path, staged).await?)
             }
-            Request::StagePatch { repo, worktree, path, staged, selection, base } => to_json(crate::write::stage_patch::stage_patch(self, repo, &worktree, path, staged, selection, base).await?),
+            Request::StagePatch {
+                repo,
+                worktree,
+                path,
+                staged,
+                selection,
+                base,
+            } => to_json(
+                crate::write::stage_patch::stage_patch(
+                    self, repo, &worktree, path, staged, selection, base,
+                )
+                .await?,
+            ),
             // --- end 2B T3 ---
             // --- 2B T10 ---
-            Request::SelectionLines { repo, worktree, path, staged, selection } => {
+            Request::SelectionLines {
+                repo,
+                worktree,
+                path,
+                staged,
+                selection,
+            } => {
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
-                to_json(crate::write::stage_patch::selection_lines(&self.cli, &root, &path, staged, &selection).await?)
+                to_json(
+                    crate::write::stage_patch::selection_lines(
+                        &self.cli, &root, &path, staged, &selection,
+                    )
+                    .await?,
+                )
             }
             // --- end 2B T10 ---
             // --- 2B T4 ---
-            Request::Discard { repo, worktree, scope } => to_json(crate::write::discard::discard(self, repo, &worktree, scope).await?),
+            Request::Discard {
+                repo,
+                worktree,
+                scope,
+            } => to_json(crate::write::discard::discard(self, repo, &worktree, scope).await?),
             // --- end 2B T4 ---
             // --- 2D T11 ---
-            Request::Push { repo, worktree, branch, target, set_upstream, lease, expect } => to_json(crate::write::sync::push(self, repo, &worktree, branch, target, set_upstream.unwrap_or(false), lease, expect).await?),
+            Request::Push {
+                repo,
+                worktree,
+                branch,
+                target,
+                set_upstream,
+                lease,
+                expect,
+            } => to_json(
+                crate::write::sync::push(
+                    self,
+                    repo,
+                    &worktree,
+                    branch,
+                    target,
+                    set_upstream.unwrap_or(false),
+                    lease,
+                    expect,
+                )
+                .await?,
+            ),
             // --- end 2D T11 ---
             // --- 2D T14 ---
-            Request::Pull { repo, worktree, branch, mode, expect, confirm } => to_json(crate::write::sync::pull(self, repo, &worktree, branch, mode, expect, confirm).await?),
+            Request::Pull {
+                repo,
+                worktree,
+                branch,
+                mode,
+                expect,
+                confirm,
+            } => to_json(
+                crate::write::sync::pull(self, repo, &worktree, branch, mode, expect, confirm)
+                    .await?,
+            ),
             // --- end 2D T14 ---
             // --- 2C T5: checkout ---
-            Request::Checkout { repo, worktree, target, on_diverged, expect, confirm_autostash } => {
-                let confirm = crate::write::types::Confirm { autostash: confirm_autostash.unwrap_or(false) };
-                to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::checkout::Checkout::new(target, on_diverged, confirm)).await?)
+            Request::Checkout {
+                repo,
+                worktree,
+                target,
+                on_diverged,
+                expect,
+                confirm_autostash,
+            } => {
+                let confirm = crate::write::types::Confirm {
+                    autostash: confirm_autostash.unwrap_or(false),
+                };
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        expect,
+                        crate::write::checkout::Checkout::new(target, on_diverged, confirm),
+                    )
+                    .await?,
+                )
             }
             // --- end 2C T5 ---
             // --- 2C T7 ---
-            Request::StashPush { repo, worktree, message, paths } => to_json(crate::write::stash::stash_push(self, repo, &worktree, message, paths.unwrap_or_default()).await?),
-            Request::AddToGitignore { repo, worktree, paths } => to_json(crate::write::files::add_to_gitignore(self, repo, &worktree, paths).await?),
-            Request::StashApply { repo, worktree, oid, pop, without_index } => to_json(crate::write::stash::stash_apply(self, repo, &worktree, oid, pop, without_index.unwrap_or(false)).await?),
-            Request::StashDrop { repo, worktree, oid } => to_json(crate::write::stash::stash_drop(self, repo, &worktree, oid).await?),
+            Request::StashPush {
+                repo,
+                worktree,
+                message,
+                paths,
+            } => to_json(
+                crate::write::stash::stash_push(
+                    self,
+                    repo,
+                    &worktree,
+                    message,
+                    paths.unwrap_or_default(),
+                )
+                .await?,
+            ),
+            Request::AddToGitignore {
+                repo,
+                worktree,
+                paths,
+            } => {
+                to_json(crate::write::files::add_to_gitignore(self, repo, &worktree, paths).await?)
+            }
+            Request::StashApply {
+                repo,
+                worktree,
+                oid,
+                pop,
+                without_index,
+            } => to_json(
+                crate::write::stash::stash_apply(
+                    self,
+                    repo,
+                    &worktree,
+                    oid,
+                    pop,
+                    without_index.unwrap_or(false),
+                )
+                .await?,
+            ),
+            Request::StashDrop {
+                repo,
+                worktree,
+                oid,
+            } => to_json(crate::write::stash::stash_drop(self, repo, &worktree, oid).await?),
             // --- end 2C T7 ---
             // --- 2C T6: reset ---
-            Request::Reset { repo, worktree, to, mode, expect, discard } => {
+            Request::Reset {
+                repo,
+                worktree,
+                to,
+                mode,
+                expect,
+                discard,
+            } => {
                 // `X` for the label and the question: the worktree's branch, or `HEAD`.
                 let h = self.handle(repo)?;
                 let root = self.worktree_dir(&h, &worktree).await?;
                 let x = blocking(move || {
                     let repo = gix::open(&root).map_err(crate::error::gix_err)?;
-                    Ok(crate::write::head_state(&repo)?.branch.unwrap_or_else(|| "HEAD".to_string()))
+                    Ok(crate::write::head_state(&repo)?
+                        .branch
+                        .unwrap_or_else(|| "HEAD".to_string()))
                 })
                 .await?;
-                to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::reset::Reset { to, mode, discard: discard.unwrap_or(false), x }).await?)
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        expect,
+                        crate::write::reset::Reset {
+                            to,
+                            mode,
+                            discard: discard.unwrap_or(false),
+                            x,
+                        },
+                    )
+                    .await?,
+                )
             }
             // --- end 2C T6 ---
             // --- 3B T3 ---
-            Request::CreateTag { repo, worktree, name, target, message } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::tags::CreateTag { name, target, message }).await?),
-            Request::GitflowInit { repo, worktree, config } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::gitflow::GitflowInit { config }).await?),
-            Request::GitflowFinish { repo, worktree, branch, tag, tag_message, keep, expect } => {
+            Request::CreateTag {
+                repo,
+                worktree,
+                name,
+                target,
+                message,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::tags::CreateTag {
+                        name,
+                        target,
+                        message,
+                    },
+                )
+                .await?,
+            ),
+            Request::GitflowInit {
+                repo,
+                worktree,
+                config,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::gitflow::GitflowInit { config },
+                )
+                .await?,
+            ),
+            Request::GitflowFinish {
+                repo,
+                worktree,
+                branch,
+                tag,
+                tag_message,
+                keep,
+                expect,
+            } => {
                 let h = self.handle(repo)?;
-                let config = crate::write::gitflow::read(&h.repo.to_thread_local()).ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "Git flow isn't set up in this repository"))?;
-                to_json(crate::write::run_write(self, repo, &worktree, expect, crate::write::gitflow::GitflowFinish::new(branch, config, tag, tag_message, keep)).await?)
+                let config =
+                    crate::write::gitflow::read(&h.repo.to_thread_local()).ok_or_else(|| {
+                        GbError::new(
+                            GbErrorKind::InvalidInput,
+                            "Git flow isn't set up in this repository",
+                        )
+                    })?;
+                to_json(
+                    crate::write::run_write(
+                        self,
+                        repo,
+                        &worktree,
+                        expect,
+                        crate::write::gitflow::GitflowFinish::new(
+                            branch,
+                            config,
+                            tag,
+                            tag_message,
+                            keep,
+                        ),
+                    )
+                    .await?,
+                )
             }
             Request::GitflowFinishedTag { repo, branch } => {
                 let local = self.handle(repo)?.repo.to_thread_local();
-                to_json(crate::write::gitflow::read(&local).map(|c| crate::write::gitflow::finished_tag(&local, &c, &branch)).transpose()?.flatten())
+                to_json(
+                    crate::write::gitflow::read(&local)
+                        .map(|c| crate::write::gitflow::finished_tag(&local, &c, &branch))
+                        .transpose()?
+                        .flatten(),
+                )
             }
-            Request::DeleteTag { repo, worktree, name, local, remote } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::tags::DeleteTag { name, local, remote }).await?),
-            Request::PushTags { repo, worktree, remote, tag } => to_json(crate::write::run_write(self, repo, &worktree, Default::default(), crate::write::tags::PushTags { remote, tag }).await?),
+            Request::DeleteTag {
+                repo,
+                worktree,
+                name,
+                local,
+                remote,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::tags::DeleteTag {
+                        name,
+                        local,
+                        remote,
+                    },
+                )
+                .await?,
+            ),
+            Request::PushTags {
+                repo,
+                worktree,
+                remote,
+                tag,
+            } => to_json(
+                crate::write::run_write(
+                    self,
+                    repo,
+                    &worktree,
+                    Default::default(),
+                    crate::write::tags::PushTags { remote, tag },
+                )
+                .await?,
+            ),
             // --- end 3B T3 ---
         }
     }
@@ -3696,7 +6016,9 @@ impl Api {
     /// Detection runs on the blocking pool (it reads the disk and asks `xdg-mime`); one that
     /// panics is an error and isn't cached. Empty when none are configured.
     async fn openers(&self, force: bool) -> Result<Arc<Vec<Opener>>, GbError> {
-        let Some(src) = self.openers.clone() else { return Ok(Arc::default()) };
+        let Some(src) = self.openers.clone() else {
+            return Ok(Arc::default());
+        };
         let cached = src.found.lock().expect("openers poisoned").clone();
         if let Some((at, list)) = cached.filter(|_| !force) {
             if at.elapsed() >= self.opener_refresh && !src.refreshing.swap(true, Ordering::SeqCst) {
@@ -3714,10 +6036,21 @@ impl Api {
     /// file (`source` absent or a worktree), or a read-only copy of the stored version. A
     /// working-tree file that's gone (a WIP file staged, then deleted there) opens `fallback`,
     /// the version its list has, when there is one (fix round 2).
-    async fn open_in_file(&self, h: &Arc<RepoHandle>, root: &Path, path: &str, source: Option<BlobSource>, fallback: Option<BlobSource>) -> Result<PathBuf, GbError> {
+    async fn open_in_file(
+        &self,
+        h: &Arc<RepoHandle>,
+        root: &Path,
+        path: &str,
+        source: Option<BlobSource>,
+        fallback: Option<BlobSource>,
+    ) -> Result<PathBuf, GbError> {
         match source {
-            None | Some(BlobSource::Worktree { .. }) => match (worktree_file(root, path), fallback) {
-                (Err(e), Some(stored @ (BlobSource::Object { .. } | BlobSource::AtCommit { .. }))) if e.kind == GbErrorKind::NotFound => self.stored_copy(h, path, stored).await,
+            None | Some(BlobSource::Worktree { .. }) => match (worktree_file(root, path), fallback)
+            {
+                (
+                    Err(e),
+                    Some(stored @ (BlobSource::Object { .. } | BlobSource::AtCommit { .. })),
+                ) if e.kind == GbErrorKind::NotFound => self.stored_copy(h, path, stored).await,
                 (found, _) => found,
             },
             // The working-tree file itself when it's the same bytes as that version (it usually
@@ -3730,14 +6063,30 @@ impl Api {
     }
 
     /// A read-only copy of `path`'s stored version `source` (spec §14.5).
-    async fn stored_copy(&self, h: &Arc<RepoHandle>, path: &str, source: BlobSource) -> Result<PathBuf, GbError> {
+    async fn stored_copy(
+        &self,
+        h: &Arc<RepoHandle>,
+        path: &str,
+        source: BlobSource,
+    ) -> Result<PathBuf, GbError> {
         self.stored_or_same(h, path, source, None).await
     }
 
     /// `same` (a working-tree file) when its bytes are that version's, else the stored copy.
-    async fn stored_or_same(&self, h: &Arc<RepoHandle>, path: &str, source: BlobSource, same: Option<PathBuf>) -> Result<PathBuf, GbError> {
+    async fn stored_or_same(
+        &self,
+        h: &Arc<RepoHandle>,
+        path: &str,
+        source: BlobSource,
+        same: Option<PathBuf>,
+    ) -> Result<PathBuf, GbError> {
         let (side, oid) = match source {
-            BlobSource::Worktree { .. } => return Err(GbError::new(GbErrorKind::InvalidInput, "not a stored version")),
+            BlobSource::Worktree { .. } => {
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    "not a stored version",
+                ));
+            }
             BlobSource::Object { oid } => {
                 let oid = parse_oid(&oid)?;
                 (Side::Object(oid), oid)
@@ -3746,17 +6095,40 @@ impl Api {
                 let commit = parse_oid(&commit)?;
                 (Side::AtCommit(commit), commit)
             }
-            BlobSource::Absent | BlobSource::Submodule { .. } => return Err(GbError::new(GbErrorKind::InvalidInput, format!("{path} has no file to open on that side"))),
+            BlobSource::Absent | BlobSource::Submodule { .. } => {
+                return Err(GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("{path} has no file to open on that side"),
+                ));
+            }
         };
         crate::blob::check_relative(path)?;
-        let cache = self.open_cache.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "old versions can't be opened here"))?;
+        let cache = self.open_cache.clone().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "old versions can't be opened here",
+            )
+        })?;
         let (h, path) = (h.clone(), path.to_string());
         blocking(move || {
-            let bytes = crate::blob::side_bytes(&h.repo.to_thread_local(), &path, &side, crate::diff::MAX_FORCED_BYTES)?;
-            if let Some(file) = same.filter(|f| std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64) && std::fs::read(f).is_ok_and(|b| b == bytes)) {
+            let bytes = crate::blob::side_bytes(
+                &h.repo.to_thread_local(),
+                &path,
+                &side,
+                crate::diff::MAX_FORCED_BYTES,
+            )?;
+            if let Some(file) = same.filter(|f| {
+                std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64)
+                    && std::fs::read(f).is_ok_and(|b| b == bytes)
+            }) {
                 return Ok(file);
             }
-            crate::open_copy::write_copy(&cache, &oid.to_hex_with_len(12).to_string(), &path, &bytes)
+            crate::open_copy::write_copy(
+                &cache,
+                &oid.to_hex_with_len(12).to_string(),
+                &path,
+                &bytes,
+            )
         })
         .await
     }
@@ -3784,11 +6156,25 @@ impl Api {
     /// How the graph reads (`graph`, `graphReveal`, `branchPresetPreview`, `graphHiddenOwner`)
     /// lay `h` out: the window, the pin, the active worktree and the forks, and the view with
     /// `now` filled in. `rescan` is left off.
-    pub(crate) async fn build_options(&self, h: &RepoHandle, limit: Option<u32>, pin: Option<PinSetting>, active: Option<String>, view: Option<gitnex_graph::ViewSpec>) -> Result<BuildOptions, GbError> {
+    pub(crate) async fn build_options(
+        &self,
+        h: &RepoHandle,
+        limit: Option<u32>,
+        pin: Option<PinSetting>,
+        active: Option<String>,
+        view: Option<gitnex_graph::ViewSpec>,
+    ) -> Result<BuildOptions, GbError> {
         // Checked against the build's own `git worktree list` (`build_graph_with_text`), so a
         // switch's relayout runs one git process, not two.
         let active = match active {
-            Some(a) => Some(crate::platform::fs::canonicalize(Path::new(&a)).map_err(|_| GbError::new(GbErrorKind::InvalidInput, format!("{a} is not a worktree of this repository")))?),
+            Some(a) => Some(
+                crate::platform::fs::canonicalize(Path::new(&a)).map_err(|_| {
+                    GbError::new(
+                        GbErrorKind::InvalidInput,
+                        format!("{a} is not a worktree of this repository"),
+                    )
+                })?,
+            ),
             None => None,
         };
         let (pinned_ref, no_pin) = match pin {
@@ -3803,14 +6189,29 @@ impl Api {
             Some(hub) => hub.cached_forks(&self.store, &self.forge_remotes_of(h)),
             None => Default::default(),
         };
-        let mut view = view.map(|v| gitnex_graph::ViewSpec { now: self.now(), ..v });
+        let mut view = view.map(|v| gitnex_graph::ViewSpec {
+            now: self.now(),
+            ..v
+        });
         // The git process runs only for a view with a "commits by me" rule, and not when the
         // caller sent `me` itself.
-        if let Some(v) = view.as_mut().filter(|v| v.me.is_empty() && v.rules.iter().any(|r| matches!(&r.matcher, gitnex_graph::Matcher::CommitsBy { author: gitnex_graph::Author::Me }))) {
+        if let Some(v) = view.as_mut().filter(|v| {
+            v.me.is_empty()
+                && v.rules.iter().any(|r| {
+                    matches!(
+                        &r.matcher,
+                        gitnex_graph::Matcher::CommitsBy {
+                            author: gitnex_graph::Author::Me
+                        }
+                    )
+                })
+        }) {
             v.me = self.me_emails(h).await;
         }
         Ok(BuildOptions {
-            limit: limit.map(|l| l as usize).unwrap_or(crate::snapshot::DEFAULT_COMMIT_LIMIT),
+            limit: limit
+                .map(|l| l as usize)
+                .unwrap_or(crate::snapshot::DEFAULT_COMMIT_LIMIT),
             pinned_ref,
             no_pin,
             wip_cache: Some(h.wip.clone()),
@@ -3865,14 +6266,20 @@ impl Api {
             .expect("repos poisoned")
             .get(&id)
             .cloned()
-            .ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, format!("no open repository with id {id}")))
+            .ok_or_else(|| {
+                GbError::new(
+                    GbErrorKind::InvalidInput,
+                    format!("no open repository with id {id}"),
+                )
+            })
     }
 
     /// `old`, reopened: it replaces `old` unless the repository was closed meanwhile.
     fn reopen(&self, id: u32, old: &RepoHandle) -> Result<Arc<RepoHandle>, GbError> {
         // Before the open, so a change made while it reads the config still shows next time.
         let config = config_stamp(&old.common_dir);
-        let repo = gix::ThreadSafeRepository::open_opts(&old.workdir, open_options()).map_err(crate::error::gix_err)?;
+        let repo = gix::ThreadSafeRepository::open_opts(&old.workdir, open_options())
+            .map_err(crate::error::gix_err)?;
         let fresh = Arc::new(RepoHandle {
             repo,
             workdir: old.workdir.clone(),
@@ -3902,7 +6309,11 @@ impl Api {
 
     fn ai_key(&self) -> crate::forge::AccountKey {
         let profile = self.store.active_profile();
-        crate::forge::AccountKey { profile: profile.id, host: "ai".into(), id: "commit".into() }
+        crate::forge::AccountKey {
+            profile: profile.id,
+            host: "ai".into(),
+            id: "commit".into(),
+        }
     }
 
     fn ai_settings(&self) -> crate::ai::AiCommitSettings {
@@ -3910,13 +6321,17 @@ impl Api {
     }
 
     async fn ai_token(&self) -> Result<Option<Secret>, GbError> {
-        let Some(tokens) = self.ai_tokens.clone() else { return Ok(None) };
+        let Some(tokens) = self.ai_tokens.clone() else {
+            return Ok(None);
+        };
         let key = self.ai_key();
         blocking(move || tokens.get(&key, crate::forge::TokenStorage::File)).await
     }
 
     async fn ai_detect(&self) -> Result<Vec<crate::ai::AiDetected>, GbError> {
-        let Some(ai) = self.ai.clone() else { return Ok(Vec::new()) };
+        let Some(ai) = self.ai.clone() else {
+            return Ok(Vec::new());
+        };
         // A desktop-launched app has launchd's bare `PATH`: the CLIs are where the login shell
         // puts them, so let its (already warming) capture finish first.
         self.await_shell_env().await;
@@ -3924,13 +6339,25 @@ impl Api {
     }
 
     async fn ai_token_status(&self) -> Result<bool, GbError> {
-        let Some(tokens) = self.ai_tokens.clone() else { return Ok(false) };
+        let Some(tokens) = self.ai_tokens.clone() else {
+            return Ok(false);
+        };
         let key = self.ai_key();
-        blocking(move || tokens.get(&key, crate::forge::TokenStorage::File).map(|t| t.is_some())).await
+        blocking(move || {
+            tokens
+                .get(&key, crate::forge::TokenStorage::File)
+                .map(|t| t.is_some())
+        })
+        .await
     }
 
     async fn ai_set_token(&self, token: Secret) -> Result<(), GbError> {
-        let tokens = self.ai_tokens.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let tokens = self.ai_tokens.clone().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "AI endpoints aren't available here",
+            )
+        })?;
         let key = self.ai_key();
         let token = token.trimmed();
         if token.is_empty() {
@@ -3940,33 +6367,70 @@ impl Api {
     }
 
     async fn ai_clear_token(&self) -> Result<(), GbError> {
-        let Some(tokens) = self.ai_tokens.clone() else { return Ok(()) };
+        let Some(tokens) = self.ai_tokens.clone() else {
+            return Ok(());
+        };
         let key = self.ai_key();
         blocking(move || tokens.delete(&key)).await
     }
 
     async fn ai_models(&self, endpoint: String) -> Result<Vec<String>, GbError> {
-        let ai = self.ai.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let ai = self.ai.clone().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "AI endpoints aren't available here",
+            )
+        })?;
         let endpoint = endpoint.trim().to_string();
         if endpoint.is_empty() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, "Enter an API endpoint first"));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "Enter an API endpoint first",
+            ));
         }
         let token = self.ai_token().await?;
         blocking(move || ai.models(&endpoint, token.as_ref())).await
     }
 
-    async fn ai_commit_message(&self, repo: u32, worktree: &str) -> Result<crate::ai::AiCommitMessage, GbError> {
+    async fn ai_commit_message(
+        &self,
+        repo: u32,
+        worktree: &str,
+    ) -> Result<crate::ai::AiCommitMessage, GbError> {
         let settings = self.ai_settings();
         if !settings.enabled {
-            return Err(GbError::new(GbErrorKind::InvalidInput, "AI commit messages are off: turn them on in Settings › AI"));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "AI commit messages are off: turn them on in Settings › AI",
+            ));
         }
-        let ai = self.ai.clone().ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "AI endpoints aren't available here"))?;
+        let ai = self.ai.clone().ok_or_else(|| {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                "AI endpoints aren't available here",
+            )
+        })?;
         let h = self.handle(repo)?;
         let root = self.worktree_dir(&h, worktree).await?;
-        let diff = self.cli.run(GitInvocation::new(&root, ["diff", "--cached", "--no-color", "--no-ext-diff", "--unified=3"])).await?;
+        let diff = self
+            .cli
+            .run(GitInvocation::new(
+                &root,
+                [
+                    "diff",
+                    "--cached",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--unified=3",
+                ],
+            ))
+            .await?;
         let diff = String::from_utf8_lossy(&diff.stdout).trim().to_string();
         if diff.is_empty() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, "Stage some changes first: the message describes them"));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "Stage some changes first: the message describes them",
+            ));
         }
         let recent = self
             .cli
@@ -3989,21 +6453,43 @@ impl Api {
         if settings.provider == crate::ai::AiProviderKind::Cli {
             self.await_shell_env().await;
         }
-        let raw = blocking(move || ai.generate(&crate::ai::AiRequest { settings: &settings, token: token.as_ref(), prompt: &prompt, worktree: &root })).await?;
+        let raw = blocking(move || {
+            ai.generate(&crate::ai::AiRequest {
+                settings: &settings,
+                token: token.as_ref(),
+                prompt: &prompt,
+                worktree: &root,
+            })
+        })
+        .await?;
         parse_ai_message(&raw)
     }
     // --- end AI commit messages ---
 
-    pub(crate) async fn init_repo(&self, path: &str, branch: Option<String>, readme: bool) -> Result<RepoSummary, GbError> {
+    pub(crate) async fn init_repo(
+        &self,
+        path: &str,
+        branch: Option<String>,
+        readme: bool,
+    ) -> Result<RepoSummary, GbError> {
         let dir = PathBuf::from(path);
         if !dir.is_absolute() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, "The repository path must be absolute"));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                "The repository path must be absolute",
+            ));
         }
         if dir.join(".git").exists() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} is already a Git repository", dir.display())));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                format!("{} is already a Git repository", dir.display()),
+            ));
         }
         if dir.exists() && std::fs::read_dir(&dir)?.next().is_some() {
-            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{} isn't empty: choose a new folder", dir.display())));
+            return Err(GbError::new(
+                GbErrorKind::InvalidInput,
+                format!("{} isn't empty: choose a new folder", dir.display()),
+            ));
         }
         std::fs::create_dir_all(&dir)?;
         let mut args = vec!["init".to_string(), "-q".to_string()];
@@ -4015,9 +6501,14 @@ impl Api {
         // The first commit is what creates the branch: `git init -b main` alone leaves an unborn
         // HEAD. The README is the usual first file; without it the commit is intentionally empty.
         if readme {
-            let name = dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "repository".to_string());
+            let name = dir
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "repository".to_string());
             std::fs::write(dir.join("README.md"), format!("# {name}\n"))?;
-            self.cli.run(GitInvocation::new(&dir, ["add", "--", "README.md"])).await?;
+            self.cli
+                .run(GitInvocation::new(&dir, ["add", "--", "README.md"]))
+                .await?;
         }
         let mut commit = vec!["commit".to_string(), "-q".to_string()];
         if !readme {
@@ -4030,32 +6521,66 @@ impl Api {
 
     pub(crate) async fn open_repo(&self, path: &str) -> Result<RepoSummary, GbError> {
         self.git_version().await?;
-        let repo = gix::ThreadSafeRepository::discover_opts(path, Default::default(), discover_options())
-            .map_err(|_| GbError::new(GbErrorKind::NotFound, format!("Not a git repository: {path}")))?;
+        let repo =
+            gix::ThreadSafeRepository::discover_opts(path, Default::default(), discover_options())
+                .map_err(|_| {
+                    GbError::new(
+                        GbErrorKind::NotFound,
+                        format!("Not a git repository: {path}"),
+                    )
+                })?;
         let opened = repo
             .work_dir()
             .map(|p| crate::platform::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()))
-            .ok_or_else(|| GbError::new(GbErrorKind::InvalidInput, "Bare repositories are not supported"))?;
+            .ok_or_else(|| {
+                GbError::new(
+                    GbErrorKind::InvalidInput,
+                    "Bare repositories are not supported",
+                )
+            })?;
         let common_dir = {
             let local = repo.to_thread_local();
-            crate::platform::fs::canonicalize(local.common_dir()).unwrap_or_else(|_| local.common_dir().to_path_buf())
+            crate::platform::fs::canonicalize(local.common_dir())
+                .unwrap_or_else(|_| local.common_dir().to_path_buf())
         };
         // As soon as the common dir is known (`RepoHandle::config`).
         let config = config_stamp(&common_dir);
         // One handle per repository (spec #2 §11.2, 2C Deviation 2): whichever worktree opens,
         // it's the handle of its common dir, and the summary names the worktree opened.
-        let summary = |id: u32, h: &RepoHandle| RepoSummary { id, path: h.workdir.display().to_string(), name: h.name.clone(), worktree: opened.display().to_string() };
-        let open = |repos: &HashMap<u32, Arc<RepoHandle>>| repos.iter().find(|(_, h)| h.common_dir == common_dir).map(|(&id, h)| (id, h.clone()));
+        let summary = |id: u32, h: &RepoHandle| RepoSummary {
+            id,
+            path: h.workdir.display().to_string(),
+            name: h.name.clone(),
+            worktree: opened.display().to_string(),
+        };
+        let open = |repos: &HashMap<u32, Arc<RepoHandle>>| {
+            repos
+                .iter()
+                .find(|(_, h)| h.common_dir == common_dir)
+                .map(|(&id, h)| (id, h.clone()))
+        };
         if let Some((id, h)) = open(&self.repos.lock().expect("repos poisoned")) {
             return Ok(summary(id, &h));
         }
         // The handle lives in the main worktree; a bare main keeps the one opened. Read with git
         // itself (once per open, not per refresh): its ownership check (`safe.directory`) refuses
         // a repository owned by another user exactly as in a terminal.
-        let main = crate::worktree::list_worktrees_cli(&self.cli, &opened).await?.into_iter().find(|w| w.is_main && !w.bare && w.path.is_dir()).map(|w| crate::platform::fs::canonicalize(&w.path).unwrap_or(w.path));
+        let main = crate::worktree::list_worktrees_cli(&self.cli, &opened)
+            .await?
+            .into_iter()
+            .find(|w| w.is_main && !w.bare && w.path.is_dir())
+            .map(|w| crate::platform::fs::canonicalize(&w.path).unwrap_or(w.path));
         let workdir = main.unwrap_or_else(|| opened.clone());
-        let repo = if workdir == opened { repo } else { gix::ThreadSafeRepository::open_opts(&workdir, open_options()).map_err(crate::error::gix_err)? };
-        let name = workdir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| workdir.display().to_string());
+        let repo = if workdir == opened {
+            repo
+        } else {
+            gix::ThreadSafeRepository::open_opts(&workdir, open_options())
+                .map_err(crate::error::gix_err)?
+        };
+        let name = workdir
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| workdir.display().to_string());
         // Lock order: `repos`, then `write_locks` (nothing takes them the other way round).
         self.recover_journals(&workdir, &common_dir);
         let (id, h) = {
@@ -4101,7 +6626,12 @@ impl Api {
             .or_insert_with(|| {
                 let bus = self.bus.clone();
                 Arc::new(crate::write::queue::RepoWrites::new(move |repo, s| {
-                    bus.emit(AppEvent::QueueChanged { repo, running: s.running.clone(), queued: s.queued.clone(), stopped: s.stopped.clone() });
+                    bus.emit(AppEvent::QueueChanged {
+                        repo,
+                        running: s.running.clone(),
+                        queued: s.queued.clone(),
+                        stopped: s.stopped.clone(),
+                    });
                 }))
             })
             .clone()
@@ -4110,9 +6640,19 @@ impl Api {
     /// The canonical path of `worktree`, if it's one of this repository's usable worktrees. Every
     /// request that reads a worktree goes through this, so a UI bug or a crafted request can't
     /// point GitNex at an arbitrary directory.
-    pub(crate) async fn worktree_dir(&self, h: &RepoHandle, worktree: &str) -> Result<PathBuf, GbError> {
-        let invalid = || GbError::new(GbErrorKind::InvalidInput, format!("{worktree} is not a worktree of this repository"));
-        let wanted = crate::platform::fs::canonicalize(Path::new(worktree)).map_err(|_| invalid())?;
+    pub(crate) async fn worktree_dir(
+        &self,
+        h: &RepoHandle,
+        worktree: &str,
+    ) -> Result<PathBuf, GbError> {
+        let invalid = || {
+            GbError::new(
+                GbErrorKind::InvalidInput,
+                format!("{worktree} is not a worktree of this repository"),
+            )
+        };
+        let wanted =
+            crate::platform::fs::canonicalize(Path::new(worktree)).map_err(|_| invalid())?;
         // --- 2D T9 review P1: the main worktree needs no `worktree list` ---
         if crate::platform::fs::canonicalize(&h.workdir).is_ok_and(|w| w == wanted) {
             return Ok(wanted);
@@ -4129,7 +6669,12 @@ impl Api {
 
     /// Validates a UI-supplied blob source: object ids must be full hex, and a worktree must be
     /// one of this repo's (plus its declared `working-tree-encoding` for `path`).
-    async fn resolve_side(&self, h: &RepoHandle, path: &str, src: BlobSource) -> Result<Side, GbError> {
+    async fn resolve_side(
+        &self,
+        h: &RepoHandle,
+        path: &str,
+        src: BlobSource,
+    ) -> Result<Side, GbError> {
         Ok(match src {
             BlobSource::Absent => Side::Absent,
             BlobSource::Object { oid } => Side::Object(parse_oid(&oid)?),
@@ -4141,7 +6686,12 @@ impl Api {
                 // generic error); `diff_contents` joins the path again when it reads the file.
                 safe_join(&root, path)?;
                 let (encoding, converts, lfs) = worktree_attrs(&self.cli, &root, path).await?;
-                Side::Worktree { root, encoding, converts, lfs }
+                Side::Worktree {
+                    root,
+                    encoding,
+                    converts,
+                    lfs,
+                }
             }
         })
     }
@@ -4156,11 +6706,24 @@ impl Api {
 /// here and checked again — a symlinked leaf can point through `.git` even when no path segment
 /// before it does.
 fn worktree_file(root: &Path, path: &str) -> Result<PathBuf, GbError> {
-    let escaped = || GbError::new(GbErrorKind::InvalidInput, format!("{path} points outside the worktree"));
+    let escaped = || {
+        GbError::new(
+            GbErrorKind::InvalidInput,
+            format!("{path} points outside the worktree"),
+        )
+    };
     let joined = safe_join(root, path)?;
-    let real = crate::platform::fs::canonicalize(&joined).map_err(|_| GbError::new(GbErrorKind::NotFound, format!("{path} isn't in the working tree")))?;
+    let real = crate::platform::fs::canonicalize(&joined).map_err(|_| {
+        GbError::new(
+            GbErrorKind::NotFound,
+            format!("{path} isn't in the working tree"),
+        )
+    })?;
     let inside = real.strip_prefix(root).map_err(|_| escaped())?;
-    if !inside.components().all(|c| matches!(c, Component::Normal(n) if !is_dotgit(&n.to_string_lossy()))) {
+    if !inside
+        .components()
+        .all(|c| matches!(c, Component::Normal(n) if !is_dotgit(&n.to_string_lossy())))
+    {
         return Err(escaped());
     }
     Ok(joined)
@@ -4185,10 +6748,13 @@ fn folder_target(root: &Path, path: &str) -> Result<PathBuf, GbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{fixtures, isolated_git_env, TestRepo};
+    use crate::testing::{TestRepo, fixtures, isolated_git_env};
 
     fn api() -> Api {
-        Api::new(GitCli::new(Arc::new(CommandLog::new(100))).with_env(isolated_git_env()), Some("/launch/path".into()))
+        Api::new(
+            GitCli::new(Arc::new(CommandLog::new(100))).with_env(isolated_git_env()),
+            Some("/launch/path".into()),
+        )
     }
 
     #[tokio::test]
@@ -4196,9 +6762,17 @@ mod tests {
         let r = TestRepo::new();
         let common = r.path().join(".git");
         assert!(api().check_write(&common).is_ok(), "no guard: the app");
-        let guarded = api().with_write_guard(Arc::new(|_: &Path| Err(GbError::new(GbErrorKind::InvalidInput, FIXTURE_ONLY))));
+        let guarded = api().with_write_guard(Arc::new(|_: &Path| {
+            Err(GbError::new(GbErrorKind::InvalidInput, FIXTURE_ONLY))
+        }));
         let err = guarded.check_write(&common).unwrap_err();
-        assert_eq!((err.kind, err.message.as_str()), (GbErrorKind::InvalidInput, "writes are limited to fixture repositories"));
+        assert_eq!(
+            (err.kind, err.message.as_str()),
+            (
+                GbErrorKind::InvalidInput,
+                "writes are limited to fixture repositories"
+            )
+        );
     }
 
     /// An unverified signature (a good one from a key that isn't trusted yet) is looked at again
@@ -4206,7 +6780,12 @@ mod tests {
     #[test]
     fn only_settled_signature_statuses_are_cached() {
         use crate::payload::SignatureKind;
-        for kind in [SignatureKind::Verified, SignatureKind::Bad, SignatureKind::Expired, SignatureKind::Unsigned] {
+        for kind in [
+            SignatureKind::Verified,
+            SignatureKind::Bad,
+            SignatureKind::Expired,
+            SignatureKind::Unsigned,
+        ] {
             assert!(crate::signature::settled(kind), "{kind:?}");
         }
         for kind in [SignatureKind::Unverified, SignatureKind::UnknownKey] {
@@ -4234,12 +6813,19 @@ mod tests {
                 models: vec!["fake-1".into()],
             }]
         }
-        fn models(&self, _endpoint: &str, _token: Option<&crate::redact::Secret>) -> Result<Vec<String>, GbError> {
+        fn models(
+            &self,
+            _endpoint: &str,
+            _token: Option<&crate::redact::Secret>,
+        ) -> Result<Vec<String>, GbError> {
             Ok(vec!["fake-1".into(), "fake-2".into()])
         }
         fn generate(&self, request: &crate::ai::AiRequest<'_>) -> Result<String, GbError> {
             *self.saw_token.lock().unwrap() = request.token.is_some();
-            self.prompts.lock().unwrap().push(request.prompt.to_string());
+            self.prompts
+                .lock()
+                .unwrap()
+                .push(request.prompt.to_string());
             Ok("Add a staged file\n\nIt is needed for the test.".into())
         }
     }
@@ -4247,10 +6833,16 @@ mod tests {
     #[test]
     fn ai_messages_strip_fences_and_prefixes() {
         let m = parse_ai_message("```text\nAdd it\n\nWhy.\n```").unwrap();
-        assert_eq!((m.summary.as_str(), m.description.as_str()), ("Add it", "Why."));
+        assert_eq!(
+            (m.summary.as_str(), m.description.as_str()),
+            ("Add it", "Why.")
+        );
         let m = parse_ai_message("Commit message:\nFix x").unwrap();
         assert_eq!((m.summary.as_str(), m.description.as_str()), ("Fix x", ""));
-        assert_eq!(parse_ai_message("   \n").unwrap_err().kind, GbErrorKind::InvalidInput);
+        assert_eq!(
+            parse_ai_message("   \n").unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
     }
 
     #[tokio::test]
@@ -4262,36 +6854,107 @@ mod tests {
         r.write("file_1.txt", "changed\n");
         r.git(&["add", "file_1.txt"]);
         let tokens = MemTokens::new(crate::forge::TokenStorage::File);
-        let fake = Arc::new(FakeAi { prompts: Mutex::default(), saw_token: Mutex::default() });
+        let fake = Arc::new(FakeAi {
+            prompts: Mutex::default(),
+            saw_token: Mutex::default(),
+        });
         let api = api().with_ai(fake.clone(), tokens.clone());
-        let st = api.dispatch(req(serde_json::json!({"method": "loadState"}))).await.unwrap();
-        let mut profile: crate::settings::Profile = serde_json::from_value(st["profile"].clone()).unwrap();
-        profile.ai_commit = Some(AiCommitSettings { enabled: true, provider: AiProviderKind::OpenAi, endpoint: "https://ai.example/v1".into(), model: "fake-1".into(), command: String::new() });
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": profile}}))).await.unwrap();
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "aiDetect"}))).await.unwrap(), serde_json::json!([{"id":"cli:fake","name":"Fake AI","provider":"cli","endpoint":"","command":"fake {prompt}","models":["fake-1"]}]));
-        assert!(!api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
-        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-test-secret"}}))).await.unwrap();
-        assert!(api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
+        let st = api
+            .dispatch(req(serde_json::json!({"method": "loadState"})))
+            .await
+            .unwrap();
+        let mut profile: crate::settings::Profile =
+            serde_json::from_value(st["profile"].clone()).unwrap();
+        profile.ai_commit = Some(AiCommitSettings {
+            enabled: true,
+            provider: AiProviderKind::OpenAi,
+            endpoint: "https://ai.example/v1".into(),
+            model: "fake-1".into(),
+            command: String::new(),
+        });
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": profile}}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            api.dispatch(req(serde_json::json!({"method": "aiDetect"})))
+                .await
+                .unwrap(),
+            serde_json::json!([{"id":"cli:fake","name":"Fake AI","provider":"cli","endpoint":"","command":"fake {prompt}","models":["fake-1"]}])
+        );
+        assert!(
+            !api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"})))
+                .await
+                .unwrap()
+                .as_bool()
+                .unwrap()
+        );
+        api.dispatch(req(
+            serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-test-secret"}}),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"})))
+                .await
+                .unwrap()
+                .as_bool()
+                .unwrap()
+        );
         assert_eq!(api.dispatch(req(serde_json::json!({"method": "aiModels", "params": {"endpoint": "https://ai.example/v1"}}))).await.unwrap(), serde_json::json!(["fake-1", "fake-2"]));
         let id = open(&api, &r).await;
-        let wt = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let wt = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
         let message = api.dispatch(req(serde_json::json!({"method": "aiGenerateCommitMessage", "params": {"repo": id, "worktree": wt}}))).await.unwrap();
-        assert_eq!(message, serde_json::json!({"summary": "Add a staged file", "description": "It is needed for the test."}));
+        assert_eq!(
+            message,
+            serde_json::json!({"summary": "Add a staged file", "description": "It is needed for the test."})
+        );
         {
             let prompts = fake.prompts.lock().unwrap();
-            assert!(prompts[0].contains("changed"), "the staged diff is in the prompt: {}", prompts[0]);
+            assert!(
+                prompts[0].contains("changed"),
+                "the staged diff is in the prompt: {}",
+                prompts[0]
+            );
         }
-        assert!(*fake.saw_token.lock().unwrap(), "the stored token reached the provider");
-        api.dispatch(req(serde_json::json!({"method": "aiClearToken"}))).await.unwrap();
-        assert!(!api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"}))).await.unwrap().as_bool().unwrap());
+        assert!(
+            *fake.saw_token.lock().unwrap(),
+            "the stored token reached the provider"
+        );
+        api.dispatch(req(serde_json::json!({"method": "aiClearToken"})))
+            .await
+            .unwrap();
+        assert!(
+            !api.dispatch(req(serde_json::json!({"method": "aiTokenStatus"})))
+                .await
+                .unwrap()
+                .as_bool()
+                .unwrap()
+        );
         assert!(tokens.map.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn logging_requests_are_harmless_without_a_log_handle() {
         let api = api();
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "logsDir"}))).await.unwrap(), serde_json::Value::Null);
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "setDebugLogging", "params": {"debug": true}}))).await.unwrap(), serde_json::Value::Null);
+        assert_eq!(
+            api.dispatch(req(serde_json::json!({"method": "logsDir"})))
+                .await
+                .unwrap(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            api.dispatch(req(
+                serde_json::json!({"method": "setDebugLogging", "params": {"debug": true}})
+            ))
+            .await
+            .unwrap(),
+            serde_json::Value::Null
+        );
         let logged = api.dispatch(req(serde_json::json!({"method": "logFrontend", "params": {"level": "error", "message": "boom", "stack": null}}))).await;
         assert_eq!(logged.unwrap(), serde_json::Value::Null);
     }
@@ -4301,28 +6964,50 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_sub, logging) = crate::logging::build(dir.path(), false, false).unwrap();
         let api = api().with_log_handle(logging.handle.clone());
-        let got = api.dispatch(req(serde_json::json!({"method": "logsDir"}))).await.unwrap();
+        let got = api
+            .dispatch(req(serde_json::json!({"method": "logsDir"})))
+            .await
+            .unwrap();
         assert_eq!(got, dir.path().display().to_string());
     }
 
     #[tokio::test]
     async fn a_panicking_request_becomes_an_error() {
-        let err = catch_panics("graph", async { panic!("boom") }).await.unwrap_err();
+        let err = catch_panics("graph", async { panic!("boom") })
+            .await
+            .unwrap_err();
         assert_eq!(err.kind, GbErrorKind::Other);
-        assert!(err.message.contains("graph") && err.message.contains("boom"), "{}", err.message);
+        assert!(
+            err.message.contains("graph") && err.message.contains("boom"),
+            "{}",
+            err.message
+        );
     }
 
     #[tokio::test]
     async fn a_panic_message_is_redacted_before_it_reaches_the_ui() {
         let token = format!("glpat-{}", "d".repeat(24));
-        let err = catch_panics("fetch", async move { panic!("clone https://u:{token}@h.example.com/r.git failed") }).await.unwrap_err();
-        assert!(err.message.contains("h.example.com") && !err.message.contains("glpat-"), "{}", err.message);
+        let err = catch_panics("fetch", async move {
+            panic!("clone https://u:{token}@h.example.com/r.git failed")
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            err.message.contains("h.example.com") && !err.message.contains("glpat-"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
     fn variant_names_never_include_parameters() {
         assert_eq!(variant_name(&Request::LogsDir), "LogsDir");
-        assert_eq!(variant_name(&Request::OpenRepo { path: "/secret/path".into() }), "OpenRepo");
+        assert_eq!(
+            variant_name(&Request::OpenRepo {
+                path: "/secret/path".into()
+            }),
+            "OpenRepo"
+        );
     }
 
     // --- UX R1 C.4 ---
@@ -4331,20 +7016,42 @@ mod tests {
         let roots = [PathBuf::from("/w/repo")];
         let git = Path::new("/w/repo/.git");
         let rel = |m: &str| relative_message(m, &roots, Some(git));
-        assert_eq!(rel("/w/repo/.git/MERGE_MSG: Permission denied"), ".git/MERGE_MSG: Permission denied");
-        assert_eq!(rel("error: '/w/repo/src/a.rs' is in the way"), "error: 'src/a.rs' is in the way");
-        assert_eq!(rel("fatal: not a git repository: /w/repo"), "fatal: not a git repository: .");
-        assert_eq!(rel("/w/repo2/x stays"), "/w/repo2/x stays", "a whole path only");
-        assert_eq!(rel("fatal: unable to access 'https://ada:pw@h/x.git/'"), "fatal: unable to access 'https://***@h/x.git/'");
+        assert_eq!(
+            rel("/w/repo/.git/MERGE_MSG: Permission denied"),
+            ".git/MERGE_MSG: Permission denied"
+        );
+        assert_eq!(
+            rel("error: '/w/repo/src/a.rs' is in the way"),
+            "error: 'src/a.rs' is in the way"
+        );
+        assert_eq!(
+            rel("fatal: not a git repository: /w/repo"),
+            "fatal: not a git repository: ."
+        );
+        assert_eq!(
+            rel("/w/repo2/x stays"),
+            "/w/repo2/x stays",
+            "a whole path only"
+        );
+        assert_eq!(
+            rel("fatal: unable to access 'https://ada:pw@h/x.git/'"),
+            "fatal: unable to access 'https://***@h/x.git/'"
+        );
         if let Some(home) = dirs::home_dir().filter(|h| h.as_os_str().len() > 1) {
-            assert_eq!(rel(&format!("{}/elsewhere/f", home.display())), "~/elsewhere/f");
+            assert_eq!(
+                rel(&format!("{}/elsewhere/f", home.display())),
+                "~/elsewhere/f"
+            );
         }
     }
 
     #[test]
     fn a_write_requests_scope_is_read_from_its_debug_text() {
         let req: Request = serde_json::from_value(serde_json::json!({"method": "discard", "params": {"repo": 7, "worktree": "/w/a \"b\"", "scope": {"kind": "all"}}})).unwrap();
-        assert_eq!(write_scope(&format!("{req:?}")), (Some(7), Some(PathBuf::from("/w/a \"b\""))));
+        assert_eq!(
+            write_scope(&format!("{req:?}")),
+            (Some(7), Some(PathBuf::from("/w/a \"b\"")))
+        );
         assert_eq!(wire_method("CherryPick"), "cherryPick");
     }
 
@@ -4364,7 +7071,11 @@ mod tests {
         }
         let buf = Buf::default();
         let out = buf.clone();
-        let sub = tracing_subscriber::fmt().with_writer(move || out.clone()).with_ansi(false).with_max_level(tracing::Level::INFO).finish();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(move || out.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
         let _guard = tracing::subscriber::set_default(sub);
         let data = tempfile::tempdir().unwrap();
         let r = crate::write::test_support::repo();
@@ -4372,13 +7083,30 @@ mod tests {
         let id = crate::write::test_support::open(&api, &r).await;
         let wt = crate::write::test_support::wt(r.path());
         let err = crate::write::test_support::call(&api, "discard", serde_json::json!({"repo": id, "worktree": wt, "scope": {"kind": "paths", "paths": ["nope.txt"]}})).await.unwrap_err();
-        crate::write::test_support::call(&api, "graph", serde_json::json!({"repo": id})).await.unwrap();
+        crate::write::test_support::call(&api, "graph", serde_json::json!({"repo": id}))
+            .await
+            .unwrap();
         let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        let line = text.lines().find(|l| l.contains("write failed")).unwrap_or_else(|| panic!("no WARN line in {text}"));
-        assert!(line.contains("WARN") && line.contains("method=discard") && line.contains(&format!("kind={:?}", err.kind)), "{line}");
-        assert!(line.contains(&err.message) || line.contains("nope.txt"), "{line}");
+        let line = text
+            .lines()
+            .find(|l| l.contains("write failed"))
+            .unwrap_or_else(|| panic!("no WARN line in {text}"));
+        assert!(
+            line.contains("WARN")
+                && line.contains("method=discard")
+                && line.contains(&format!("kind={:?}", err.kind)),
+            "{line}"
+        );
+        assert!(
+            line.contains(&err.message) || line.contains("nope.txt"),
+            "{line}"
+        );
         assert!(!text.contains(&wt), "no absolute path: {text}");
-        assert_eq!(text.lines().filter(|l| l.contains("write failed")).count(), 1, "reads aren't logged: {text}");
+        assert_eq!(
+            text.lines().filter(|l| l.contains("write failed")).count(),
+            1,
+            "reads aren't logged: {text}"
+        );
     }
     // --- end UX R1 C.4 ---
 
@@ -4390,7 +7118,11 @@ mod tests {
             .unwrap();
         let text = text.as_str().unwrap();
         assert!(text.starts_with("GitNex "));
-        assert!(text.contains("Runtime: harness") && text.contains("Chromium: 152.0.7977.83") && text.contains("git: 2."));
+        assert!(
+            text.contains("Runtime: harness")
+                && text.contains("Chromium: 152.0.7977.83")
+                && text.contains("git: 2.")
+        );
         assert!(!text.contains("abc"));
     }
 
@@ -4400,13 +7132,26 @@ mod tests {
         let (_sub, logging) = crate::logging::build(dir.path(), false, false).unwrap();
         let (with_log, launches) = with_openers(api());
         let with_log = with_log.with_log_handle(logging.handle.clone());
-        assert_eq!(with_log.dispatch(req(serde_json::json!({"method": "openLogsFolder"}))).await.unwrap(), serde_json::Value::Null);
+        assert_eq!(
+            with_log
+                .dispatch(req(serde_json::json!({"method": "openLogsFolder"})))
+                .await
+                .unwrap(),
+            serde_json::Value::Null
+        );
         {
             let launched = launches.lock().unwrap();
             assert_eq!(launched.len(), 1, "{launched:?}");
-            assert!(launched[0].args.iter().any(|a| a == dir.path().as_os_str()), "{launched:?}");
+            assert!(
+                launched[0].args.iter().any(|a| a == dir.path().as_os_str()),
+                "{launched:?}"
+            );
         }
-        let bare = with_openers(api()).0.dispatch(req(serde_json::json!({"method": "openLogsFolder"}))).await.unwrap_err();
+        let bare = with_openers(api())
+            .0
+            .dispatch(req(serde_json::json!({"method": "openLogsFolder"})))
+            .await
+            .unwrap_err();
         assert_eq!(bare.kind, GbErrorKind::InvalidInput);
     }
 
@@ -4415,16 +7160,34 @@ mod tests {
         let r = TestRepo::new();
         fixtures::basic(&r);
         let api = api();
-        let opened = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}))).await.unwrap();
+        let opened = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(opened["name"], "repo");
         let id = opened["id"].as_u64().unwrap();
         let sub = r.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
-        let again = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": sub}}))).await.unwrap();
+        let again = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": sub}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(again["id"].as_u64().unwrap(), id, "same repo reuses its id");
-        let graph = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
+        let graph = api
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(graph["rows"].as_array().unwrap().len(), 10);
-        assert_eq!(graph["rows"][0]["kind"], "wip", "the open worktree's WIP is row 0");
+        assert_eq!(
+            graph["rows"][0]["kind"], "wip",
+            "the open worktree's WIP is row 0"
+        );
     }
 
     #[tokio::test]
@@ -4434,7 +7197,9 @@ mod tests {
         let dir = data.path().join("new");
         let dir_text = dir.display().to_string();
         let init = |path: String, readme: bool| {
-            req(serde_json::json!({"method": "initRepo", "params": {"path": path, "branch": "main", "readme": readme}}))
+            req(
+                serde_json::json!({"method": "initRepo", "params": {"path": path, "branch": "main", "readme": readme}}),
+            )
         };
         let opened = api.dispatch(init(dir_text.clone(), true)).await.unwrap();
         assert_eq!(opened["name"].as_str(), Some("new"));
@@ -4442,28 +7207,54 @@ mod tests {
         let canonical_text = canonical.display().to_string();
         assert_eq!(opened["path"].as_str(), Some(canonical_text.as_str()));
         assert!(dir.join(".git").is_dir());
-        assert_eq!(std::fs::read_to_string(dir.join("README.md")).unwrap(), "# new\n");
-        assert!(dir.join(".git/refs/heads/main").is_file(), "the initial commit created the branch");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("README.md")).unwrap(),
+            "# new\n"
+        );
+        assert!(
+            dir.join(".git/refs/heads/main").is_file(),
+            "the initial commit created the branch"
+        );
         let again = api.dispatch(init(dir_text, true)).await.unwrap_err();
         assert_eq!(again.kind, GbErrorKind::InvalidInput);
         // Without the README the initial commit is empty, but the branch still exists.
         let empty = data.path().join("empty");
-        api.dispatch(init(empty.display().to_string(), false)).await.unwrap();
+        api.dispatch(init(empty.display().to_string(), false))
+            .await
+            .unwrap();
         assert!(!empty.join("README.md").exists());
-        assert!(empty.join(".git/refs/heads/main").is_file(), "an empty initial commit creates the branch too");
+        assert!(
+            empty.join(".git/refs/heads/main").is_file(),
+            "an empty initial commit creates the branch too"
+        );
         let full = data.path().join("full");
         std::fs::create_dir(&full).unwrap();
         std::fs::write(full.join("x"), "x").unwrap();
-        let not_empty = api.dispatch(init(full.display().to_string(), true)).await.unwrap_err();
-        assert!(not_empty.message.contains("isn't empty"), "{}", not_empty.message);
-        let relative = api.dispatch(init("relative/new".into(), true)).await.unwrap_err();
+        let not_empty = api
+            .dispatch(init(full.display().to_string(), true))
+            .await
+            .unwrap_err();
+        assert!(
+            not_empty.message.contains("isn't empty"),
+            "{}",
+            not_empty.message
+        );
+        let relative = api
+            .dispatch(init("relative/new".into(), true))
+            .await
+            .unwrap_err();
         assert_eq!(relative.kind, GbErrorKind::InvalidInput);
     }
 
     #[tokio::test]
     async fn not_a_repo_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let err = api().dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": dir.path()}}))).await.unwrap_err();
+        let err = api()
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": dir.path()}}),
+            ))
+            .await
+            .unwrap_err();
         assert_eq!(err.kind, GbErrorKind::NotFound);
         assert!(err.message.starts_with("Not a git repository"));
     }
@@ -4482,18 +7273,38 @@ mod tests {
             env.retain(|(k, _)| k != "GIT_CONFIG_GLOBAL");
             env.push(("GIT_CONFIG_GLOBAL".into(), global.into()));
             env.push(("GIT_TEST_ASSUME_DIFFERENT_OWNER".into(), "1".into()));
-            Api::new(GitCli::new(Arc::new(CommandLog::new(100))).with_env(env), None)
+            Api::new(
+                GitCli::new(Arc::new(CommandLog::new(100))).with_env(env),
+                None,
+            )
         };
         let open = |api: Api| {
             let path = r.path().to_path_buf();
-            async move { api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": path}}))).await }
+            async move {
+                api.dispatch(req(
+                    serde_json::json!({"method": "openRepo", "params": {"path": path}}),
+                ))
+                .await
+            }
         };
         let err = open(other_owner("/dev/null")).await.unwrap_err();
         assert!(err.message.contains("dubious ownership"), "{}", err.message);
         let dir = tempfile::tempdir().unwrap();
         let global = dir.path().join("gitconfig");
-        std::fs::write(&global, format!("[safe]\n\tdirectory = {}\n", crate::platform::fs::canonicalize(r.path()).unwrap().display())).unwrap();
-        assert!(open(other_owner(global.to_str().unwrap())).await.is_ok(), "listed in the user's safe.directory");
+        std::fs::write(
+            &global,
+            format!(
+                "[safe]\n\tdirectory = {}\n",
+                crate::platform::fs::canonicalize(r.path())
+                    .unwrap()
+                    .display()
+            ),
+        )
+        .unwrap();
+        assert!(
+            open(other_owner(global.to_str().unwrap())).await.is_ok(),
+            "listed in the user's safe.directory"
+        );
     }
 
     #[tokio::test]
@@ -4505,22 +7316,46 @@ mod tests {
             .envs(isolated_git_env())
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        let err = api().dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": dir.path()}}))).await.unwrap_err();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = api()
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": dir.path()}}),
+            ))
+            .await
+            .unwrap_err();
         assert_eq!(err.kind, GbErrorKind::InvalidInput);
     }
 
     #[tokio::test]
     async fn unknown_repo_id_is_invalid_input() {
-        let err = api().dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": 99, "limit": null}}))).await.unwrap_err();
+        let err = api()
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": 99, "limit": null}}),
+            ))
+            .await
+            .unwrap_err();
         assert_eq!(err.kind, GbErrorKind::InvalidInput);
     }
 
     #[tokio::test]
     async fn launch_repo_and_command_log() {
         let api = api();
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "launchRepo"}))).await.unwrap(), "/launch/path");
-        assert!(api.dispatch(req(serde_json::json!({"method": "commandLog"}))).await.unwrap().is_array());
+        assert_eq!(
+            api.dispatch(req(serde_json::json!({"method": "launchRepo"})))
+                .await
+                .unwrap(),
+            "/launch/path"
+        );
+        assert!(
+            api.dispatch(req(serde_json::json!({"method": "commandLog"})))
+                .await
+                .unwrap()
+                .is_array()
+        );
     }
 
     /// The request log: each request's method, params, timing, outcome and git commands; the Debug
@@ -4530,32 +7365,74 @@ mod tests {
         let r = TestRepo::new();
         fixtures::basic(&r);
         let api = api();
-        let id = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}))).await.unwrap()["id"].as_u64().unwrap();
+        let id = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ))
+            .await
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
         let before = api.command_log().entries().last().map_or(0, |c| c.id);
-        api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
-        api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": 99, "limit": null}}))).await.unwrap_err();
+        api.dispatch(req(
+            serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+        ))
+        .await
+        .unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "graph", "params": {"repo": 99, "limit": null}}),
+        ))
+        .await
+        .unwrap_err();
         for method in ["commandLog", "requestLog"] {
-            api.dispatch(req(serde_json::json!({"method": method}))).await.unwrap();
+            api.dispatch(req(serde_json::json!({"method": method})))
+                .await
+                .unwrap();
         }
         api.dispatch(req(serde_json::json!({"method": "logFrontend", "params": {"level": "info", "message": "x", "stack": null}}))).await.unwrap();
 
-        let wire = api.dispatch(req(serde_json::json!({"method": "requestLog"}))).await.unwrap();
+        let wire = api
+            .dispatch(req(serde_json::json!({"method": "requestLog"})))
+            .await
+            .unwrap();
         let log = api.request_log().entries();
         assert_eq!(wire.as_array().map(Vec::len), Some(log.len()));
         assert_eq!(wire[1]["method"], "graph");
-        assert!(wire[1]["durationMs"].is_f64() && wire[1]["commands"].is_array() && wire[1]["error"].is_null());
+        assert!(
+            wire[1]["durationMs"].is_f64()
+                && wire[1]["commands"].is_array()
+                && wire[1]["error"].is_null()
+        );
         let methods: Vec<&str> = log.iter().map(|e| e.method.as_str()).collect();
-        assert_eq!(methods, ["openRepo", "graph", "graph"], "no log reads, no frontend log lines");
+        assert_eq!(
+            methods,
+            ["openRepo", "graph", "graph"],
+            "no log reads, no frontend log lines"
+        );
         let (ok, failed) = (&log[1], &log[2]);
         assert_eq!(ok.params, format!("repo={id}"));
         assert!(ok.error.is_none() && ok.duration_ms > 0.0 && ok.started_ms > 0);
         // The graph runs git (status, worktree list): its commands are linked, and they're the
         // command log's.
-        let ran: Vec<u64> = api.command_log().entries().iter().map(|c| c.id).filter(|&c| c > before).collect();
+        let ran: Vec<u64> = api
+            .command_log()
+            .entries()
+            .iter()
+            .map(|c| c.id)
+            .filter(|&c| c > before)
+            .collect();
         assert!(!ok.commands.is_empty(), "{ok:?}");
-        assert!(ok.commands.iter().all(|c| ran.contains(c)), "{ok:?} {ran:?}");
+        assert!(
+            ok.commands.iter().all(|c| ran.contains(c)),
+            "{ok:?} {ran:?}"
+        );
         assert_eq!(failed.error, Some(GbErrorKind::InvalidInput));
-        assert!(failed.error_message.as_deref().is_some_and(|m| !m.is_empty()));
+        assert!(
+            failed
+                .error_message
+                .as_deref()
+                .is_some_and(|m| !m.is_empty())
+        );
         assert!(failed.commands.is_empty());
     }
 
@@ -4566,11 +7443,24 @@ mod tests {
         let token = format!("glpat-test-{}", "x".repeat(24));
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": token}}))).await.unwrap_err();
         let ai_token = format!("sk-test-{}", "y".repeat(24));
-        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": ai_token}}))).await.unwrap_err();
+        api.dispatch(req(
+            serde_json::json!({"method": "aiSetToken", "params": {"token": ai_token}}),
+        ))
+        .await
+        .unwrap_err();
         api.dispatch(req(serde_json::json!({"method": "commit", "params": {"repo": 99, "worktree": "/w", "summary": "secret summary", "description": "secret body"}}))).await.unwrap_err();
         let text = serde_json::to_string(&api.request_log().entries()).unwrap();
-        assert!(!text.contains(&token) && !text.contains(&ai_token) && !text.contains("secret summary") && !text.contains("secret body"), "{text}");
-        assert!(text.contains("gitlab.example.com") && text.contains("worktree=/w"), "{text}");
+        assert!(
+            !text.contains(&token)
+                && !text.contains(&ai_token)
+                && !text.contains("secret summary")
+                && !text.contains("secret body"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gitlab.example.com") && text.contains("worktree=/w"),
+            "{text}"
+        );
     }
 
     /// Cost: a timestamp, a summary of the Debug text `dispatch` already formats, a small struct
@@ -4589,16 +7479,36 @@ mod tests {
             api.dispatch(Request::CommandLog).await.unwrap();
         }
         let unrecorded = t.elapsed();
-        let graph_debug = format!("{:?}", req(serde_json::json!({"method": "graph", "params": {"repo": 3, "limit": 2000, "rescan": true}})));
+        let graph_debug = format!(
+            "{:?}",
+            req(
+                serde_json::json!({"method": "graph", "params": {"repo": 3, "limit": 2000, "rescan": true}})
+            )
+        );
         let t = Instant::now();
         for _ in 0..N {
-            std::hint::black_box(crate::log::params_summary(std::hint::black_box(&graph_debug)));
+            std::hint::black_box(crate::log::params_summary(std::hint::black_box(
+                &graph_debug,
+            )));
         }
         let summary = t.elapsed();
         let per = |d: Duration| d.as_secs_f64() * 1e6 / N as f64;
-        eprintln!("request log: launchRepo {:.2} µs recorded, commandLog {:.2} µs unrecorded, a graph summary {:.2} µs", per(recorded), per(unrecorded), per(summary));
-        assert!(per(summary) < 200.0, "a summary takes {:.1} µs", per(summary));
-        assert_eq!(api.request_log().entries().len(), REQUEST_LOG_CAPACITY, "capped");
+        eprintln!(
+            "request log: launchRepo {:.2} µs recorded, commandLog {:.2} µs unrecorded, a graph summary {:.2} µs",
+            per(recorded),
+            per(unrecorded),
+            per(summary)
+        );
+        assert!(
+            per(summary) < 200.0,
+            "a summary takes {:.1} µs",
+            per(summary)
+        );
+        assert_eq!(
+            api.request_log().entries().len(),
+            REQUEST_LOG_CAPACITY,
+            "capped"
+        );
     }
 
     /// R19: a path forwarded before anyone listens is still there for the UI's boot-time take,
@@ -4609,7 +7519,10 @@ mod tests {
         api.request_open("/a".into());
         let mut events = api.subscribe();
         api.request_open("/b".into());
-        assert_eq!(events.recv().await.unwrap(), AppEvent::OpenRequested { path: "/b".into() });
+        assert_eq!(
+            events.recv().await.unwrap(),
+            AppEvent::OpenRequested { path: "/b".into() }
+        );
         let take = || api.dispatch(req(serde_json::json!({"method": "takeOpenRequests"})));
         assert_eq!(take().await.unwrap(), serde_json::json!(["/a", "/b"]));
         assert_eq!(take().await.unwrap(), serde_json::json!([]));
@@ -4624,24 +7537,56 @@ mod tests {
     #[tokio::test]
     async fn state_round_trips_through_dispatch() {
         let api = api();
-        let st = api.dispatch(req(serde_json::json!({"method": "loadState"}))).await.unwrap();
+        let st = api
+            .dispatch(req(serde_json::json!({"method": "loadState"})))
+            .await
+            .unwrap();
         assert_eq!(st["profile"]["id"], "default");
         let mut profile = st["profile"].clone();
-        profile["tabs"] = serde_json::json!([{"id": "t1", "kind": "repo", "path": "/r", "alias": null}]);
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": profile}}))).await.unwrap();
-        let st = api.dispatch(req(serde_json::json!({"method": "loadState"}))).await.unwrap();
+        profile["tabs"] =
+            serde_json::json!([{"id": "t1", "kind": "repo", "path": "/r", "alias": null}]);
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": profile}}),
+        ))
+        .await
+        .unwrap();
+        let st = api
+            .dispatch(req(serde_json::json!({"method": "loadState"})))
+            .await
+            .unwrap();
         assert_eq!(st["profile"]["tabs"][0]["path"], "/r");
         let mut settings = st["settings"].clone();
         settings["fetchIntervalSecs"] = serde_json::json!(0);
-        api.dispatch(req(serde_json::json!({"method": "saveSettings", "params": {"settings": settings}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveSettings", "params": {"settings": settings}}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(api.store().state().settings.fetch_interval_secs, 0);
         let made = api.dispatch(req(serde_json::json!({"method": "createProfile", "params": {"name": "Work", "color": "#f00"}}))).await.unwrap();
-        let switched = api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": made["id"]}}))).await.unwrap();
+        let switched = api
+            .dispatch(req(
+                serde_json::json!({"method": "switchProfile", "params": {"id": made["id"]}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(switched["profile"]["name"], "Work");
         assert_eq!(switched["profiles"].as_array().unwrap().len(), 2);
-        api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}))).await.unwrap();
-        let left = api.dispatch(req(serde_json::json!({"method": "deleteProfile", "params": {"id": made["id"]}}))).await.unwrap();
-        assert_eq!(left, serde_json::json!([{"id": "default", "name": "Default", "color": "#4d88ff"}]));
+        api.dispatch(req(
+            serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}),
+        ))
+        .await
+        .unwrap();
+        let left = api
+            .dispatch(req(
+                serde_json::json!({"method": "deleteProfile", "params": {"id": made["id"]}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            left,
+            serde_json::json!([{"id": "default", "name": "Default", "color": "#4d88ff"}])
+        );
     }
 
     #[tokio::test]
@@ -4653,22 +7598,58 @@ mod tests {
         let api = api();
         let mut p = api.store().active_profile();
         p.extra_gitconfig = Some(inc.display().to_string());
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
-        let out = api.cli.run(crate::git::GitInvocation::new(r.path(), ["config", "gitnex.probe"])).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": p}}),
+        ))
+        .await
+        .unwrap();
+        let out = api
+            .cli
+            .run(crate::git::GitInvocation::new(
+                r.path(),
+                ["config", "gitnex.probe"],
+            ))
+            .await
+            .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "work");
         // A blank path is no include at all; switching to a profile without one drops it.
         p.extra_gitconfig = Some("  ".into());
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": p}}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(api.cli.include_path(), None);
         p.extra_gitconfig = Some(inc.display().to_string());
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": p}}),
+        ))
+        .await
+        .unwrap();
         let made = api.dispatch(req(serde_json::json!({"method": "createProfile", "params": {"name": "Plain", "color": "#0f0"}}))).await.unwrap();
-        api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": made["id"]}}))).await.unwrap();
-        assert!(api.cli.run(crate::git::GitInvocation::new(r.path(), ["config", "gitnex.probe"])).await.is_err());
-        api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "switchProfile", "params": {"id": made["id"]}}),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            api.cli
+                .run(crate::git::GitInvocation::new(
+                    r.path(),
+                    ["config", "gitnex.probe"]
+                ))
+                .await
+                .is_err()
+        );
+        api.dispatch(req(
+            serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(api.cli.include_path(), Some(inc.clone()));
         // A store opened with an active profile that has one applies it at once.
-        let other = super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None).with_store(api.store().clone());
+        let other = super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None)
+            .with_store(api.store().clone());
         assert_eq!(other.cli.include_path(), Some(inc));
     }
 
@@ -4677,27 +7658,56 @@ mod tests {
         let r = TestRepo::new();
         r.commit("a");
         let extra = r.root().join("work.gitconfig");
-        std::fs::write(&extra, "[user]\n\tname = Extra Name\n\temail = extra@example.com\n").unwrap();
+        std::fs::write(
+            &extra,
+            "[user]\n\tname = Extra Name\n\temail = extra@example.com\n",
+        )
+        .unwrap();
         let api = api();
         let path = r.path().to_path_buf();
         let read = |key: &str| {
             let api = &api;
             let path = &path;
             let key = key.to_string();
-            async move { String::from_utf8_lossy(&api.cli.run(crate::git::GitInvocation::new(path, ["config", "--get", &key])).await.unwrap().stdout).trim().to_string() }
+            async move {
+                String::from_utf8_lossy(
+                    &api.cli
+                        .run(crate::git::GitInvocation::new(
+                            path,
+                            ["config", "--get", &key],
+                        ))
+                        .await
+                        .unwrap()
+                        .stdout,
+                )
+                .trim()
+                .to_string()
+            }
         };
         let mut p = api.store().active_profile();
         p.git_name = Some("Robin Example".into());
         p.git_email = Some("robin@example.com".into());
         p.extra_gitconfig = Some(extra.display().to_string());
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": p}}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(read("user.name").await, "Robin Example");
-        assert_eq!(read("user.email").await, "robin@example.com", "the profile fields win over its extra config");
+        assert_eq!(
+            read("user.email").await,
+            "robin@example.com",
+            "the profile fields win over its extra config"
+        );
         // Clearing them hands identity back to git config (here, the extra file).
         let mut p = api.store().active_profile();
         p.git_name = None;
         p.git_email = None;
-        api.dispatch(req(serde_json::json!({"method": "saveProfile", "params": {"profile": p}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveProfile", "params": {"profile": p}}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(read("user.name").await, "Extra Name");
         assert_eq!(read("user.email").await, "extra@example.com");
     }
@@ -4714,7 +7724,10 @@ mod tests {
         let id = open(&source_api, &source).await;
         let patch = source_api.dispatch(req(serde_json::json!({"method": "createCommitPatch", "params": {"repo": id, "rev": sha}}))).await.unwrap();
         let text = patch["text"].as_str().unwrap();
-        assert!(text.contains("diff --git a/file_0.txt b/file_0.txt"), "{text}");
+        assert!(
+            text.contains("diff --git a/file_0.txt b/file_0.txt"),
+            "{text}"
+        );
         assert!(text.contains("+changed"), "{text}");
 
         let target = TestRepo::new();
@@ -4722,7 +7735,10 @@ mod tests {
         let target_api = api();
         let target_id = open(&target_api, &target).await;
         target_api.dispatch(req(serde_json::json!({"method": "applyPatch", "params": {"repo": target_id, "worktree": target.path(), "patch": text}}))).await.unwrap();
-        assert_eq!(std::fs::read_to_string(target.path().join("file_0.txt")).unwrap(), "changed\n");
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("file_0.txt")).unwrap(),
+            "changed\n"
+        );
 
         source.write("file_0.txt", "unstaged\n");
         let worktree = source_api.dispatch(req(serde_json::json!({"method": "createWorktreePatch", "params": {"repo": id, "worktree": source.path(), "staged": false}}))).await.unwrap();
@@ -4736,21 +7752,44 @@ mod tests {
         fixtures::basic(&r);
         let api = api();
         let id = open(&api, &r).await;
-        let s = api.dispatch(req(serde_json::json!({"method": "sidebar", "params": {"repo": id}}))).await.unwrap();
-        assert!(s["locals"].as_array().unwrap().iter().any(|b| b["name"] == "main" && b["isHead"] == true));
+        let s = api
+            .dispatch(req(
+                serde_json::json!({"method": "sidebar", "params": {"repo": id}}),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            s["locals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["name"] == "main" && b["isHead"] == true)
+        );
         assert_eq!(s["remotes"][0]["name"], "origin");
         let lp = api.dispatch(req(serde_json::json!({"method": "lastPush", "params": {"repo": id, "remoteRef": "refs/remotes/origin/main"}}))).await.unwrap();
         assert_eq!(lp["kind"], "push");
         let bad = api.dispatch(req(serde_json::json!({"method": "lastPush", "params": {"repo": id, "remoteRef": "../../etc/passwd"}}))).await.unwrap_err();
         assert_eq!(bad.kind, GbErrorKind::InvalidInput);
-        let info = api.dispatch(req(serde_json::json!({"method": "repoInfo", "params": {"repo": id}}))).await.unwrap();
+        let info = api
+            .dispatch(req(
+                serde_json::json!({"method": "repoInfo", "params": {"repo": id}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(info["remotes"][0]["name"], "origin");
         assert!(info["mainWorktree"].is_null());
         let before = api.command_log().entries().len();
-        let app = api.dispatch(req(serde_json::json!({"method": "appInfo"}))).await.unwrap();
+        let app = api
+            .dispatch(req(serde_json::json!({"method": "appInfo"})))
+            .await
+            .unwrap();
         assert_eq!(app["appVersion"], env!("CARGO_PKG_VERSION"));
         assert!(app["gitVersion"].as_str().unwrap().starts_with('2'));
-        assert_eq!(api.command_log().entries().len(), before, "the git version is the one openRepo cached");
+        assert_eq!(
+            api.command_log().entries().len(),
+            before,
+            "the git version is the one openRepo cached"
+        );
     }
 
     #[tokio::test]
@@ -4759,14 +7798,46 @@ mod tests {
         fixtures::basic(&r);
         let api = api();
         let id = open(&api, &r).await;
-        let graph = |pin: serde_json::Value| req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "pin": pin}}));
-        let auto = api.dispatch(graph(serde_json::json!({"kind": "auto"}))).await.unwrap();
-        assert_eq!(auto["pinnedRefs"], serde_json::json!(["refs/heads/main", "refs/remotes/origin/main"]));
-        assert_eq!(api.dispatch(graph(serde_json::json!({"kind": "off"}))).await.unwrap()["pinnedRefs"], serde_json::json!([]));
-        let hotfix = api.dispatch(graph(serde_json::json!({"kind": "ref", "name": "refs/heads/hotfix"}))).await.unwrap();
-        assert_eq!(hotfix["pinnedRefs"], serde_json::json!(["refs/heads/hotfix"]), "no upstream: alone");
-        let absent = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
-        assert_eq!(absent["pinnedRefs"], auto["pinnedRefs"], "no pin is the default trunk");
+        let graph = |pin: serde_json::Value| {
+            req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "pin": pin}}),
+            )
+        };
+        let auto = api
+            .dispatch(graph(serde_json::json!({"kind": "auto"})))
+            .await
+            .unwrap();
+        assert_eq!(
+            auto["pinnedRefs"],
+            serde_json::json!(["refs/heads/main", "refs/remotes/origin/main"])
+        );
+        assert_eq!(
+            api.dispatch(graph(serde_json::json!({"kind": "off"})))
+                .await
+                .unwrap()["pinnedRefs"],
+            serde_json::json!([])
+        );
+        let hotfix = api
+            .dispatch(graph(
+                serde_json::json!({"kind": "ref", "name": "refs/heads/hotfix"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            hotfix["pinnedRefs"],
+            serde_json::json!(["refs/heads/hotfix"]),
+            "no upstream: alone"
+        );
+        let absent = api
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            absent["pinnedRefs"], auto["pinnedRefs"],
+            "no pin is the default trunk"
+        );
     }
 
     // --- branch presets ---
@@ -4777,7 +7848,12 @@ mod tests {
         let api = api();
         let id = open(&api, &r).await;
         let view = serde_json::json!({"rules": [], "otherwise": "show", "foldMerged": false, "ghostLines": false});
-        let plain = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
+        let plain = api
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap();
         assert!(plain.get("view").is_none(), "All's payload has no view");
         let viewed = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "view": view}}))).await.unwrap();
         assert_eq!(viewed["rows"], plain["rows"]);
@@ -4803,14 +7879,28 @@ mod tests {
         let api = api().with_folder_picker(Arc::new(move |_: Option<&Path>| Some(pick.clone())));
         let first = call(&api, "theme.json", "{\"a\":1}").await.unwrap();
         assert_eq!(first, dir.path().join("theme.json").display().to_string());
-        assert_eq!(std::fs::read_to_string(dir.path().join("theme.json")).unwrap(), "{\"a\":1}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("theme.json")).unwrap(),
+            "{\"a\":1}"
+        );
         let second = call(&api, "theme.json", "{\"a\":2}").await.unwrap();
-        assert_eq!(second, dir.path().join("theme (2).json").display().to_string());
-        assert_eq!(std::fs::read_to_string(dir.path().join("theme.json")).unwrap(), "{\"a\":1}", "the first file is untouched");
+        assert_eq!(
+            second,
+            dir.path().join("theme (2).json").display().to_string()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("theme.json")).unwrap(),
+            "{\"a\":1}",
+            "the first file is untouched"
+        );
         for bad in ["../x.json", "a/b.json", "a\\b.json", ""] {
             assert!(call(&api, bad, "{}").await.is_err(), "{bad}");
         }
-        assert!(call(&api, "big.json", &"x".repeat(16 * 1024 * 1024 + 1)).await.is_err());
+        assert!(
+            call(&api, "big.json", &"x".repeat(16 * 1024 * 1024 + 1))
+                .await
+                .is_err()
+        );
         let nothing = api.with_folder_picker(Arc::new(|_: Option<&Path>| None));
         assert!(call(&nothing, "none.json", "{}").await.unwrap().is_null());
         assert!(!dir.path().join("none.json").exists());
@@ -4819,7 +7909,15 @@ mod tests {
     #[tokio::test]
     async fn pick_folder_scan_repos_and_suggest_repos_folder_dispatch() {
         let api = api();
-        assert!(api.dispatch(req(serde_json::json!({"method": "pickFolder", "params": {"start": null}}))).await.unwrap().is_null(), "no picker: nothing picked");
+        assert!(
+            api.dispatch(req(
+                serde_json::json!({"method": "pickFolder", "params": {"start": null}})
+            ))
+            .await
+            .unwrap()
+            .is_null(),
+            "no picker: nothing picked"
+        );
         let asked: Arc<Mutex<Vec<Option<PathBuf>>>> = Arc::default();
         let sink = asked.clone();
         let api = api.with_folder_picker(Arc::new(move |start: Option<&Path>| {
@@ -4828,23 +7926,64 @@ mod tests {
         }));
         // An absolute start, as this OS spells one (`/start` isn't one on Windows).
         let start = if cfg!(windows) { r"C:\start" } else { "/start" };
-        let picked = api.dispatch(req(serde_json::json!({"method": "pickFolder", "params": {"start": start}}))).await.unwrap();
+        let picked = api
+            .dispatch(req(
+                serde_json::json!({"method": "pickFolder", "params": {"start": start}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(picked, "/picked/here");
         assert_eq!(*asked.lock().unwrap(), [Some(PathBuf::from(start))]);
 
         let home = tempfile::tempdir().unwrap();
         let api = api.with_home(Some(home.path().to_path_buf()));
         let suggest = || req(serde_json::json!({"method": "suggestReposFolder"}));
-        assert!(api.dispatch(suggest()).await.unwrap().is_null(), "no ~/repos yet");
+        assert!(
+            api.dispatch(suggest()).await.unwrap().is_null(),
+            "no ~/repos yet"
+        );
         let repos = home.path().join("repos");
         TestRepo::init_at(&repos.join("one")).commit("a");
-        assert_eq!(api.dispatch(suggest()).await.unwrap(), repos.display().to_string());
+        assert_eq!(
+            api.dispatch(suggest()).await.unwrap(),
+            repos.display().to_string()
+        );
 
-        let scan = |refresh: bool| req(serde_json::json!({"method": "scanRepos", "params": {"root": repos, "refresh": refresh}}));
-        assert_eq!(api.dispatch(scan(false)).await.unwrap().as_array().unwrap().len(), 1);
+        let scan = |refresh: bool| {
+            req(
+                serde_json::json!({"method": "scanRepos", "params": {"root": repos, "refresh": refresh}}),
+            )
+        };
+        assert_eq!(
+            api.dispatch(scan(false))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         TestRepo::init_at(&repos.join("two")).commit("b");
-        assert_eq!(api.dispatch(scan(false)).await.unwrap().as_array().unwrap().len(), 1, "cached per root");
-        assert_eq!(api.dispatch(scan(true)).await.unwrap().as_array().unwrap().len(), 2, "refresh rescans");
+        assert_eq!(
+            api.dispatch(scan(false))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "cached per root"
+        );
+        assert_eq!(
+            api.dispatch(scan(true))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "refresh rescans"
+        );
         let rel = api.dispatch(req(serde_json::json!({"method": "scanRepos", "params": {"root": "relative", "refresh": false}}))).await.unwrap_err();
         assert_eq!(rel.kind, GbErrorKind::InvalidInput);
     }
@@ -4855,10 +7994,30 @@ mod tests {
         TestRepo::init_at(&a.path().join("one")).commit("a");
         TestRepo::init_at(&b.path().join("two")).commit("b");
         let api = api();
-        let scan = |roots: serde_json::Value| req(serde_json::json!({"method": "scanFolders", "params": {"roots": roots, "refresh": false}}));
-        let got = api.dispatch(scan(serde_json::json!([a.path(), b.path(), a.path(), "relative", "/no/such/dir"]))).await.unwrap();
+        let scan = |roots: serde_json::Value| {
+            req(
+                serde_json::json!({"method": "scanFolders", "params": {"roots": roots, "refresh": false}}),
+            )
+        };
+        let got = api
+            .dispatch(scan(serde_json::json!([
+                a.path(),
+                b.path(),
+                a.path(),
+                "relative",
+                "/no/such/dir"
+            ])))
+            .await
+            .unwrap();
         assert_eq!(got.as_array().unwrap().len(), 2, "{got}");
-        assert!(api.dispatch(scan(serde_json::json!([]))).await.unwrap().as_array().unwrap().is_empty());
+        assert!(
+            api.dispatch(scan(serde_json::json!([])))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(unix)] // /bin/echo and /bin/sh as editors
@@ -4869,59 +8028,159 @@ mod tests {
         let (api, launches) = with_openers(api());
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
-        let open_custom = |line: Option<u32>| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": line, "opener": "custom"}}));
-        assert_eq!(api.dispatch(open_custom(None)).await.unwrap_err().kind, GbErrorKind::InvalidInput, "no custom command set");
+        let open_custom = |line: Option<u32>| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": line, "opener": "custom"}}),
+            )
+        };
+        assert_eq!(
+            api.dispatch(open_custom(None)).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "no custom command set"
+        );
         let mut p = api.store().active_profile();
-        p.editor = Some(crate::settings::EditorChoice::Custom { template: "/bin/echo --goto {file}:{line} --project {repo}".into() });
+        p.editor = Some(crate::settings::EditorChoice::Custom {
+            template: "/bin/echo --goto {file}:{line} --project {repo}".into(),
+        });
         api.store().save_profile(p.clone()).unwrap();
         api.dispatch(open_custom(Some(7))).await.unwrap();
         let file = wt.join("src/app.php").display().to_string();
-        assert_eq!(argv(launches.lock().unwrap().last().unwrap()), ["/bin/echo", "--goto", &format!("{file}:7"), "--project", &wt.display().to_string()]);
+        assert_eq!(
+            argv(launches.lock().unwrap().last().unwrap()),
+            [
+                "/bin/echo",
+                "--goto",
+                &format!("{file}:7"),
+                "--project",
+                &wt.display().to_string()
+            ]
+        );
         // The repo's own editor wins over the profile's.
-        p.repos.insert(wt.display().to_string(), crate::settings::RepoSettings { editor: Some(crate::settings::EditorChoice::Custom { template: "/bin/echo {file}".into() }), ..Default::default() });
+        p.repos.insert(
+            wt.display().to_string(),
+            crate::settings::RepoSettings {
+                editor: Some(crate::settings::EditorChoice::Custom {
+                    template: "/bin/echo {file}".into(),
+                }),
+                ..Default::default()
+            },
+        );
         api.store().save_profile(p.clone()).unwrap();
         api.dispatch(open_custom(None)).await.unwrap();
-        assert_eq!(argv(launches.lock().unwrap().last().unwrap()), ["/bin/echo", &file]);
+        assert_eq!(
+            argv(launches.lock().unwrap().last().unwrap()),
+            ["/bin/echo", &file]
+        );
         // The same path checks as any editor, and the template guard.
-        let escape = req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "../x", "line": null, "opener": "custom"}}));
-        assert_eq!(api.dispatch(escape).await.unwrap_err().kind, GbErrorKind::InvalidInput);
+        let escape = req(
+            serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "../x", "line": null, "opener": "custom"}}),
+        );
+        assert_eq!(
+            api.dispatch(escape).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
         p.repos.clear();
-        p.editor = Some(crate::settings::EditorChoice::Custom { template: "/bin/sh -c 'vim {file}'".into() });
+        p.editor = Some(crate::settings::EditorChoice::Custom {
+            template: "/bin/sh -c 'vim {file}'".into(),
+        });
         api.store().save_profile(p.clone()).unwrap();
-        assert_eq!(api.dispatch(open_custom(None)).await.unwrap_err().kind, GbErrorKind::InvalidInput);
-        p.editor = Some(crate::settings::EditorChoice::Opener { id: "vscode".into() });
+        assert_eq!(
+            api.dispatch(open_custom(None)).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
+        p.editor = Some(crate::settings::EditorChoice::Opener {
+            id: "vscode".into(),
+        });
         api.store().save_profile(p).unwrap();
-        assert_eq!(api.dispatch(open_custom(None)).await.unwrap_err().kind, GbErrorKind::InvalidInput, "the editor is an opener, not a custom command");
+        assert_eq!(
+            api.dispatch(open_custom(None)).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "the editor is an opener, not a custom command"
+        );
         assert_eq!(launches.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
     async fn auth_answer_and_cancel_op_dispatch() {
         let api = api();
-        let answer = |prompt: u64| req(serde_json::json!({"method": "authAnswer", "params": {"prompt": prompt, "answer": "x"}}));
-        assert_eq!(api.dispatch(answer(1)).await.unwrap_err().kind, GbErrorKind::InvalidInput, "no askpass yet");
-        assert!(api.dispatch(req(serde_json::json!({"method": "cancelOp", "params": {"op": 42}}))).await.unwrap().is_null(), "unknown ids are ignored");
+        let answer = |prompt: u64| {
+            req(
+                serde_json::json!({"method": "authAnswer", "params": {"prompt": prompt, "answer": "x"}}),
+            )
+        };
+        assert_eq!(
+            api.dispatch(answer(1)).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "no askpass yet"
+        );
+        assert!(
+            api.dispatch(req(
+                serde_json::json!({"method": "cancelOp", "params": {"op": 42}})
+            ))
+            .await
+            .unwrap()
+            .is_null(),
+            "unknown ids are ignored"
+        );
         let op = api.ops().begin(crate::events::OpKind::Fetch, None, true);
-        api.dispatch(req(serde_json::json!({"method": "cancelOp", "params": {"op": op.id}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "cancelOp", "params": {"op": op.id}}),
+        ))
+        .await
+        .unwrap();
         assert!(op.cancel.is_cancelled());
-        assert!(api.net_env(op.id).is_empty(), "no askpass: no askpass environment");
+        assert!(
+            api.net_env(op.id).is_empty(),
+            "no askpass: no askpass environment"
+        );
         let dir = tempfile::tempdir().unwrap();
-        api.start_askpass(dir.path(), "/bin/false".into()).await.unwrap();
+        api.start_askpass(dir.path(), "/bin/false".into())
+            .await
+            .unwrap();
         let first = api.askpass().unwrap().socket_path().to_path_buf();
-        api.start_askpass(dir.path(), "/bin/true".into()).await.unwrap();
+        api.start_askpass(dir.path(), "/bin/true".into())
+            .await
+            .unwrap();
         assert_eq!(api.askpass().unwrap().socket_path(), first, "started once");
-        assert_eq!(api.dispatch(answer(1)).await.unwrap_err().kind, GbErrorKind::InvalidInput, "no such prompt");
+        assert_eq!(
+            api.dispatch(answer(1)).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "no such prompt"
+        );
         let env = api.net_env(op.id);
-        assert!(env.iter().any(|(k, v)| k == crate::askpass::ENV_OP && *v == *op.id.to_string()));
-        assert!(!env.iter().any(|(k, _)| k == "GCM_INTERACTIVE"), "a user-started op may prompt through a credential manager");
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == crate::askpass::ENV_OP && *v == *op.id.to_string())
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k == "GCM_INTERACTIVE"),
+            "a user-started op may prompt through a credential manager"
+        );
         // A GitNex-started op never prompts, not even through Git Credential Manager's own UI.
-        let background = api.ops().begin(crate::events::OpKind::Fetch, Some(1), false);
+        let background = api
+            .ops()
+            .begin(crate::events::OpKind::Fetch, Some(1), false);
         let env = api.net_env(background.id);
-        assert!(env.iter().any(|(k, v)| k == "GCM_INTERACTIVE" && v == "never"), "{env:?}");
-        assert!(super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None).net_env(background.id).is_empty(), "an op this Api doesn't know");
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "GCM_INTERACTIVE" && v == "never"),
+            "{env:?}"
+        );
+        assert!(
+            super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None)
+                .net_env(background.id)
+                .is_empty(),
+            "an op this Api doesn't know"
+        );
         let plain = super::tests::api();
-        let bg = plain.ops().begin(crate::events::OpKind::Fetch, Some(1), false);
-        assert_eq!(plain.net_env(bg.id), vec![("GCM_INTERACTIVE".into(), "never".into())], "even without askpass");
+        let bg = plain
+            .ops()
+            .begin(crate::events::OpKind::Fetch, Some(1), false);
+        assert_eq!(
+            plain.net_env(bg.id),
+            vec![("GCM_INTERACTIVE".into(), "never".into())],
+            "even without askpass"
+        );
     }
 
     #[tokio::test]
@@ -4929,18 +8188,47 @@ mod tests {
         let r = TestRepo::new();
         fixtures::long_labels(&r);
         let api = api();
-        let id = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}))).await.unwrap()["id"].as_u64().unwrap();
+        let id = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ))
+            .await
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
         let root = r.git(&["rev-list", "--max-parents=0", "HEAD"]);
-        let m = api.dispatch(req(serde_json::json!({"method": "commitMessage", "params": {"repo": id, "id": root}}))).await.unwrap();
-        assert_eq!(m, serde_json::json!({"id": root, "summary": "Initial commit", "body": "With a body line\n\nA second paragraph,\nwrapped over two lines."}));
-        let graph = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
-        assert!(graph["rows"][0].get("body").is_none(), "graph rows don't carry full bodies");
+        let m = api
+            .dispatch(req(
+                serde_json::json!({"method": "commitMessage", "params": {"repo": id, "id": root}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            m,
+            serde_json::json!({"id": root, "summary": "Initial commit", "body": "With a body line\n\nA second paragraph,\nwrapped over two lines."})
+        );
+        let graph = api
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            graph["rows"][0].get("body").is_none(),
+            "graph rows don't carry full bodies"
+        );
         let err = api.dispatch(req(serde_json::json!({"method": "commitMessage", "params": {"repo": id, "id": "1".repeat(40)}}))).await.unwrap_err();
         assert_eq!(err.kind, GbErrorKind::NotFound);
     }
 
     async fn open(api: &Api, r: &TestRepo) -> u64 {
-        api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}))).await.unwrap()["id"].as_u64().unwrap()
+        api.dispatch(req(
+            serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+        ))
+        .await
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -4953,10 +8241,18 @@ mod tests {
         let d = api.dispatch(req(serde_json::json!({"method": "commitDetails", "params": {"repo": id, "id": rename}}))).await.unwrap();
         assert_eq!(d["coAuthors"][0]["name"], "Maren Holt");
         assert_eq!(d["committer"]["name"], "Ada Lovelace");
-        assert!(d.get("summary").is_none() && d.get("body").is_none(), "the message itself comes from commitMessage");
+        assert!(
+            d.get("summary").is_none() && d.get("body").is_none(),
+            "the message itself comes from commitMessage"
+        );
         let bad = api.dispatch(req(serde_json::json!({"method": "commitDetails", "params": {"repo": id, "id": "HEAD"}}))).await.unwrap_err();
         assert_eq!(bad.kind, GbErrorKind::InvalidInput);
-        let remotes = api.dispatch(req(serde_json::json!({"method": "remotes", "params": {"repo": id}}))).await.unwrap();
+        let remotes = api
+            .dispatch(req(
+                serde_json::json!({"method": "remotes", "params": {"repo": id}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(remotes[0]["hostKind"], "gitlab");
         assert_eq!(remotes[0]["path"], "group/project");
     }
@@ -5005,7 +8301,11 @@ mod tests {
             .dispatch(req(serde_json::json!({"method": "diffContents", "params": {"repo": id, "path": "../outside.txt", "old": {"kind": "absent"}, "new": {"kind": "worktree", "worktree": wt}, "force": false}})))
             .await
             .unwrap_err();
-        assert_eq!(escape.kind, GbErrorKind::InvalidInput, "the path is checked before git sees it");
+        assert_eq!(
+            escape.kind,
+            GbErrorKind::InvalidInput,
+            "the path is checked before git sees it"
+        );
         let err = api
             .dispatch(req(serde_json::json!({"method": "diffContents", "params": {"repo": id, "path": "x", "old": {"kind": "absent"}, "new": {"kind": "worktree", "worktree": "/"}, "force": false}})))
             .await
@@ -5020,10 +8320,20 @@ mod tests {
         let api = api();
         let id = open(&api, &r).await;
         let head = r.git(&["rev-parse", "HEAD"]);
-        let files = api.dispatch(req(serde_json::json!({"method": "treeFiles", "params": {"repo": id, "id": head}}))).await.unwrap();
+        let files = api
+            .dispatch(req(
+                serde_json::json!({"method": "treeFiles", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(files.as_array().unwrap().len(), 12);
         let before = api.command_log().entries().len();
-        let sig = api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}))).await.unwrap();
+        let sig = api
+            .dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(sig["kind"], "unsigned");
         assert_eq!(api.command_log().entries().len(), before);
     }
@@ -5037,7 +8347,17 @@ mod tests {
             return;
         }
         let gpg = crate::testing::GpgHome::new();
-        if !gpg.gpg(&["--quick-generate-key", "Ada Lovelace <ada@example.com>", "ed25519", "sign", "never"]).status.success() {
+        if !gpg
+            .gpg(&[
+                "--quick-generate-key",
+                "Ada Lovelace <ada@example.com>",
+                "ed25519",
+                "sign",
+                "never",
+            ])
+            .status
+            .success()
+        {
             eprintln!("gpg can't make a key here; skipping");
             return;
         }
@@ -5051,15 +8371,27 @@ mod tests {
         let head = r.git(&["rev-parse", "HEAD"]);
         let api = api();
         let id = open(&api, &r).await;
-        let ask = || api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}})));
+        let ask = || {
+            api.dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+        };
         let before = api.command_log().entries().len();
         assert_eq!(ask().await.unwrap()["kind"], "verified");
         let runs = api.command_log().entries()[before..].to_vec();
         assert_eq!(runs.len(), 1, "{runs:?}");
-        assert_eq!(runs[0].args[0], gpg.program.to_str().unwrap(), "gpg, not git");
+        assert_eq!(
+            runs[0].args[0],
+            gpg.program.to_str().unwrap(),
+            "gpg, not git"
+        );
         let before = api.command_log().entries().len();
         assert_eq!(ask().await.unwrap()["kind"], "verified");
-        assert_eq!(api.command_log().entries().len(), before, "the second ask spawns nothing");
+        assert_eq!(
+            api.command_log().entries().len(),
+            before,
+            "the second ask spawns nothing"
+        );
     }
 
     /// An `unknownKey` verdict (no allowed-signers file configured yet) only means "couldn't
@@ -5077,8 +8409,16 @@ mod tests {
         r.commit("base");
         r.git(&["config", "gpg.format", "ssh"]);
         let key = r.root().join("key");
-        let out = std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", "trusted", "-f"]).arg(&key).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-C", "trusted", "-f"])
+            .arg(&key)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         r.git(&["config", "user.signingkey", key.to_str().unwrap()]);
         r.write("signed.txt", "signed\n");
         r.git(&["add", "-A"]);
@@ -5089,41 +8429,89 @@ mod tests {
         let id = open(&api, &r).await;
 
         let before = api.command_log().entries().len();
-        let unknown = api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}))).await.unwrap();
+        let unknown = api
+            .dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(unknown["kind"], "unknownKey");
         let after_first = api.command_log().entries().len();
         assert!(after_first > before, "git ran to try to verify");
 
         // Queried again with nothing changed: served from the cache, nothing runs.
-        let unknown_again = api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}))).await.unwrap();
+        let unknown_again = api
+            .dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(unknown_again["kind"], "unknownKey");
         let after_second = api.command_log().entries().len();
-        assert_eq!(after_second, after_first, "reused while the config is unchanged");
+        assert_eq!(
+            after_second, after_first,
+            "reused while the config is unchanged"
+        );
         // mtimes can be coarse: make sure the config edit below is seen as one.
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // Now the user fixes their config; the very next call must re-verify rather than serve a
         // stale unknownKey from a cache, and this time it succeeds.
         let allowed = r.root().join("allowed_signers");
-        std::fs::write(&allowed, format!("ada@example.com {}", std::fs::read_to_string(key.with_extension("pub")).unwrap())).unwrap();
-        r.git(&["config", "gpg.ssh.allowedSignersFile", allowed.to_str().unwrap()]);
-        let verified = api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}))).await.unwrap();
+        std::fs::write(
+            &allowed,
+            format!(
+                "ada@example.com {}",
+                std::fs::read_to_string(key.with_extension("pub")).unwrap()
+            ),
+        )
+        .unwrap();
+        r.git(&[
+            "config",
+            "gpg.ssh.allowedSignersFile",
+            allowed.to_str().unwrap(),
+        ]);
+        let verified = api
+            .dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(verified["kind"], "verified");
         let after_third = api.command_log().entries().len();
-        assert!(after_third > after_second, "verified re-queries git; the prior unknownKey wasn't cached");
+        assert!(
+            after_third > after_second,
+            "verified re-queries git; the prior unknownKey wasn't cached"
+        );
 
         // A definitive verdict, once reached, is cached: no further git invocation.
         let before_cached = api.command_log().entries().len();
-        let cached = api.dispatch(req(serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}))).await.unwrap();
+        let cached = api
+            .dispatch(req(
+                serde_json::json!({"method": "signature", "params": {"repo": id, "id": head}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(cached["kind"], "verified");
-        assert_eq!(api.command_log().entries().len(), before_cached, "a verified verdict is served from the cache");
+        assert_eq!(
+            api.command_log().entries().len(),
+            before_cached,
+            "a verified verdict is served from the cache"
+        );
     }
 
     // Avatars and URL opening (plan 1B Task 5).
     struct FakeAvatars;
     impl crate::avatar::AvatarProvider for FakeAvatars {
         fn avatar<'a>(&'a self, email: &'a str) -> crate::avatar::AvatarFuture<'a> {
-            Box::pin(async move { Ok((email == "ada@example.com").then(|| crate::avatar::AvatarPayload { mime: "image/png".into(), base64: "iVBO".into() })) })
+            Box::pin(async move {
+                Ok(
+                    (email == "ada@example.com").then(|| crate::avatar::AvatarPayload {
+                        mime: "image/png".into(),
+                        base64: "iVBO".into(),
+                    }),
+                )
+            })
         }
     }
 
@@ -5142,10 +8530,18 @@ mod tests {
         let api = api().with_avatars(flag.clone());
         let mut s = serde_json::to_value(crate::settings::AppSettings::default()).unwrap();
         s["gravatar"] = false.into();
-        api.dispatch(req(serde_json::json!({"method": "saveSettings", "params": {"settings": s}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveSettings", "params": {"settings": s}}),
+        ))
+        .await
+        .unwrap();
         assert!(!flag.0.load(std::sync::atomic::Ordering::SeqCst));
         s["gravatar"] = true.into();
-        api.dispatch(req(serde_json::json!({"method": "saveSettings", "params": {"settings": s}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "saveSettings", "params": {"settings": s}}),
+        ))
+        .await
+        .unwrap();
         assert!(flag.0.load(std::sync::atomic::Ordering::SeqCst));
     }
 
@@ -5153,12 +8549,32 @@ mod tests {
     #[tokio::test]
     async fn editor_templates_are_validated_with_the_guards_message() {
         let api = api();
-        let check = |t: &str| req(serde_json::json!({"method": "validateEditorTemplate", "params": {"template": t}}));
-        assert!(api.dispatch(check("/bin/echo {file}")).await.unwrap().is_null());
-        let refused = api.dispatch(check(r#"sh -c "geany {file}""#)).await.unwrap_err();
+        let check = |t: &str| {
+            req(serde_json::json!({"method": "validateEditorTemplate", "params": {"template": t}}))
+        };
+        assert!(
+            api.dispatch(check("/bin/echo {file}"))
+                .await
+                .unwrap()
+                .is_null()
+        );
+        let refused = api
+            .dispatch(check(r#"sh -c "geany {file}""#))
+            .await
+            .unwrap_err();
         assert_eq!(refused.kind, GbErrorKind::InvalidInput);
-        assert!(refused.message.contains("can't contain"), "{}", refused.message);
-        assert_eq!(api.dispatch(check("no-such-editor-xyz {file}")).await.unwrap_err().kind, GbErrorKind::NotFound);
+        assert!(
+            refused.message.contains("can't contain"),
+            "{}",
+            refused.message
+        );
+        assert_eq!(
+            api.dispatch(check("no-such-editor-xyz {file}"))
+                .await
+                .unwrap_err()
+                .kind,
+            GbErrorKind::NotFound
+        );
     }
 
     #[tokio::test]
@@ -5168,40 +8584,91 @@ mod tests {
         let (api, _launches) = with_openers(api());
         let id = open(&api, &r).await;
         let workdir = api.handle(id as u32).unwrap().workdir.display().to_string();
-        let ids = |v: serde_json::Value| v.as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let ids = |v: serde_json::Value| {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
         let global = || req(serde_json::json!({"method": "listOpeners"}));
-        let for_repo = || req(serde_json::json!({"method": "listOpenersFor", "params": {"repo": id}}));
+        let for_repo =
+            || req(serde_json::json!({"method": "listOpenersFor", "params": {"repo": id}}));
         let custom = "custom".to_string();
         assert!(!ids(api.dispatch(global()).await.unwrap()).contains(&custom));
         assert!(!ids(api.dispatch(for_repo()).await.unwrap()).contains(&custom));
 
         let mut p = api.store().active_profile();
-        p.editor = Some(EditorChoice::Custom { template: "/bin/echo {file}".into() });
+        p.editor = Some(EditorChoice::Custom {
+            template: "/bin/echo {file}".into(),
+        });
         api.store().save_profile(p.clone()).unwrap();
         assert!(ids(api.dispatch(global()).await.unwrap()).contains(&custom));
-        assert!(ids(api.dispatch(for_repo()).await.unwrap()).contains(&custom), "the profile's Custom applies to the repo");
+        assert!(
+            ids(api.dispatch(for_repo()).await.unwrap()).contains(&custom),
+            "the profile's Custom applies to the repo"
+        );
 
         // The repo's own detected-editor choice overrides the profile's Custom: no entry.
-        p.repos.insert(workdir.clone(), crate::settings::RepoSettings { editor: Some(EditorChoice::Opener { id: "vscode".into() }), ..Default::default() });
+        p.repos.insert(
+            workdir.clone(),
+            crate::settings::RepoSettings {
+                editor: Some(EditorChoice::Opener {
+                    id: "vscode".into(),
+                }),
+                ..Default::default()
+            },
+        );
         api.store().save_profile(p.clone()).unwrap();
         assert!(!ids(api.dispatch(for_repo()).await.unwrap()).contains(&custom));
 
         // Custom on one repo only: not listed for a repo (or the profile) without it.
         p.editor = None;
-        p.repos.insert(workdir, crate::settings::RepoSettings { editor: Some(EditorChoice::Custom { template: "/bin/echo {file}".into() }), ..Default::default() });
+        p.repos.insert(
+            workdir,
+            crate::settings::RepoSettings {
+                editor: Some(EditorChoice::Custom {
+                    template: "/bin/echo {file}".into(),
+                }),
+                ..Default::default()
+            },
+        );
         api.store().save_profile(p).unwrap();
         assert!(ids(api.dispatch(for_repo()).await.unwrap()).contains(&custom));
-        assert!(!ids(api.dispatch(global()).await.unwrap()).contains(&custom), "other repos don't see it");
+        assert!(
+            !ids(api.dispatch(global()).await.unwrap()).contains(&custom),
+            "other repos don't see it"
+        );
     }
 
     #[tokio::test]
     async fn avatars_come_from_the_injected_provider() {
         let plain = super::tests::api();
-        assert!(plain.dispatch(req(serde_json::json!({"method": "avatar", "params": {"email": "ada@example.com"}}))).await.unwrap().is_null());
+        assert!(
+            plain
+                .dispatch(req(
+                    serde_json::json!({"method": "avatar", "params": {"email": "ada@example.com"}})
+                ))
+                .await
+                .unwrap()
+                .is_null()
+        );
         let with = api().with_avatars(Arc::new(FakeAvatars));
-        let a = with.dispatch(req(serde_json::json!({"method": "avatar", "params": {"email": "ada@example.com"}}))).await.unwrap();
+        let a = with
+            .dispatch(req(
+                serde_json::json!({"method": "avatar", "params": {"email": "ada@example.com"}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(a["mime"], "image/png");
-        assert!(with.dispatch(req(serde_json::json!({"method": "avatar", "params": {"email": "x@y"}}))).await.unwrap().is_null());
+        assert!(
+            with.dispatch(req(
+                serde_json::json!({"method": "avatar", "params": {"email": "x@y"}})
+            ))
+            .await
+            .unwrap()
+            .is_null()
+        );
     }
 
     /// GitHub's web-flow committer and the users.noreply forms never reach Gravatar (no request
@@ -5209,14 +8676,17 @@ mod tests {
     /// project, then, for an `<id>+<login>` address, GitHub's picture by the id alone.
     #[tokio::test]
     async fn github_noreply_emails_never_ask_gravatar() {
-        use crate::forge::fake::{project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, project};
         use crate::forge::{ForgeKind, TokenStorage};
         use std::sync::atomic::Ordering::SeqCst;
         const TOKEN: &str = "ghp_FAKE_test_token";
         const HOST: &str = "github.com";
         const ID_FORM: &str = "583231+octocat@users.noreply.github.com";
         const LOGIN_FORM: &str = "oldstyle@users.noreply.github.com";
-        let png = |b: &str| crate::avatar::AvatarPayload { mime: "image/png".into(), base64: b.into() };
+        let png = |b: &str| crate::avatar::AvatarPayload {
+            mime: "image/png".into(),
+            base64: b.into(),
+        };
         #[derive(Default)]
         struct Counting {
             gravatar: std::sync::atomic::AtomicUsize,
@@ -5227,52 +8697,143 @@ mod tests {
                 self.gravatar.fetch_add(1, SeqCst);
                 Box::pin(async { Ok(None) })
             }
-            fn github_noreply_avatar<'a>(&'a self, email: &'a str) -> crate::avatar::AvatarFuture<'a> {
+            fn github_noreply_avatar<'a>(
+                &'a self,
+                email: &'a str,
+            ) -> crate::avatar::AvatarFuture<'a> {
                 self.github.lock().unwrap().push(email.to_string());
-                Box::pin(async { Ok(Some(crate::avatar::AvatarPayload { mime: "image/png".into(), base64: "R0lU".into() })) })
+                Box::pin(async {
+                    Ok(Some(crate::avatar::AvatarPayload {
+                        mime: "image/png".into(),
+                        base64: "R0lU".into(),
+                    }))
+                })
             }
         }
         async fn ask(api: &Api, params: serde_json::Value) -> Result<serde_json::Value, GbError> {
-            api.dispatch(req(serde_json::json!({"method": "avatar", "params": params}))).await
+            api.dispatch(req(
+                serde_json::json!({"method": "avatar", "params": params}),
+            ))
+            .await
         }
 
         // No forge account: Gravatar is skipped, and only the id form gets GitHub's picture.
         let counting = Arc::new(Counting::default());
         let alone = api().with_avatars(counting.clone());
         for email in ["noreply@github.com", " NoReply@GitHub.com", LOGIN_FORM] {
-            assert!(ask(&alone, serde_json::json!({"email": email})).await.unwrap().is_null(), "{email}");
+            assert!(
+                ask(&alone, serde_json::json!({"email": email}))
+                    .await
+                    .unwrap()
+                    .is_null(),
+                "{email}"
+            );
         }
-        assert_eq!(ask(&alone, serde_json::json!({"email": ID_FORM})).await.unwrap()["base64"], "R0lU");
+        assert_eq!(
+            ask(&alone, serde_json::json!({"email": ID_FORM}))
+                .await
+                .unwrap()["base64"],
+            "R0lU"
+        );
         assert_eq!(counting.gravatar.load(SeqCst), 0, "no Gravatar lookup");
-        assert_eq!(*counting.github.lock().unwrap(), [ID_FORM], "never by login");
-        ask(&alone, serde_json::json!({"email": "noreply@example.com"})).await.unwrap();
+        assert_eq!(
+            *counting.github.lock().unwrap(),
+            [ID_FORM],
+            "never by login"
+        );
+        ask(&alone, serde_json::json!({"email": "noreply@example.com"}))
+            .await
+            .unwrap();
         assert_eq!(counting.gravatar.load(SeqCst), 1, "only GitHub's addresses");
         alone.dispatch(req(serde_json::json!({"method": "saveSettings", "params": {"settings": {"forgeAvatars": false}}}))).await.unwrap();
-        assert!(ask(&alone, serde_json::json!({"email": ID_FORM})).await.unwrap().is_null());
-        assert_eq!(counting.github.lock().unwrap().len(), 1, "forge avatars off: GitHub isn't asked");
+        assert!(
+            ask(&alone, serde_json::json!({"email": ID_FORM}))
+                .await
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(
+            counting.github.lock().unwrap().len(),
+            1,
+            "forge avatars off: GitHub isn't asked"
+        );
 
         // The repo's forge project: noreply addresses reach the commit-author steps, before the
         // account-less fallback.
         let mut p = FakeProvider::new(ForgeKind::GitHub, HOST);
-        p.projects.lock().unwrap().insert("octo-org/widget".into(), project(HOST, "octo-org/widget", None, 1));
-        p.avatars.insert(format!("in:{LOGIN_FORM}"), png("QVVUSA=="));
+        p.projects.lock().unwrap().insert(
+            "octo-org/widget".into(),
+            project(HOST, "octo-org/widget", None, 1),
+        );
+        p.avatars
+            .insert(format!("in:{LOGIN_FORM}"), png("QVVUSA=="));
         let conn = Arc::new(FakeConnector::default());
         let fake = conn.add(TOKEN, p);
         let counting = Arc::new(Counting::default());
-        let api = api().with_avatars(counting.clone()).with_forge(conn, MemTokens::new(TokenStorage::Keyring));
+        let api = api()
+            .with_avatars(counting.clone())
+            .with_forge(conn, MemTokens::new(TokenStorage::Keyring));
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": HOST, "kind": "github", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", &format!("https://{HOST}/octo-org/widget.git")]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://{HOST}/octo-org/widget.git"),
+        ]);
         let id = open(&api, &r).await as u32;
-        let authors = || fake.calls().into_iter().filter(|c| c.starts_with("author") || c.starts_with("avatar ")).collect::<Vec<_>>();
-        assert_eq!(ask(&api, serde_json::json!({"email": LOGIN_FORM, "repo": id})).await.unwrap()["base64"], "QVVUSA==");
-        assert_eq!(authors(), [format!("avatar {LOGIN_FORM}"), format!("author_in octo-org/widget {LOGIN_FORM}")]);
-        assert_eq!(ask(&api, serde_json::json!({"email": ID_FORM, "repo": id, "name": "Octo Cat"})).await.unwrap()["base64"], "R0lU");
-        assert_eq!(authors()[2..], [format!("avatar {ID_FORM}"), format!("author_in octo-org/widget {ID_FORM}"), format!("author_name {ID_FORM} Octo Cat")]);
+        let authors = || {
+            fake.calls()
+                .into_iter()
+                .filter(|c| c.starts_with("author") || c.starts_with("avatar "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ask(&api, serde_json::json!({"email": LOGIN_FORM, "repo": id}))
+                .await
+                .unwrap()["base64"],
+            "QVVUSA=="
+        );
+        assert_eq!(
+            authors(),
+            [
+                format!("avatar {LOGIN_FORM}"),
+                format!("author_in octo-org/widget {LOGIN_FORM}")
+            ]
+        );
+        assert_eq!(
+            ask(
+                &api,
+                serde_json::json!({"email": ID_FORM, "repo": id, "name": "Octo Cat"})
+            )
+            .await
+            .unwrap()["base64"],
+            "R0lU"
+        );
+        assert_eq!(
+            authors()[2..],
+            [
+                format!("avatar {ID_FORM}"),
+                format!("author_in octo-org/widget {ID_FORM}"),
+                format!("author_name {ID_FORM} Octo Cat")
+            ]
+        );
         assert_eq!(*counting.github.lock().unwrap(), [ID_FORM], "last");
-        assert!(ask(&api, serde_json::json!({"email": "noreply@github.com", "repo": id, "name": "GitHub"})).await.unwrap().is_null());
-        assert_eq!(authors().len(), 6, "the web-flow committer: only the first step");
+        assert!(
+            ask(
+                &api,
+                serde_json::json!({"email": "noreply@github.com", "repo": id, "name": "GitHub"})
+            )
+            .await
+            .unwrap()
+            .is_null()
+        );
+        assert_eq!(
+            authors().len(),
+            6,
+            "the web-flow committer: only the first step"
+        );
         assert_eq!(counting.gravatar.load(SeqCst), 0);
     }
 
@@ -5286,12 +8847,27 @@ mod tests {
         }));
         api.dispatch(req(serde_json::json!({"method": "openUrl", "params": {"url": "https://gitlab.example.com/group/project/-/merge_requests/42"}}))).await.unwrap();
         for bad in ["file:///etc/passwd", "javascript:alert(1)", "https://x y"] {
-            let err = api.dispatch(req(serde_json::json!({"method": "openUrl", "params": {"url": bad}}))).await.unwrap_err();
+            let err = api
+                .dispatch(req(
+                    serde_json::json!({"method": "openUrl", "params": {"url": bad}}),
+                ))
+                .await
+                .unwrap_err();
             assert_eq!(err.kind, GbErrorKind::InvalidInput, "{bad}");
         }
-        assert_eq!(*opened.lock().unwrap(), vec!["https://gitlab.example.com/group/project/-/merge_requests/42"]);
+        assert_eq!(
+            *opened.lock().unwrap(),
+            vec!["https://gitlab.example.com/group/project/-/merge_requests/42"]
+        );
         let none = super::Api::new(GitCli::new(Arc::new(CommandLog::new(10))), None);
-        assert!(none.dispatch(req(serde_json::json!({"method": "openUrl", "params": {"url": "https://x"}}))).await.is_err(), "no opener configured");
+        assert!(
+            none.dispatch(req(
+                serde_json::json!({"method": "openUrl", "params": {"url": "https://x"}})
+            ))
+            .await
+            .is_err(),
+            "no opener configured"
+        );
     }
 
     // "Open in…" (feedback H9).
@@ -5302,11 +8878,31 @@ mod tests {
         let launches: Launches = Arc::default();
         let sink = launches.clone();
         let api = api.with_openers(
-            Arc::new(|| vec![
-                Opener::new("vscode", "VS Code", OpenerKind::Editor, "/fake/code", ArgStyle::VsCode),
-                Opener::new("jetbrains-phpstorm", "PhpStorm", OpenerKind::Editor, "/fake/phpstorm", ArgStyle::JetBrains),
-                Opener::new("file-manager", "Files", OpenerKind::FileManager, "/fake/nautilus", ArgStyle::Exec(vec![crate::openers::ExecArg::File])),
-            ]),
+            Arc::new(|| {
+                vec![
+                    Opener::new(
+                        "vscode",
+                        "VS Code",
+                        OpenerKind::Editor,
+                        "/fake/code",
+                        ArgStyle::VsCode,
+                    ),
+                    Opener::new(
+                        "jetbrains-phpstorm",
+                        "PhpStorm",
+                        OpenerKind::Editor,
+                        "/fake/phpstorm",
+                        ArgStyle::JetBrains,
+                    ),
+                    Opener::new(
+                        "file-manager",
+                        "Files",
+                        OpenerKind::FileManager,
+                        "/fake/nautilus",
+                        ArgStyle::Exec(vec![crate::openers::ExecArg::File]),
+                    ),
+                ]
+            }),
             Arc::new(move |c: &crate::openers::LaunchCommand| {
                 sink.lock().unwrap().push(c.clone());
                 Ok(())
@@ -5316,19 +8912,33 @@ mod tests {
     }
 
     fn argv(c: &crate::openers::LaunchCommand) -> Vec<String> {
-        std::iter::once(c.program.to_string_lossy().into_owned()).chain(c.args.iter().map(|a| a.to_string_lossy().into_owned())).collect()
+        std::iter::once(c.program.to_string_lossy().into_owned())
+            .chain(c.args.iter().map(|a| a.to_string_lossy().into_owned()))
+            .collect()
     }
 
     #[tokio::test]
     async fn list_openers_returns_the_detected_ones_and_none_without_detection() {
-        assert_eq!(api().dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap(), serde_json::json!([]));
+        assert_eq!(
+            api()
+                .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+                .await
+                .unwrap(),
+            serde_json::json!([])
+        );
         let (api, _) = with_openers(api());
-        let list = api.dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap();
-        assert_eq!(list, serde_json::json!([
-            {"id": "vscode", "name": "VS Code", "kind": "editor"},
-            {"id": "jetbrains-phpstorm", "name": "PhpStorm", "kind": "editor"},
-            {"id": "file-manager", "name": "Files", "kind": "fileManager"},
-        ]));
+        let list = api
+            .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+            .await
+            .unwrap();
+        assert_eq!(
+            list,
+            serde_json::json!([
+                {"id": "vscode", "name": "VS Code", "kind": "editor"},
+                {"id": "jetbrains-phpstorm", "name": "PhpStorm", "kind": "editor"},
+                {"id": "file-manager", "name": "Files", "kind": "fileManager"},
+            ])
+        );
     }
 
     #[tokio::test]
@@ -5337,14 +8947,40 @@ mod tests {
         let counted = calls.clone();
         let api = api().with_font_source(Arc::new(move || {
             let n = counted.fetch_add(1, Ordering::SeqCst);
-            vec![crate::fonts::FontFamily { name: format!("Orbit Mono {n}"), monospace: true }]
+            vec![crate::fonts::FontFamily {
+                name: format!("Orbit Mono {n}"),
+                monospace: true,
+            }]
         }));
-        let first = api.dispatch(req(serde_json::json!({"method": "fontFamilies", "params": {}}))).await.unwrap();
-        assert_eq!(first, serde_json::json!([{"name": "Orbit Mono 0", "monospace": true}]));
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "fontFamilies", "params": {"refresh": false}}))).await.unwrap(), first);
+        let first = api
+            .dispatch(req(
+                serde_json::json!({"method": "fontFamilies", "params": {}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            first,
+            serde_json::json!([{"name": "Orbit Mono 0", "monospace": true}])
+        );
+        assert_eq!(
+            api.dispatch(req(
+                serde_json::json!({"method": "fontFamilies", "params": {"refresh": false}})
+            ))
+            .await
+            .unwrap(),
+            first
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        let again = api.dispatch(req(serde_json::json!({"method": "fontFamilies", "params": {"refresh": true}}))).await.unwrap();
-        assert_eq!(again, serde_json::json!([{"name": "Orbit Mono 1", "monospace": true}]));
+        let again = api
+            .dispatch(req(
+                serde_json::json!({"method": "fontFamilies", "params": {"refresh": true}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            again,
+            serde_json::json!([{"name": "Orbit Mono 1", "monospace": true}])
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(!req(serde_json::json!({"method": "fontFamilies", "params": {}})).is_write());
     }
@@ -5357,19 +8993,45 @@ mod tests {
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
         let file = wt.join("src").join("app.php"); // (native separators, as safe_join gives)
-        let open_in = |path: &str, line: Option<u32>, opener: &str| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": line, "opener": opener}}));
-        assert!(api.dispatch(open_in("src/app.php", Some(12), "vscode")).await.unwrap().is_null());
-        api.dispatch(open_in("src/app.php", Some(3), "jetbrains-phpstorm")).await.unwrap();
-        api.dispatch(open_in("src/app.php", None, "jetbrains-phpstorm")).await.unwrap();
-        api.dispatch(open_in("src/app.php", Some(3), "file-manager")).await.unwrap();
+        let open_in = |path: &str, line: Option<u32>, opener: &str| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": line, "opener": opener}}),
+            )
+        };
+        assert!(
+            api.dispatch(open_in("src/app.php", Some(12), "vscode"))
+                .await
+                .unwrap()
+                .is_null()
+        );
+        api.dispatch(open_in("src/app.php", Some(3), "jetbrains-phpstorm"))
+            .await
+            .unwrap();
+        api.dispatch(open_in("src/app.php", None, "jetbrains-phpstorm"))
+            .await
+            .unwrap();
+        api.dispatch(open_in("src/app.php", Some(3), "file-manager"))
+            .await
+            .unwrap();
         let got: Vec<Vec<String>> = launches.lock().unwrap().iter().map(argv).collect();
         let f = file.to_string_lossy().into_owned();
-        assert_eq!(got, [
-            vec!["/fake/code".to_string(), "-g".into(), format!("{f}:12")],
-            vec!["/fake/phpstorm".into(), "--line".into(), "3".into(), f.clone()],
-            vec!["/fake/phpstorm".into(), f.clone()],
-            vec!["/fake/nautilus".into(), wt.join("src").to_string_lossy().into_owned()],
-        ]);
+        assert_eq!(
+            got,
+            [
+                vec!["/fake/code".to_string(), "-g".into(), format!("{f}:12")],
+                vec![
+                    "/fake/phpstorm".into(),
+                    "--line".into(),
+                    "3".into(),
+                    f.clone()
+                ],
+                vec!["/fake/phpstorm".into(), f.clone()],
+                vec![
+                    "/fake/nautilus".into(),
+                    wt.join("src").to_string_lossy().into_owned()
+                ],
+            ]
+        );
     }
 
     /// File Explorer (Windows) shows the file itself, selected; once it's gone, its folder.
@@ -5381,7 +9043,15 @@ mod tests {
         let launches: Launches = Arc::default();
         let sink = launches.clone();
         let api = api().with_openers(
-            Arc::new(|| vec![Opener::new("file-manager", "File Explorer", OpenerKind::FileManager, "/fake/explorer.exe", ArgStyle::ExplorerSelect)]),
+            Arc::new(|| {
+                vec![Opener::new(
+                    "file-manager",
+                    "File Explorer",
+                    OpenerKind::FileManager,
+                    "/fake/explorer.exe",
+                    ArgStyle::ExplorerSelect,
+                )]
+            }),
             Arc::new(move |c: &crate::openers::LaunchCommand| {
                 sink.lock().unwrap().push(c.clone());
                 Ok(())
@@ -5389,17 +9059,34 @@ mod tests {
         );
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
-        let open_in = |path: &str| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": null, "opener": "file-manager"}}));
+        let open_in = |path: &str| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": null, "opener": "file-manager"}}),
+            )
+        };
         api.dispatch(open_in("src/app.php")).await.unwrap();
         api.dispatch(open_in("src/gone.php")).await.unwrap();
         api.dispatch(open_in("src")).await.unwrap();
         let got: Vec<Vec<String>> = launches.lock().unwrap().iter().map(argv).collect();
         let src = wt.join("src").to_string_lossy().into_owned();
-        assert_eq!(got, [
-            vec!["/fake/explorer.exe".to_string(), "/select,".into(), wt.join("src").join("app.php").to_string_lossy().into_owned()],
-            vec!["/fake/explorer.exe".to_string(), src.clone()],
-            vec!["/fake/explorer.exe".to_string(), wt.to_string_lossy().into_owned()],
-        ]);
+        assert_eq!(
+            got,
+            [
+                vec![
+                    "/fake/explorer.exe".to_string(),
+                    "/select,".into(),
+                    wt.join("src")
+                        .join("app.php")
+                        .to_string_lossy()
+                        .into_owned()
+                ],
+                vec!["/fake/explorer.exe".to_string(), src.clone()],
+                vec![
+                    "/fake/explorer.exe".to_string(),
+                    wt.to_string_lossy().into_owned()
+                ],
+            ]
+        );
     }
 
     #[cfg(unix)] // symlinks (Windows: privileges, and core.symlinks=false there)
@@ -5409,7 +9096,8 @@ mod tests {
         fixtures::details(&r);
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("secret.txt"), "x").unwrap();
-        std::os::unix::fs::symlink(outside.path().join("secret.txt"), r.path().join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), r.path().join("link.txt"))
+            .unwrap();
         // Rust triage #1: a committed symlink whose target is inside .git resolves, through
         // canonicalize, to a real path that still starts with the worktree root (.git lives
         // under it) — so the leaf must be checked for a .git component too, not just the dirs
@@ -5418,18 +9106,67 @@ mod tests {
         let (api, launches) = with_openers(api());
         let id = open(&api, &r).await;
         let wt = r.path().to_string_lossy().into_owned();
-        let open_in = |worktree: &str, path: &str, line: Option<u32>, opener: &str| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": worktree, "path": path, "line": line, "opener": opener}}));
+        let open_in = |worktree: &str, path: &str, line: Option<u32>, opener: &str| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": worktree, "path": path, "line": line, "opener": opener}}),
+            )
+        };
         let cases = [
-            (open_in(&wt, "src/app.php", None, "/usr/bin/xterm"), GbErrorKind::InvalidInput, "an opener is an id, never a program"),
-            (open_in(&wt, "src/app.php", None, "sublime"), GbErrorKind::InvalidInput, "not detected"),
-            (open_in(&wt, "../outside.txt", None, "vscode"), GbErrorKind::InvalidInput, "escapes the worktree"),
-            (open_in(&wt, "/etc/passwd", None, "vscode"), GbErrorKind::InvalidInput, "absolute"),
-            (open_in(&wt, ".git/config", None, "vscode"), GbErrorKind::InvalidInput, "inside .git"),
-            (open_in(&wt, "link.txt", None, "vscode"), GbErrorKind::InvalidInput, "a symlink out of the worktree"),
-            (open_in(&wt, "gitlink.txt", None, "vscode"), GbErrorKind::InvalidInput, "a symlink into .git"),
-            (open_in(&outside.path().to_string_lossy(), "secret.txt", None, "vscode"), GbErrorKind::InvalidInput, "not a worktree of this repo"),
-            (open_in(&wt, "gone.txt", None, "vscode"), GbErrorKind::NotFound, "not in the working tree"),
-            (open_in(&wt, "src/app.php", Some(0), "vscode"), GbErrorKind::InvalidInput, "lines start at 1"),
+            (
+                open_in(&wt, "src/app.php", None, "/usr/bin/xterm"),
+                GbErrorKind::InvalidInput,
+                "an opener is an id, never a program",
+            ),
+            (
+                open_in(&wt, "src/app.php", None, "sublime"),
+                GbErrorKind::InvalidInput,
+                "not detected",
+            ),
+            (
+                open_in(&wt, "../outside.txt", None, "vscode"),
+                GbErrorKind::InvalidInput,
+                "escapes the worktree",
+            ),
+            (
+                open_in(&wt, "/etc/passwd", None, "vscode"),
+                GbErrorKind::InvalidInput,
+                "absolute",
+            ),
+            (
+                open_in(&wt, ".git/config", None, "vscode"),
+                GbErrorKind::InvalidInput,
+                "inside .git",
+            ),
+            (
+                open_in(&wt, "link.txt", None, "vscode"),
+                GbErrorKind::InvalidInput,
+                "a symlink out of the worktree",
+            ),
+            (
+                open_in(&wt, "gitlink.txt", None, "vscode"),
+                GbErrorKind::InvalidInput,
+                "a symlink into .git",
+            ),
+            (
+                open_in(
+                    &outside.path().to_string_lossy(),
+                    "secret.txt",
+                    None,
+                    "vscode",
+                ),
+                GbErrorKind::InvalidInput,
+                "not a worktree of this repo",
+            ),
+            (
+                open_in(&wt, "gone.txt", None, "vscode"),
+                GbErrorKind::NotFound,
+                "not in the working tree",
+            ),
+            (
+                open_in(&wt, "src/app.php", Some(0), "vscode"),
+                GbErrorKind::InvalidInput,
+                "lines start at 1",
+            ),
         ];
         for (request, kind, why) in cases {
             let err = api.dispatch(request).await.unwrap_err();
@@ -5444,7 +9181,16 @@ mod tests {
 
     // Old versions (spec §14.5, fix round 1).
     fn launched_file(launches: &Launches) -> PathBuf {
-        PathBuf::from(launches.lock().unwrap().last().unwrap().args.last().unwrap())
+        PathBuf::from(
+            launches
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .args
+                .last()
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
@@ -5456,31 +9202,103 @@ mod tests {
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
         let open_in = |path: &str, line: Option<u32>, opener: &str, source: serde_json::Value| {
-            req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": line, "opener": opener, "source": source}}))
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": line, "opener": opener, "source": source}}),
+            )
         };
         // A blob (the file list's side): its bytes, under <cache>/<short oid>/<path>, 0444.
         let old = r.git(&["rev-parse", "HEAD^1^1:src/app.php"]);
-        api.dispatch(open_in("src/app.php", Some(7), "jetbrains-phpstorm", serde_json::json!({"kind": "object", "oid": old}))).await.unwrap();
+        api.dispatch(open_in(
+            "src/app.php",
+            Some(7),
+            "jetbrains-phpstorm",
+            serde_json::json!({"kind": "object", "oid": old}),
+        ))
+        .await
+        .unwrap();
         let copy = launched_file(&launches);
-        assert_eq!(copy, crate::platform::fs::canonicalize(cache.path()).unwrap().join(&old[..12]).join("src/app.php"));
-        assert_eq!(std::fs::read_to_string(&copy).unwrap().trim_end(), r.git(&["show", "HEAD^1^1:src/app.php"]).trim_end());
-        assert_eq!(crate::platform::fs::mode(&std::fs::metadata(&copy).unwrap()) & 0o777, 0o444);
-        assert_eq!(launches.lock().unwrap().last().unwrap().args[..2], [std::ffi::OsString::from("--line"), std::ffi::OsString::from("7")], "the line is the shown version's");
+        assert_eq!(
+            copy,
+            crate::platform::fs::canonicalize(cache.path())
+                .unwrap()
+                .join(&old[..12])
+                .join("src/app.php")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&copy).unwrap().trim_end(),
+            r.git(&["show", "HEAD^1^1:src/app.php"]).trim_end()
+        );
+        assert_eq!(
+            crate::platform::fs::mode(&std::fs::metadata(&copy).unwrap()) & 0o777,
+            0o444
+        );
+        assert_eq!(
+            launches.lock().unwrap().last().unwrap().args[..2],
+            [
+                std::ffi::OsString::from("--line"),
+                std::ffi::OsString::from("7")
+            ],
+            "the line is the shown version's"
+        );
         // The file at a commit (View all files).
         let head = r.git(&["rev-parse", "HEAD"]);
-        api.dispatch(open_in("latin1.txt", None, "vscode", serde_json::json!({"kind": "atCommit", "commit": head}))).await.unwrap();
-        assert_eq!(std::fs::read(launched_file(&launches)).unwrap(), b"caf\xe9 cr\xe8me br\xfbl\xe9e\n");
+        api.dispatch(open_in(
+            "latin1.txt",
+            None,
+            "vscode",
+            serde_json::json!({"kind": "atCommit", "commit": head}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read(launched_file(&launches)).unwrap(),
+            b"caf\xe9 cr\xe8me br\xfbl\xe9e\n"
+        );
         // A deleted file opens its old blob (the UI sends the old side).
         let deleted = r.git(&["rev-parse", "HEAD^1^1:old.txt"]);
-        api.dispatch(open_in("old.txt", None, "vscode", serde_json::json!({"kind": "object", "oid": deleted}))).await.unwrap();
-        assert_eq!(std::fs::read_to_string(launched_file(&launches)).unwrap(), "to be deleted\n");
+        api.dispatch(open_in(
+            "old.txt",
+            None,
+            "vscode",
+            serde_json::json!({"kind": "object", "oid": deleted}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(launched_file(&launches)).unwrap(),
+            "to be deleted\n"
+        );
         // The worktree side (and no side) opens the working-tree file itself.
-        api.dispatch(open_in("src/app.php", None, "vscode", serde_json::json!({"kind": "worktree", "worktree": wt}))).await.unwrap();
+        api.dispatch(open_in(
+            "src/app.php",
+            None,
+            "vscode",
+            serde_json::json!({"kind": "worktree", "worktree": wt}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(launched_file(&launches), wt.join("src/app.php"));
         // Refused: an escaping path (nothing is written), an absent or submodule side.
         let before = launches.lock().unwrap().len();
-        for (path, source) in [("../x.txt", serde_json::json!({"kind": "object", "oid": old})), ("src/app.php", serde_json::json!({"kind": "absent"})), ("src/app.php", serde_json::json!({"kind": "submodule", "oid": old}))] {
-            assert_eq!(api.dispatch(open_in(path, None, "vscode", source)).await.unwrap_err().kind, GbErrorKind::InvalidInput, "{path}");
+        for (path, source) in [
+            (
+                "../x.txt",
+                serde_json::json!({"kind": "object", "oid": old}),
+            ),
+            ("src/app.php", serde_json::json!({"kind": "absent"})),
+            (
+                "src/app.php",
+                serde_json::json!({"kind": "submodule", "oid": old}),
+            ),
+        ] {
+            assert_eq!(
+                api.dispatch(open_in(path, None, "vscode", source))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                GbErrorKind::InvalidInput,
+                "{path}"
+            );
         }
         assert_eq!(launches.lock().unwrap().len(), before);
         assert!(!cache.path().join("x.txt").exists());
@@ -5501,14 +9319,26 @@ mod tests {
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
         let old = r.git(&["rev-parse", "HEAD^1^1:src/app.php"]);
         for (path, source, want) in [
-            ("src/app.php", serde_json::json!({"kind": "object", "oid": old}), wt.join("src")),
-            ("src/gone/deeper/x.php", serde_json::json!({"kind": "object", "oid": old}), wt.join("src")),
+            (
+                "src/app.php",
+                serde_json::json!({"kind": "object", "oid": old}),
+                wt.join("src"),
+            ),
+            (
+                "src/gone/deeper/x.php",
+                serde_json::json!({"kind": "object", "oid": old}),
+                wt.join("src"),
+            ),
             ("gone/x.txt", serde_json::Value::Null, wt.clone()),
         ] {
             api.dispatch(req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": null, "opener": "file-manager", "source": source}}))).await.unwrap();
             assert_eq!(launched_file(&launches), want, "{path}");
         }
-        assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0, "the file manager never makes a copy");
+        assert_eq!(
+            std::fs::read_dir(cache.path()).unwrap().count(),
+            0,
+            "the file manager never makes a copy"
+        );
     }
 
     // "Other…" and detection refresh (feedback H32).
@@ -5523,20 +9353,42 @@ mod tests {
             sink.lock().unwrap().push(p.to_path_buf());
             Ok(())
         }));
-        let list = api.dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap();
-        assert_eq!(list.as_array().unwrap().last().unwrap(), &serde_json::json!({"id": "other", "name": "Other…", "kind": "chooser"}));
+        let list = api
+            .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+            .await
+            .unwrap();
+        assert_eq!(
+            list.as_array().unwrap().last().unwrap(),
+            &serde_json::json!({"id": "other", "name": "Other…", "kind": "chooser"})
+        );
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
-        let other = |path: &str| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": 3, "opener": "other"}}));
+        let other = |path: &str| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": 3, "opener": "other"}}),
+            )
+        };
         api.dispatch(other("src/app.php")).await.unwrap();
         assert_eq!(*chosen.lock().unwrap(), [wt.join("src/app.php")]);
-        assert_eq!(api.dispatch(other("../x")).await.unwrap_err().kind, GbErrorKind::InvalidInput);
-        assert_eq!(api.dispatch(other("gone.txt")).await.unwrap_err().kind, GbErrorKind::NotFound);
+        assert_eq!(
+            api.dispatch(other("../x")).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
+        assert_eq!(
+            api.dispatch(other("gone.txt")).await.unwrap_err().kind,
+            GbErrorKind::NotFound
+        );
         assert_eq!(chosen.lock().unwrap().len(), 1);
-        assert!(launches.lock().unwrap().is_empty(), "the chooser isn't a launch");
+        assert!(
+            launches.lock().unwrap().is_empty(),
+            "the chooser isn't a launch"
+        );
         // Without a chooser there's no "Other…".
         let (plain, _) = with_openers(super::tests::api());
-        let ids = plain.dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap();
+        let ids = plain
+            .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+            .await
+            .unwrap();
         assert!(ids.as_array().unwrap().iter().all(|o| o["id"] != "other"));
     }
 
@@ -5555,14 +9407,39 @@ mod tests {
             sink.lock().unwrap().push(p.to_path_buf());
             Ok(())
         }));
-        let list = api.dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap();
-        let ids: Vec<&str> = list.as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["vscode", "jetbrains-phpstorm", "default-app", "file-manager"]);
-        assert_eq!(list[2], serde_json::json!({"id": "default-app", "name": "Default app", "kind": "defaultApp"}));
+        let list = api
+            .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "vscode",
+                "jetbrains-phpstorm",
+                "default-app",
+                "file-manager"
+            ]
+        );
+        assert_eq!(
+            list[2],
+            serde_json::json!({"id": "default-app", "name": "Default app", "kind": "defaultApp"})
+        );
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
-        let open_in = |path: &str, source: serde_json::Value| req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": 3, "opener": "default-app", "source": source}}));
-        api.dispatch(open_in("src/app.php", serde_json::Value::Null)).await.unwrap();
+        let open_in = |path: &str, source: serde_json::Value| {
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": path, "line": 3, "opener": "default-app", "source": source}}),
+            )
+        };
+        api.dispatch(open_in("src/app.php", serde_json::Value::Null))
+            .await
+            .unwrap();
         assert_eq!(*opened.lock().unwrap(), [wt.join("src/app.php")]);
         // A commit's version that's the working-tree file's bytes: the file itself, beside its
         // folder (a page's stylesheet loads); edited since, the commit's version is a copy.
@@ -5570,29 +9447,78 @@ mod tests {
         r.git(&["add", "site"]);
         r.git(&["commit", "-qm", "site"]);
         let page = r.git(&["rev-parse", "HEAD:site/index.html"]);
-        api.dispatch(open_in("site/index.html", serde_json::json!({"kind": "object", "oid": page}))).await.unwrap();
-        assert_eq!(opened.lock().unwrap().last().unwrap(), &wt.join("site/index.html"));
+        api.dispatch(open_in(
+            "site/index.html",
+            serde_json::json!({"kind": "object", "oid": page}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            opened.lock().unwrap().last().unwrap(),
+            &wt.join("site/index.html")
+        );
         r.write("site/index.html", "<p>edited</p>\n");
-        api.dispatch(open_in("site/index.html", serde_json::json!({"kind": "object", "oid": page}))).await.unwrap();
-        assert!(opened.lock().unwrap().last().unwrap().starts_with(crate::platform::fs::canonicalize(cache.path()).unwrap()));
+        api.dispatch(open_in(
+            "site/index.html",
+            serde_json::json!({"kind": "object", "oid": page}),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            opened
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .starts_with(crate::platform::fs::canonicalize(cache.path()).unwrap())
+        );
         // An old version: a copy named like the file, private to the user, read-only.
         let old = r.git(&["rev-parse", "HEAD^1^1:src/app.php"]);
-        api.dispatch(open_in("src/app.php", serde_json::json!({"kind": "object", "oid": old}))).await.unwrap();
+        api.dispatch(open_in(
+            "src/app.php",
+            serde_json::json!({"kind": "object", "oid": old}),
+        ))
+        .await
+        .unwrap();
         let copy = opened.lock().unwrap().last().unwrap().clone();
         let cache_dir = crate::platform::fs::canonicalize(cache.path()).unwrap();
         assert_eq!(copy, cache_dir.join(&old[..12]).join("src/app.php"));
-        assert_eq!(std::fs::read_to_string(&copy).unwrap().trim_end(), r.git(&["show", "HEAD^1^1:src/app.php"]).trim_end());
+        assert_eq!(
+            std::fs::read_to_string(&copy).unwrap().trim_end(),
+            r.git(&["show", "HEAD^1^1:src/app.php"]).trim_end()
+        );
         #[cfg(unix)]
         {
-            assert_eq!(crate::platform::fs::mode(&std::fs::metadata(&copy).unwrap()) & 0o777, 0o444);
-            assert_eq!(crate::platform::fs::mode(&std::fs::metadata(cache_dir.join(&old[..12])).unwrap()) & 0o777, 0o700);
+            assert_eq!(
+                crate::platform::fs::mode(&std::fs::metadata(&copy).unwrap()) & 0o777,
+                0o444
+            );
+            assert_eq!(
+                crate::platform::fs::mode(&std::fs::metadata(cache_dir.join(&old[..12])).unwrap())
+                    & 0o777,
+                0o700
+            );
         }
         // Refused: a folder, an escaping path, a missing file.
-        for (path, kind) in [("src", GbErrorKind::InvalidInput), ("../x", GbErrorKind::InvalidInput), ("gone.txt", GbErrorKind::NotFound)] {
-            assert_eq!(api.dispatch(open_in(path, serde_json::Value::Null)).await.unwrap_err().kind, kind, "{path}");
+        for (path, kind) in [
+            ("src", GbErrorKind::InvalidInput),
+            ("../x", GbErrorKind::InvalidInput),
+            ("gone.txt", GbErrorKind::NotFound),
+        ] {
+            assert_eq!(
+                api.dispatch(open_in(path, serde_json::Value::Null))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                kind,
+                "{path}"
+            );
         }
         assert_eq!(opened.lock().unwrap().len(), 4);
-        assert!(launches.lock().unwrap().is_empty(), "the default app isn't an opener launch");
+        assert!(
+            launches.lock().unwrap().is_empty(),
+            "the default app isn't an opener launch"
+        );
         // Never a file the OS would run: a script or launcher by its name, an old version's copy
         // too (by the name it's shown under); on Unix an executable, or a symlink to one.
         r.write("tools/install.sh", "echo hi\n");
@@ -5605,37 +9531,85 @@ mod tests {
             let req = open_in(path, source);
             async move { api.dispatch(req).await.unwrap_err() }
         };
-        for (path, source) in [("tools/install.sh", serde_json::Value::Null), ("tools/Setup.EXE", serde_json::Value::Null), ("tools/install.sh", serde_json::json!({"kind": "object", "oid": script}))] {
+        for (path, source) in [
+            ("tools/install.sh", serde_json::Value::Null),
+            ("tools/Setup.EXE", serde_json::Value::Null),
+            (
+                "tools/install.sh",
+                serde_json::json!({"kind": "object", "oid": script}),
+            ),
+        ] {
             let err = refused(path, source).await;
-            assert_eq!((err.kind, err.message.as_str()), (GbErrorKind::InvalidInput, crate::openers::default_app::RUNS_AS_PROGRAM), "{path}");
+            assert_eq!(
+                (err.kind, err.message.as_str()),
+                (
+                    GbErrorKind::InvalidInput,
+                    crate::openers::default_app::RUNS_AS_PROGRAM
+                ),
+                "{path}"
+            );
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             r.write("tools/build", "#!/bin/sh\n");
-            std::fs::set_permissions(r.path().join("tools/build"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(
+                r.path().join("tools/build"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
             std::os::unix::fs::symlink("build", r.path().join("tools/notes.txt")).unwrap();
             for path in ["tools/build", "tools/notes.txt"] {
-                assert_eq!(refused(path, serde_json::Value::Null).await.message, crate::openers::default_app::RUNS_AS_PROGRAM, "{path}");
+                assert_eq!(
+                    refused(path, serde_json::Value::Null).await.message,
+                    crate::openers::default_app::RUNS_AS_PROGRAM,
+                    "{path}"
+                );
             }
         }
-        assert_eq!(opened.lock().unwrap().len(), 4, "nothing refused reached the OS");
+        assert_eq!(
+            opened.lock().unwrap().len(),
+            4,
+            "nothing refused reached the OS"
+        );
         // Without one there's no entry, and opening with it is refused.
         let (plain, _) = with_openers(super::tests::api());
-        let ids = plain.dispatch(req(serde_json::json!({"method": "listOpeners"}))).await.unwrap();
-        assert!(ids.as_array().unwrap().iter().all(|o| o["id"] != "default-app"));
+        let ids = plain
+            .dispatch(req(serde_json::json!({"method": "listOpeners"})))
+            .await
+            .unwrap();
+        assert!(
+            ids.as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o["id"] != "default-app")
+        );
         let pid = open(&plain, &r).await;
         let err = plain.dispatch(req(serde_json::json!({"method": "openIn", "params": {"repo": pid, "worktree": wt, "path": "src/app.php", "line": null, "opener": "default-app"}}))).await.unwrap_err();
         assert_eq!(err.kind, GbErrorKind::InvalidInput);
     }
 
-    fn counting_detect(calls: Arc<std::sync::atomic::AtomicUsize>) -> Arc<dyn Fn() -> Vec<Opener> + Send + Sync> {
+    fn counting_detect(
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Arc<dyn Fn() -> Vec<Opener> + Send + Sync> {
         use crate::openers::ArgStyle;
         Arc::new(move || {
             let n = calls.fetch_add(1, Ordering::SeqCst);
-            let mut v = vec![Opener::new("vscode", "VS Code", OpenerKind::Editor, "/fake/code", ArgStyle::VsCode)];
+            let mut v = vec![Opener::new(
+                "vscode",
+                "VS Code",
+                OpenerKind::Editor,
+                "/fake/code",
+                ArgStyle::VsCode,
+            )];
             if n > 0 {
-                v.push(Opener::new("zed", "Zed", OpenerKind::Editor, "/fake/zed", ArgStyle::PathColonLine));
+                v.push(Opener::new(
+                    "zed",
+                    "Zed",
+                    OpenerKind::Editor,
+                    "/fake/zed",
+                    ArgStyle::PathColonLine,
+                ));
             }
             v
         })
@@ -5646,11 +9620,26 @@ mod tests {
         let r = TestRepo::new();
         fixtures::details(&r);
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let api = api().with_openers(counting_detect(calls.clone()), Arc::new(|_: &crate::openers::LaunchCommand| Ok(())));
+        let api = api().with_openers(
+            counting_detect(calls.clone()),
+            Arc::new(|_: &crate::openers::LaunchCommand| Ok(())),
+        );
         let list = || req(serde_json::json!({"method": "listOpeners"}));
-        assert_eq!(api.dispatch(list()).await.unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(
+            api.dispatch(list())
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         api.dispatch(list()).await.unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "cached within the refresh interval");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "cached within the refresh interval"
+        );
         // Zed was installed since: opening in it re-detects instead of refusing.
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
@@ -5659,12 +9648,34 @@ mod tests {
         // Past the interval, a listing answers from the cache at once and re-detects behind it
         // (fix round 2): the next listing has the new result.
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let api = super::tests::api().with_openers(counting_detect(calls.clone()), Arc::new(|_: &crate::openers::LaunchCommand| Ok(()))).with_opener_refresh(std::time::Duration::ZERO);
+        let api = super::tests::api()
+            .with_openers(
+                counting_detect(calls.clone()),
+                Arc::new(|_: &crate::openers::LaunchCommand| Ok(())),
+            )
+            .with_opener_refresh(std::time::Duration::ZERO);
         api.dispatch(list()).await.unwrap();
-        assert_eq!(api.dispatch(list()).await.unwrap().as_array().unwrap().len(), 1, "the stale list, at once");
+        assert_eq!(
+            api.dispatch(list())
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "the stale list, at once"
+        );
         wait_until(|| calls.load(Ordering::SeqCst) == 2).await;
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(api.dispatch(list()).await.unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(
+            api.dispatch(list())
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     async fn wait_until(done: impl Fn() -> bool) {
@@ -5690,7 +9701,13 @@ mod tests {
                     if count.fetch_add(1, Ordering::SeqCst) > 0 {
                         let _ = gate.lock().unwrap().recv();
                     }
-                    vec![Opener::new("vscode", "VS Code", OpenerKind::Editor, "/fake/code", crate::openers::ArgStyle::VsCode)]
+                    vec![Opener::new(
+                        "vscode",
+                        "VS Code",
+                        OpenerKind::Editor,
+                        "/fake/code",
+                        crate::openers::ArgStyle::VsCode,
+                    )]
                 }),
                 Arc::new(|_: &crate::openers::LaunchCommand| Ok(())),
             )
@@ -5698,14 +9715,29 @@ mod tests {
         let list = || req(serde_json::json!({"method": "listOpeners"}));
         api.dispatch(list()).await.unwrap();
         let quick = std::time::Duration::from_secs(2);
-        tokio::time::timeout(quick, api.dispatch(list())).await.expect("listing waited on the re-detection").unwrap();
+        tokio::time::timeout(quick, api.dispatch(list()))
+            .await
+            .expect("listing waited on the re-detection")
+            .unwrap();
         wait_until(|| calls.load(Ordering::SeqCst) == 2).await;
         let id = open(&api, &r).await;
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
-        let open_in = req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": null, "opener": "vscode"}}));
-        tokio::time::timeout(quick, api.dispatch(open_in)).await.expect("opening waited on the re-detection").unwrap();
-        tokio::time::timeout(quick, api.dispatch(list())).await.expect("a second listing waited").unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "one re-detection at a time");
+        let open_in = req(
+            serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": null, "opener": "vscode"}}),
+        );
+        tokio::time::timeout(quick, api.dispatch(open_in))
+            .await
+            .expect("opening waited on the re-detection")
+            .unwrap();
+        tokio::time::timeout(quick, api.dispatch(list()))
+            .await
+            .expect("a second listing waited")
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "one re-detection at a time"
+        );
         release.send(()).unwrap();
     }
 
@@ -5721,17 +9753,51 @@ mod tests {
         let wt = crate::platform::fs::canonicalize(r.path()).unwrap();
         let staged = r.git(&["rev-parse", ":src/app.php"]);
         let open_in = |fallback: serde_json::Value| {
-            req(serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": 2, "opener": "vscode", "source": {"kind": "worktree", "worktree": wt}, "fallback": fallback}}))
+            req(
+                serde_json::json!({"method": "openIn", "params": {"repo": id, "worktree": wt, "path": "src/app.php", "line": 2, "opener": "vscode", "source": {"kind": "worktree", "worktree": wt}, "fallback": fallback}}),
+            )
         };
-        api.dispatch(open_in(serde_json::json!({"kind": "object", "oid": staged}))).await.unwrap();
-        assert_eq!(launched_file(&launches), PathBuf::from(format!("{}:2", wt.join("src/app.php").display())));
+        api.dispatch(open_in(
+            serde_json::json!({"kind": "object", "oid": staged}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            launched_file(&launches),
+            PathBuf::from(format!("{}:2", wt.join("src/app.php").display()))
+        );
         std::fs::remove_file(wt.join("src/app.php")).unwrap();
-        api.dispatch(open_in(serde_json::json!({"kind": "object", "oid": staged}))).await.unwrap();
-        let copy = launched_file(&launches).to_string_lossy().trim_end_matches(":2").to_string();
-        assert!(copy.starts_with(&crate::platform::fs::canonicalize(cache.path()).unwrap().to_string_lossy().into_owned()), "{copy}");
-        assert!(std::fs::read_to_string(&copy).unwrap().ends_with("// staged tweak\n"));
+        api.dispatch(open_in(
+            serde_json::json!({"kind": "object", "oid": staged}),
+        ))
+        .await
+        .unwrap();
+        let copy = launched_file(&launches)
+            .to_string_lossy()
+            .trim_end_matches(":2")
+            .to_string();
+        assert!(
+            copy.starts_with(
+                &crate::platform::fs::canonicalize(cache.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ),
+            "{copy}"
+        );
+        assert!(
+            std::fs::read_to_string(&copy)
+                .unwrap()
+                .ends_with("// staged tweak\n")
+        );
         // No fallback: the missing file is an error, as before.
-        assert_eq!(api.dispatch(open_in(serde_json::Value::Null)).await.unwrap_err().kind, GbErrorKind::NotFound);
+        assert_eq!(
+            api.dispatch(open_in(serde_json::Value::Null))
+                .await
+                .unwrap_err()
+                .kind,
+            GbErrorKind::NotFound
+        );
     }
 
     #[tokio::test]
@@ -5743,13 +9809,31 @@ mod tests {
                 if count.fetch_add(1, Ordering::SeqCst) == 0 {
                     panic!("a broken desktop entry");
                 }
-                vec![Opener::new("vscode", "VS Code", OpenerKind::Editor, "/fake/code", crate::openers::ArgStyle::VsCode)]
+                vec![Opener::new(
+                    "vscode",
+                    "VS Code",
+                    OpenerKind::Editor,
+                    "/fake/code",
+                    crate::openers::ArgStyle::VsCode,
+                )]
             }),
             Arc::new(|_: &crate::openers::LaunchCommand| Ok(())),
         );
         let list = || req(serde_json::json!({"method": "listOpeners"}));
-        assert!(api.dispatch(list()).await.is_err(), "a failed detection is an error, not an empty list");
-        assert_eq!(api.dispatch(list()).await.unwrap().as_array().unwrap().len(), 1, "and the next call retries");
+        assert!(
+            api.dispatch(list()).await.is_err(),
+            "a failed detection is an error, not an empty list"
+        );
+        assert_eq!(
+            api.dispatch(list())
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "and the next call retries"
+        );
     }
 
     // --- 2C T2: one handle per repository ---
@@ -5761,18 +9845,54 @@ mod tests {
         fixtures::basic(&r);
         let api = api();
         let linked = r.root().join("wt-hotfix");
-        let first = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": linked}}))).await.unwrap();
+        let first = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": linked}}),
+            ))
+            .await
+            .unwrap();
         let main = open(&api, &r).await;
-        assert_eq!(first["id"].as_u64().unwrap(), main, "one handle, whichever worktree opened first");
-        assert_eq!(first["path"].as_str().unwrap(), crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string(), "the handle's path is the main worktree");
-        assert_eq!(first["worktree"].as_str().unwrap(), crate::platform::fs::canonicalize(&linked).unwrap().display().to_string(), "and the summary names the one opened");
-        let again = api.dispatch(req(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}))).await.unwrap();
-        assert_eq!(again["worktree"].as_str().unwrap(), crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string());
+        assert_eq!(
+            first["id"].as_u64().unwrap(),
+            main,
+            "one handle, whichever worktree opened first"
+        );
+        assert_eq!(
+            first["path"].as_str().unwrap(),
+            crate::platform::fs::canonicalize(r.path())
+                .unwrap()
+                .display()
+                .to_string(),
+            "the handle's path is the main worktree"
+        );
+        assert_eq!(
+            first["worktree"].as_str().unwrap(),
+            crate::platform::fs::canonicalize(&linked)
+                .unwrap()
+                .display()
+                .to_string(),
+            "and the summary names the one opened"
+        );
+        let again = api
+            .dispatch(req(
+                serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            again["worktree"].as_str().unwrap(),
+            crate::platform::fs::canonicalize(r.path())
+                .unwrap()
+                .display()
+                .to_string()
+        );
         // The queue is the repository's, and its one id hears about it (queueChanged per open id).
         let h = api.handle(main as u32).unwrap();
         let mut rx = api.subscribe();
         let w = api.repo_writes(&h);
-        let ticket = w.queue.enqueue("commit \"x\"", crate::events::OpKind::Commit, 1);
+        let ticket = w
+            .queue
+            .enqueue("commit \"x\"", crate::events::OpKind::Commit, 1);
         let mut ids = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::QueueChanged { repo, .. } = ev {
@@ -5789,43 +9909,108 @@ mod tests {
         fixtures::basic(&r);
         let api = api();
         let id = open(&api, &r).await;
-        let linked = crate::platform::fs::canonicalize(r.root().join("wt-hotfix")).unwrap().display().to_string();
-        let main = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let linked = crate::platform::fs::canonicalize(r.root().join("wt-hotfix"))
+            .unwrap()
+            .display()
+            .to_string();
+        let main = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
         let g = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "active": linked}}))).await.unwrap();
         assert_eq!(g["head"]["branch"], "refs/heads/hotfix");
         assert_eq!(g["openWorktree"].as_str(), Some(linked.as_str()));
-        assert_eq!(g["rows"][0]["wip"]["worktreePath"].as_str(), Some(linked.as_str()), "the active worktree's WIP is row 0");
+        assert_eq!(
+            g["rows"][0]["wip"]["worktreePath"].as_str(),
+            Some(linked.as_str()),
+            "the active worktree's WIP is row 0"
+        );
         let wts = g["worktrees"].as_array().unwrap();
         assert_eq!(wts.len(), 2);
         let m = wts.iter().find(|w| w["isMain"] == true).unwrap();
-        assert_eq!((m["path"].as_str(), m["branch"].as_str()), (Some(main.as_str()), Some("refs/heads/main")));
+        assert_eq!(
+            (m["path"].as_str(), m["branch"].as_str()),
+            (Some(main.as_str()), Some("refs/heads/main"))
+        );
         let labels = g["labels"].as_array().unwrap();
         let label = |n: &str| labels.iter().find(|l| l["name"] == n).unwrap().clone();
-        assert_eq!(label("hotfix")["checkedOut"].as_str(), Some(linked.as_str()));
+        assert_eq!(
+            label("hotfix")["checkedOut"].as_str(),
+            Some(linked.as_str())
+        );
         assert_eq!(label("main")["checkedOut"].as_str(), Some(main.as_str()));
         assert_eq!(label("hotfix")["isHead"], true);
         assert!(label("feature/login")["checkedOut"].is_null());
-        let plain = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap();
-        assert_eq!(plain["head"]["branch"], "refs/heads/main", "without `active`: the handle's (main) worktree");
+        let plain = api
+            .dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            plain["head"]["branch"], "refs/heads/main",
+            "without `active`: the handle's (main) worktree"
+        );
         let bad = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "active": "/nonexistent"}}))).await;
         assert_eq!(bad.unwrap_err().kind, GbErrorKind::InvalidInput);
         let outside = tempfile::tempdir().unwrap();
         let bad = api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "active": outside.path()}}))).await;
-        assert_eq!(bad.unwrap_err().kind, GbErrorKind::InvalidInput, "an existing folder that isn't one of its worktrees");
+        assert_eq!(
+            bad.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "an existing folder that isn't one of its worktrees"
+        );
     }
 
     #[tokio::test]
     async fn the_sidebar_names_every_branchs_worktree_and_locked_worktrees() {
         let r = TestRepo::new();
         fixtures::basic(&r);
-        r.git(&["worktree", "lock", r.root().join("wt-hotfix").to_str().unwrap()]);
+        r.git(&[
+            "worktree",
+            "lock",
+            r.root().join("wt-hotfix").to_str().unwrap(),
+        ]);
         let api = api();
         let id = open(&api, &r).await;
-        let s = api.dispatch(req(serde_json::json!({"method": "sidebar", "params": {"repo": id}}))).await.unwrap();
-        let local = |n: &str| s["locals"].as_array().unwrap().iter().find(|b| b["name"] == n).unwrap().clone();
-        assert_eq!(local("main")["checkedOut"].as_str(), Some(crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string().as_str()));
-        assert!(local("hotfix")["checkedOut"].as_str().unwrap().ends_with("wt-hotfix"));
-        let wt = s["worktrees"].as_array().unwrap().iter().find(|w| w["isMain"] == false).unwrap().clone();
+        let s = api
+            .dispatch(req(
+                serde_json::json!({"method": "sidebar", "params": {"repo": id}}),
+            ))
+            .await
+            .unwrap();
+        let local = |n: &str| {
+            s["locals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["name"] == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            local("main")["checkedOut"].as_str(),
+            Some(
+                crate::platform::fs::canonicalize(r.path())
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert!(
+            local("hotfix")["checkedOut"]
+                .as_str()
+                .unwrap()
+                .ends_with("wt-hotfix")
+        );
+        let wt = s["worktrees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["isMain"] == false)
+            .unwrap()
+            .clone();
         assert_eq!(wt["locked"], true);
     }
 
@@ -5838,17 +10023,39 @@ mod tests {
         let api = api();
         let id = open(&api, &r).await;
         let h = api.handle(id as u32).unwrap();
-        let graph = |active: Option<String>| req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "active": active}}));
+        let graph = |active: Option<String>| {
+            req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null, "active": active}}),
+            )
+        };
         api.dispatch(graph(None)).await.unwrap();
         let walks = crate::snapshot::walks(&h.walk);
         assert_eq!(walks, 1);
-        let linked = crate::platform::fs::canonicalize(r.root().join("wt-hotfix")).unwrap().display().to_string();
+        let linked = crate::platform::fs::canonicalize(r.root().join("wt-hotfix"))
+            .unwrap()
+            .display()
+            .to_string();
         api.dispatch(graph(Some(linked))).await.unwrap();
-        assert_eq!(crate::snapshot::walks(&h.walk), walks, "the switch's relayout didn't walk");
+        assert_eq!(
+            crate::snapshot::walks(&h.walk),
+            walks,
+            "the switch's relayout didn't walk"
+        );
         r.commit("moves main");
         let g = api.dispatch(graph(None)).await.unwrap();
-        assert!(crate::snapshot::walks(&h.walk) > walks, "moved refs walk again");
-        assert_eq!(g["rows"].as_array().unwrap().iter().filter(|row| row["summary"] == "moves main").count(), 1);
+        assert!(
+            crate::snapshot::walks(&h.walk) > walks,
+            "moved refs walk again"
+        );
+        assert_eq!(
+            g["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["summary"] == "moves main")
+                .count(),
+            1
+        );
     }
     // --- end 2C T2 ---
 
@@ -5862,24 +10069,59 @@ mod tests {
         let a = w.queue.enqueue("a", crate::events::OpKind::Commit, 1);
         let b = w.queue.enqueue("b", crate::events::OpKind::Commit, 2);
         let c = w.queue.enqueue("c", crate::events::OpKind::Commit, 3);
-        let state = api.dispatch(req(serde_json::json!({"method": "queueState", "params": {"repo": id}}))).await.unwrap();
+        let state = api
+            .dispatch(req(
+                serde_json::json!({"method": "queueState", "params": {"repo": id}}),
+            ))
+            .await
+            .unwrap();
         assert_eq!(state["queued"].as_array().unwrap().len(), 3);
         let b_id = state["queued"][1]["id"].as_u64().unwrap();
-        assert_eq!(api.dispatch(req(serde_json::json!({"method": "queueRemove", "params": {"repo": id, "id": b_id}}))).await.unwrap(), true);
-        w.queue.turn(a).await.unwrap().finish(Some(&GbError::other("boom")), &[]);
+        assert_eq!(
+            api.dispatch(req(
+                serde_json::json!({"method": "queueRemove", "params": {"repo": id, "id": b_id}})
+            ))
+            .await
+            .unwrap(),
+            true
+        );
+        w.queue
+            .turn(a)
+            .await
+            .unwrap()
+            .finish(Some(&GbError::other("boom")), &[]);
         assert!(w.queue.state().stopped.is_some());
-        api.dispatch(req(serde_json::json!({"method": "queueResume", "params": {"repo": id}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "queueResume", "params": {"repo": id}}),
+        ))
+        .await
+        .unwrap();
         assert!(w.queue.state().stopped.is_none());
-        api.dispatch(req(serde_json::json!({"method": "queueClear", "params": {"repo": id}}))).await.unwrap();
-        assert_eq!(w.queue.state(), crate::write::types::QueueStatePayload::default());
+        api.dispatch(req(
+            serde_json::json!({"method": "queueClear", "params": {"repo": id}}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            w.queue.state(),
+            crate::write::types::QueueStatePayload::default()
+        );
         drop((b, c));
     }
 
     /// Every file under `.git` but objects (index bytes and mtime included): what a read must
     /// never change (spec #2 §17.1).
     fn repo_bytes(r: &TestRepo) -> Vec<(String, Vec<u8>, Option<std::time::SystemTime>)> {
-        fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, Vec<u8>, Option<std::time::SystemTime>)>) {
-            let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        fn walk(
+            dir: &Path,
+            base: &Path,
+            out: &mut Vec<(String, Vec<u8>, Option<std::time::SystemTime>)>,
+        ) {
+            let mut entries: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.path())
+                .collect();
             entries.sort();
             for p in entries {
                 let rel = p.strip_prefix(base).unwrap().display().to_string();
@@ -5889,7 +10131,8 @@ mod tests {
                 if p.is_dir() {
                     walk(&p, base, out);
                 } else {
-                    let mtime = (rel == "index" || rel.ends_with("/index")).then(|| std::fs::metadata(&p).unwrap().modified().unwrap());
+                    let mtime = (rel == "index" || rel.ends_with("/index"))
+                        .then(|| std::fs::metadata(&p).unwrap().modified().unwrap());
                     out.push((rel, std::fs::read(&p).unwrap(), mtime));
                 }
             }
@@ -5923,7 +10166,10 @@ mod tests {
     fn read_samples(id: u32, r: &TestRepo) -> Vec<serde_json::Value> {
         let login = r.git(&["rev-parse", "feature/login"]);
         let head = r.git(&["rev-parse", "HEAD"]);
-        let wt = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let wt = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
         let root = r.root().display().to_string();
         use serde_json::json;
         let review_comment = json!({"anchor": {"path": "a.txt", "oldPath": "a.txt", "start": null, "end": {"kind": "added", "oldLine": 1, "newLine": 1}}, "body": "x", "refs": {"baseSha": "b", "startSha": "b", "headSha": "h"}});
@@ -5941,6 +10187,7 @@ mod tests {
             json!({"method": "forgeRequestChanges", "params": {"repo": id, "number": 1, "body": "x"}}),
             json!({"method": "forgeMerge", "params": {"repo": id, "number": 1, "options": {"method": null, "squash": null, "deleteSourceBranch": null, "expectedSha": null}}}),
             json!({"method": "forgeEditMr", "params": {"repo": id, "number": 1, "edit": {"title": "t", "description": null, "labels": null}}}),
+            json!({"method": "forgeSetClosed", "params": {"repo": id, "number": 1, "closed": true}}),
             json!({"method": "forgeSetDraft", "params": {"repo": id, "number": 1, "draft": true}}),
             json!({"method": "forgeSetAutoMerge", "params": {"repo": id, "number": 1, "options": {"method": null, "squash": null, "deleteSourceBranch": null, "expectedSha": null}}}),
             json!({"method": "forgeCancelAutoMerge", "params": {"repo": id, "number": 1}}),
@@ -6123,15 +10370,54 @@ mod tests {
     }
 
     /// The methods that write (`is_write`), which the never-write test leaves out.
-    const WRITE_METHODS: &[&str] = &["fetch", "dropCompareRefs", "clone", "initRepo", "testWrite", "undo", "redo", "undoEntry","applyKeptStash", "removeIndexLock", "stage", "unstage", "stageAll", "unstageAll", "stagingUndo", "stagingRedo", "writeWorktreeFile", "createWorktreeFile", "applySuggestion", "commit", "editHeadMessage", "settlePaused", "worktreeAdd", "worktreeRemove", "deleteBranch", "stagePatch", "createBranch", "renameBranch", "setUpstream", "push",
+    const WRITE_METHODS: &[&str] = &[
+        "fetch",
+        "dropCompareRefs",
+        "clone",
+        "initRepo",
+        "testWrite",
+        "undo",
+        "redo",
+        "undoEntry",
+        "applyKeptStash",
+        "removeIndexLock",
+        "stage",
+        "unstage",
+        "stageAll",
+        "unstageAll",
+        "stagingUndo",
+        "stagingRedo",
+        "writeWorktreeFile",
+        "createWorktreeFile",
+        "applySuggestion",
+        "commit",
+        "editHeadMessage",
+        "settlePaused",
+        "worktreeAdd",
+        "worktreeRemove",
+        "deleteBranch",
+        "stagePatch",
+        "createBranch",
+        "renameBranch",
+        "setUpstream",
+        "push",
         // 4A T7
-        "addRemote", "removeRemote", "switchRemoteToSsh", "switchRemoteBack",
-        "submoduleUpdate", "submoduleSync", "submoduleAdd", "submoduleRemove",
+        "addRemote",
+        "removeRemote",
+        "switchRemoteToSsh",
+        "switchRemoteBack",
+        "submoduleUpdate",
+        "submoduleSync",
+        "submoduleAdd",
+        "submoduleRemove",
         // --- 2C T5: checkout ---
         "checkout",
         // --- end 2C T5 ---
         // --- 2C T7 ---
-        "stashPush", "stashApply", "stashDrop", "addToGitignore",
+        "stashPush",
+        "stashApply",
+        "stashDrop",
+        "addToGitignore",
         // --- end 2C T7 ---
         // --- 2C T6: reset ---
         "reset",
@@ -6140,7 +10426,10 @@ mod tests {
         "discard",
         // --- end 2B T4 ---
         // --- 2D T9 / T10 ---
-        "integrate", "rebaseControl", "fastForward", "mergeAbort",
+        "integrate",
+        "rebaseControl",
+        "fastForward",
+        "mergeAbort",
         // --- end 2D T9 / T10 ---
         // --- 2D T14 ---
         "pull",
@@ -6154,10 +10443,17 @@ mod tests {
         // --- 3A T3 ---
         "restoreFile",
         // --- end 3A T3 ---
-        "lfsFetch", "lfsPull", "lfsDownload", "lfsTrack", "lfsUntrack",
+        "lfsFetch",
+        "lfsPull",
+        "lfsDownload",
+        "lfsTrack",
+        "lfsUntrack",
         // --- 3B T3 ---
-        "createTag", "deleteTag", "pushTags",
-        "gitflowInit", "gitflowFinish",
+        "createTag",
+        "deleteTag",
+        "pushTags",
+        "gitflowInit",
+        "gitflowFinish",
         // --- end 3B T3 ---
         // --- 3C T3 ---
         "interactiveRebase",
@@ -6175,7 +10471,10 @@ mod tests {
     /// hide in `WRITE_METHODS`.
     fn write_samples(id: u32, r: &TestRepo) -> Vec<serde_json::Value> {
         use serde_json::json;
-        let wt = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let wt = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
         vec![
             json!({"method": "fetch", "params": {"repo": id, "background": false}}),
             json!({"method": "applyPatch", "params": {"repo": id, "worktree": wt, "patch": ""}}),
@@ -6295,7 +10594,70 @@ mod tests {
     /// Samples that fail by design here: the harness-less `Api` has no log folder, URL opener,
     /// openers or askpass, and the profile samples name no existing profile. Each refusal comes
     /// before any repository access.
-    const EXPECTED_FAILURES: &[&str] = &["openLogsFolder", "openUrl", "openIn", "switchProfile", "deleteProfile", "authAnswer", "authUseSsh", "saveProfile", "addForgeAccount", "removeForgeAccount", "aiSetToken", "aiModels", "aiGenerateCommitMessage", "forgeProjectSettings", "forgeForks", "forgeMrList", "forgeBranchMrs", "forgeMrDetail", "forgeRefresh", "forgeMrDiscussions", "forgeProjectByPath", "forgeReply", "forgeApprove", "forgeRequestChanges", "forgeMerge", "forgeEditMr", "forgeSetDraft", "forgeSetAutoMerge", "forgeCancelAutoMerge", "forgeUpdateBranch", "forgeReview", "forgePeopleLimits", "forgeSetSubscribed", "forgeReact", "forgeEditNote", "forgeDeleteNote", "forgeResolve", "forgeReviewDiff", "forgeReviewDrafts", "forgeAddDraft", "forgeEditDraft", "forgeDeleteDraft", "forgeSubmitReview", "forgeDiscardReview", "forgeCommentNow", "forgeCreateContext", "forgeSearchUsers", "forgeSearchRepos", "forgeLabels", "forgeCreateMr", "forgeCompleteCreate", "forgeStack", "forgeSyncStack", "forgeRetarget", "forgeImage", "forgeVideo", "forgeOpenVideo", "updateCheck", "updateDownload", "updateInstall", "updateRestart", "relaunchApp"];
+    const EXPECTED_FAILURES: &[&str] = &[
+        "openLogsFolder",
+        "openUrl",
+        "openIn",
+        "switchProfile",
+        "deleteProfile",
+        "authAnswer",
+        "authUseSsh",
+        "saveProfile",
+        "addForgeAccount",
+        "removeForgeAccount",
+        "aiSetToken",
+        "aiModels",
+        "aiGenerateCommitMessage",
+        "forgeProjectSettings",
+        "forgeForks",
+        "forgeMrList",
+        "forgeBranchMrs",
+        "forgeMrDetail",
+        "forgeRefresh",
+        "forgeMrDiscussions",
+        "forgeProjectByPath",
+        "forgeReply",
+        "forgeApprove",
+        "forgeRequestChanges",
+        "forgeMerge",
+        "forgeEditMr",
+        "forgeSetDraft",
+        "forgeSetAutoMerge",
+        "forgeCancelAutoMerge",
+        "forgeUpdateBranch",
+        "forgeReview",
+        "forgePeopleLimits",
+        "forgeSetSubscribed",
+        "forgeReact",
+        "forgeEditNote",
+        "forgeDeleteNote",
+        "forgeResolve",
+        "forgeReviewDiff",
+        "forgeReviewDrafts",
+        "forgeAddDraft",
+        "forgeEditDraft",
+        "forgeDeleteDraft",
+        "forgeSubmitReview",
+        "forgeDiscardReview",
+        "forgeCommentNow",
+        "forgeCreateContext",
+        "forgeSearchUsers",
+        "forgeSearchRepos",
+        "forgeLabels",
+        "forgeCreateMr",
+        "forgeCompleteCreate",
+        "forgeStack",
+        "forgeSyncStack",
+        "forgeRetarget",
+        "forgeImage",
+        "forgeVideo",
+        "forgeOpenVideo",
+        "updateCheck",
+        "updateDownload",
+        "updateInstall",
+        "updateRestart",
+        "relaunchApp",
+    ];
 
     #[tokio::test(flavor = "multi_thread")]
     async fn no_read_request_writes_to_the_repository() {
@@ -6307,11 +10669,16 @@ mod tests {
         let objects_before = object_files(&r);
         let mut failed = std::collections::BTreeSet::new();
         for sample in read_samples(id, &r) {
-            let request: Request = serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{sample}: {e}"));
+            let request: Request =
+                serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{sample}: {e}"));
             assert!(!request.is_write(), "{sample}");
             match api.dispatch(request).await {
                 Err(e) => {
-                    failed.insert(format!("{}: {}", sample["method"].as_str().unwrap(), e.message));
+                    failed.insert(format!(
+                        "{}: {}",
+                        sample["method"].as_str().unwrap(),
+                        e.message
+                    ));
                 }
                 // --- 3C T7 ---
                 // The prediction must really run merge-tree, or the object check below proves nothing.
@@ -6322,13 +10689,29 @@ mod tests {
         }
         api.unwatch_all();
         assert_eq!(repo_bytes(&r), before, "a read changed the repository");
-        assert_eq!(object_files(&r), objects_before, "a read wrote to the object store");
+        assert_eq!(
+            object_files(&r),
+            objects_before,
+            "a read wrote to the object store"
+        );
         // Exactly the expected ones: any other never exercised its real path, and an expected one
         // that now succeeds should leave the list.
-        let methods: std::collections::BTreeSet<&str> = failed.iter().map(|f| f.split(':').next().unwrap()).collect();
-        assert_eq!(methods, EXPECTED_FAILURES.iter().copied().collect(), "failed samples: {failed:?}");
+        let methods: std::collections::BTreeSet<&str> = failed
+            .iter()
+            .map(|f| f.split(':').next().unwrap())
+            .collect();
+        assert_eq!(
+            methods,
+            EXPECTED_FAILURES
+                .iter()
+                .copied()
+                .chain(["forgeSetClosed"])
+                .collect(),
+            "failed samples: {failed:?}"
+        );
         for sample in write_samples(id, &r) {
-            let request: Request = serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{sample}: {e}"));
+            let request: Request =
+                serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{sample}: {e}"));
             assert!(request.is_write(), "{sample}");
         }
     }
@@ -6337,15 +10720,35 @@ mod tests {
     fn the_never_write_samples_cover_every_read_request() {
         // From the Rust type itself (not the generated file, which may be stale).
         let ts = <Request as TS>::decl(&ts_rs::Config::default());
-        let methods: std::collections::BTreeSet<String> = regex::Regex::new(r#""method": "(\w+)""#).unwrap().captures_iter(&ts).map(|c| c[1].to_string()).collect();
+        let methods: std::collections::BTreeSet<String> = regex::Regex::new(r#""method": "(\w+)""#)
+            .unwrap()
+            .captures_iter(&ts)
+            .map(|c| c[1].to_string())
+            .collect();
         assert!(methods.len() > 40, "{ts}");
         let r = TestRepo::new();
         fixtures::basic(&r);
-        let sampled: std::collections::BTreeSet<String> = read_samples(1, &r).iter().map(|s| s["method"].as_str().unwrap().to_string()).collect();
-        let missing: Vec<&String> = methods.iter().filter(|m| !sampled.contains(*m) && !WRITE_METHODS.contains(&m.as_str())).collect();
-        assert!(missing.is_empty(), "read requests the never-write test doesn't dispatch: {missing:?}");
-        let writes: std::collections::BTreeSet<String> = write_samples(1, &r).iter().map(|s| s["method"].as_str().unwrap().to_string()).collect();
-        assert_eq!(writes, WRITE_METHODS.iter().map(|m| m.to_string()).collect(), "one sample per write method");
+        let sampled: std::collections::BTreeSet<String> = read_samples(1, &r)
+            .iter()
+            .map(|s| s["method"].as_str().unwrap().to_string())
+            .collect();
+        let missing: Vec<&String> = methods
+            .iter()
+            .filter(|m| !sampled.contains(*m) && !WRITE_METHODS.contains(&m.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "read requests the never-write test doesn't dispatch: {missing:?}"
+        );
+        let writes: std::collections::BTreeSet<String> = write_samples(1, &r)
+            .iter()
+            .map(|s| s["method"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            writes,
+            WRITE_METHODS.iter().map(|m| m.to_string()).collect(),
+            "one sample per write method"
+        );
     }
     // --- 4A T5 ---
     #[tokio::test]
@@ -6355,30 +10758,70 @@ mod tests {
         const TOKEN: &str = "glpat-FAKE-test-token";
         let tokens = MemTokens::new(TokenStorage::File);
         let fake = FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com");
-        fake.projects.lock().unwrap().insert("group/widget".into(), crate::forge::fake::project("gitlab.example.com", "group/widget", None, 5));
+        fake.projects.lock().unwrap().insert(
+            "group/widget".into(),
+            crate::forge::fake::project("gitlab.example.com", "group/widget", None, 5),
+        );
         let api = api().with_forge(FakeConnector::with(TOKEN, fake), tokens.clone());
         let req: Request = serde_json::from_value(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}})).unwrap();
-        assert!(!format!("{req:?}").contains(TOKEN), "Request's Debug (the dispatch log) never shows a token");
+        assert!(
+            !format!("{req:?}").contains(TOKEN),
+            "Request's Debug (the dispatch log) never shows a token"
+        );
         let added = api.dispatch(req).await.unwrap();
         assert_eq!(added["account"]["storage"], "file");
         assert!(!added.to_string().contains(TOKEN));
-        let list = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeAccounts"})).unwrap()).await.unwrap();
+        let list = api
+            .dispatch(
+                serde_json::from_value(serde_json::json!({"method": "forgeAccounts"})).unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(list[0]["account"]["user"]["username"], "ada");
         assert_eq!(list[0]["status"]["kind"], "ok");
         // The Clone screen's search, across the account's repositories.
         let hits = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeSearchRepos", "params": {"query": "widget"}})).unwrap()).await.unwrap();
-        assert_eq!((hits[0]["project"]["path"].as_str(), hits[0]["accountUsername"].as_str()), (Some("group/widget"), Some("ada")));
+        assert_eq!(
+            (
+                hits[0]["project"]["path"].as_str(),
+                hits[0]["accountUsername"].as_str()
+            ),
+            (Some("group/widget"), Some("ada"))
+        );
         assert_eq!(api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeSearchRepos", "params": {"query": "nothing"}})).unwrap()).await.unwrap(), serde_json::json!([]));
         let page = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeTokenPage", "params": {"host": "https://gitlab.example.com/", "kind": "gitlab"}})).unwrap()).await.unwrap();
-        assert!(page.as_str().unwrap().starts_with("https://gitlab.example.com/-/user_settings/personal_access_tokens?"));
+        assert!(
+            page.as_str()
+                .unwrap()
+                .starts_with("https://gitlab.example.com/-/user_settings/personal_access_tokens?")
+        );
         // A host's forge: by its name, else as the connector asked it (the fake asks no host).
-        let kind = |host: &str| serde_json::from_value::<Request>(serde_json::json!({"method": "detectForge", "params": {"host": host}})).unwrap();
-        assert_eq!(api.dispatch(kind("https://Codeberg.org/")).await.unwrap(), "forgejo");
-        assert_eq!(api.dispatch(kind("git.example.dev")).await.unwrap(), "generic");
-        assert_eq!(api.dispatch(kind("not a host")).await.unwrap_err().kind, GbErrorKind::InvalidInput);
+        let kind = |host: &str| {
+            serde_json::from_value::<Request>(
+                serde_json::json!({"method": "detectForge", "params": {"host": host}}),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            api.dispatch(kind("https://Codeberg.org/")).await.unwrap(),
+            "forgejo"
+        );
+        assert_eq!(
+            api.dispatch(kind("git.example.dev")).await.unwrap(),
+            "generic"
+        );
+        assert_eq!(
+            api.dispatch(kind("not a host")).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
         api.dispatch(serde_json::from_value(serde_json::json!({"method": "removeForgeAccount", "params": {"host": "gitlab.example.com"}})).unwrap()).await.unwrap();
         assert!(tokens.map.lock().unwrap().is_empty());
-        let none = api.dispatch(serde_json::from_value(serde_json::json!({"method": "forgeAccounts"})).unwrap()).await.unwrap();
+        let none = api
+            .dispatch(
+                serde_json::from_value(serde_json::json!({"method": "forgeAccounts"})).unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(none, serde_json::json!([]));
     }
 
@@ -6389,18 +10832,54 @@ mod tests {
         const TOKEN: &str = "glpat-FAKE-test-token";
         let tokens = MemTokens::new(TokenStorage::Keyring);
         let api = api()
-            .with_forge(FakeConnector::with(TOKEN, FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com")), tokens.clone())
-            .with_ai(Arc::new(FakeAi { prompts: Mutex::default(), saw_token: Mutex::default() }), tokens.clone());
+            .with_forge(
+                FakeConnector::with(
+                    TOKEN,
+                    FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com"),
+                ),
+                tokens.clone(),
+            )
+            .with_ai(
+                Arc::new(FakeAi {
+                    prompts: Mutex::default(),
+                    saw_token: Mutex::default(),
+                }),
+                tokens.clone(),
+            );
         let work = api.dispatch(req(serde_json::json!({"method": "createProfile", "params": {"name": "Work", "color": "#336699"}}))).await.unwrap();
         let id = work["id"].as_str().unwrap().to_string();
-        api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": id}}))).await.unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "switchProfile", "params": {"id": id}}),
+        ))
+        .await
+        .unwrap();
         let added = api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let account = added["account"]["id"].as_str().unwrap();
-        assert_eq!(tokens.token_for(&id, "gitlab.example.com", account).as_deref(), Some(TOKEN));
-        api.dispatch(req(serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-ai-test"}}))).await.unwrap();
-        assert_eq!(tokens.token_for(&id, "ai", "commit").as_deref(), Some("sk-ai-test"));
-        api.dispatch(req(serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}))).await.unwrap();
-        api.dispatch(req(serde_json::json!({"method": "deleteProfile", "params": {"id": id}}))).await.unwrap();
+        assert_eq!(
+            tokens
+                .token_for(&id, "gitlab.example.com", account)
+                .as_deref(),
+            Some(TOKEN)
+        );
+        api.dispatch(req(
+            serde_json::json!({"method": "aiSetToken", "params": {"token": "sk-ai-test"}}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            tokens.token_for(&id, "ai", "commit").as_deref(),
+            Some("sk-ai-test")
+        );
+        api.dispatch(req(
+            serde_json::json!({"method": "switchProfile", "params": {"id": "default"}}),
+        ))
+        .await
+        .unwrap();
+        api.dispatch(req(
+            serde_json::json!({"method": "deleteProfile", "params": {"id": id}}),
+        ))
+        .await
+        .unwrap();
         assert!(tokens.map.lock().unwrap().is_empty(), "no orphaned token");
     }
     // --- end 4A T5 ---
@@ -6411,31 +10890,80 @@ mod tests {
         use crate::forge::{ForgeKind, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         let mut p = FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com");
-        p.avatars.insert("grace@example.com".into(), crate::avatar::AvatarPayload { mime: "image/png".into(), base64: "Rk9SR0U=".into() });
+        p.avatars.insert(
+            "grace@example.com".into(),
+            crate::avatar::AvatarPayload {
+                mime: "image/png".into(),
+                base64: "Rk9SR0U=".into(),
+            },
+        );
         let conn = Arc::new(FakeConnector::default());
         let fake = conn.add(TOKEN, p);
-        let api = api().with_avatars(Arc::new(FakeAvatars)).with_forge(conn, MemTokens::new(TokenStorage::Keyring));
+        let api = api()
+            .with_avatars(Arc::new(FakeAvatars))
+            .with_forge(conn, MemTokens::new(TokenStorage::Keyring));
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/group/project.git",
+        ]);
         let id = open(&api, &r).await as u32;
         let elsewhere = TestRepo::new();
         elsewhere.commit("a");
-        elsewhere.git(&["remote", "add", "origin", "https://gitlab.other.example/group/project.git"]);
+        elsewhere.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.other.example/group/project.git",
+        ]);
         let other = open(&api, &elsewhere).await as u32;
-        let asked = || fake.calls().iter().filter(|c| c.starts_with("avatar ")).count();
+        let asked = || {
+            fake.calls()
+                .iter()
+                .filter(|c| c.starts_with("avatar "))
+                .count()
+        };
         // Not the tab's own forge (or no tab): the email isn't sent to the account.
-        for params in [serde_json::json!({"email": "grace@example.com", "repo": other}), serde_json::json!({"email": "grace@example.com"})] {
-            assert!(api.dispatch(req(serde_json::json!({"method": "avatar", "params": params}))).await.unwrap().is_null(), "Gravatar has none");
+        for params in [
+            serde_json::json!({"email": "grace@example.com", "repo": other}),
+            serde_json::json!({"email": "grace@example.com"}),
+        ] {
+            assert!(
+                api.dispatch(req(
+                    serde_json::json!({"method": "avatar", "params": params})
+                ))
+                .await
+                .unwrap()
+                .is_null(),
+                "Gravatar has none"
+            );
         }
         assert_eq!(asked(), 0);
-        let ask = |email: &'static str| api.dispatch(req(serde_json::json!({"method": "avatar", "params": {"email": email, "repo": id}})));
-        assert_eq!(ask("grace@example.com").await.unwrap()["base64"], "Rk9SR0U=", "the forge's first");
+        let ask = |email: &'static str| {
+            api.dispatch(req(
+                serde_json::json!({"method": "avatar", "params": {"email": email, "repo": id}}),
+            ))
+        };
+        assert_eq!(
+            ask("grace@example.com").await.unwrap()["base64"],
+            "Rk9SR0U=",
+            "the forge's first"
+        );
         assert_eq!(asked(), 1);
-        assert_eq!(ask("ada@example.com").await.unwrap()["base64"], "iVBO", "then Gravatar");
+        assert_eq!(
+            ask("ada@example.com").await.unwrap()["base64"],
+            "iVBO",
+            "then Gravatar"
+        );
         api.dispatch(req(serde_json::json!({"method": "saveSettings", "params": {"settings": {"forgeAvatars": false}}}))).await.unwrap();
-        assert!(ask("grace@example.com").await.unwrap().is_null(), "off: the forge isn't asked");
+        assert!(
+            ask("grace@example.com").await.unwrap().is_null(),
+            "off: the forge isn't asked"
+        );
         assert_eq!(ask("ada@example.com").await.unwrap()["base64"], "iVBO");
     }
 
@@ -6443,20 +10971,39 @@ mod tests {
     /// lookup that learns a fork relationship refreshes the graph once.
     #[tokio::test]
     async fn the_default_trunk_follows_the_fork_root_once_the_forge_says_so() {
-        use crate::forge::fake::{project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, project};
         use crate::forge::{ForgeKind, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         const HOST: &str = "gitlab.example.com";
         let p = FakeProvider::new(ForgeKind::GitLab, HOST);
         // Reversed naming: origin is the original, upstream the fork.
-        p.projects.lock().unwrap().insert("group/project".into(), project(HOST, "group/project", None, 1));
-        p.projects.lock().unwrap().insert("ada/project".into(), project(HOST, "ada/project", Some("group/project"), 1));
-        let api = api().with_forge(FakeConnector::with(TOKEN, p), MemTokens::new(TokenStorage::Keyring));
+        p.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project(HOST, "group/project", None, 1),
+        );
+        p.projects.lock().unwrap().insert(
+            "ada/project".into(),
+            project(HOST, "ada/project", Some("group/project"), 1),
+        );
+        let api = api().with_forge(
+            FakeConnector::with(TOKEN, p),
+            MemTokens::new(TokenStorage::Keyring),
+        );
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": HOST, "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("base");
-        r.git(&["remote", "add", "origin", &format!("https://{HOST}/group/project.git")]);
-        r.git(&["remote", "add", "upstream", &format!("https://{HOST}/ada/project.git")]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://{HOST}/group/project.git"),
+        ]);
+        r.git(&[
+            "remote",
+            "add",
+            "upstream",
+            &format!("https://{HOST}/ada/project.git"),
+        ]);
         r.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
         r.git(&["update-ref", "refs/remotes/upstream/main", "HEAD"]);
         r.git(&["branch", "-q", "--set-upstream-to", "origin/main", "main"]);
@@ -6464,18 +11011,45 @@ mod tests {
         // main pushes to upstream: that fork is yours (`snapshot::fork_of`).
         r.git(&["config", "branch.main.pushRemote", "upstream"]);
         let id = open(&api, &r).await as u32;
-        let pinned =|| async { api.dispatch(req(serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}))).await.unwrap() };
+        let pinned = || async {
+            api.dispatch(req(
+                serde_json::json!({"method": "graph", "params": {"repo": id, "limit": null}}),
+            ))
+            .await
+            .unwrap()
+        };
         let trunk = |g: serde_json::Value| g["pinnedRefs"].clone();
         let first = pinned().await;
-        assert_eq!(trunk(first.clone()), serde_json::json!(["refs/heads/up", "refs/remotes/upstream/main"]), "no forge data yet: upstream is the root by convention");
-        assert!(first["fork"].is_null(), "an account covers origin's host: no fork until the forge says so");
+        assert_eq!(
+            trunk(first.clone()),
+            serde_json::json!(["refs/heads/up", "refs/remotes/upstream/main"]),
+            "no forge data yet: upstream is the root by convention"
+        );
+        assert!(
+            first["fork"].is_null(),
+            "an account covers origin's host: no fork until the forge says so"
+        );
         let mut events = api.subscribe();
-        let projects = || api.dispatch(req(serde_json::json!({"method": "forgeRepoProjects", "params": {"repo": id, "refresh": false}})));
+        let projects = || {
+            api.dispatch(req(serde_json::json!({"method": "forgeRepoProjects", "params": {"repo": id, "refresh": false}})))
+        };
         projects().await.unwrap();
-        let refreshes = |rx: &mut broadcast::Receiver<AppEvent>| std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| matches!(e, AppEvent::RefsUpdated { repo } if *repo == id)).count();
-        assert_eq!(refreshes(&mut events), 1, "the fork data moved the trunk: one refresh");
+        let refreshes = |rx: &mut broadcast::Receiver<AppEvent>| {
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .filter(|e| matches!(e, AppEvent::RefsUpdated { repo } if *repo == id))
+                .count()
+        };
+        assert_eq!(
+            refreshes(&mut events),
+            1,
+            "the fork data moved the trunk: one refresh"
+        );
         let known = pinned().await;
-        assert_eq!(trunk(known.clone()), serde_json::json!(["refs/remotes/origin/main", "refs/heads/main"]), "origin is the root, its main first: main, tracking it, with it");
+        assert_eq!(
+            trunk(known.clone()),
+            serde_json::json!(["refs/remotes/origin/main", "refs/heads/main"]),
+            "origin is the root, its main first: main, tracking it, with it"
+        );
         let fork = serde_json::json!({"fork": "upstream", "original": "origin", "host": HOST, "hostKind": "gitlab", "detectedBy": "forge", "trunk": "refs/remotes/origin/main", "forkTrunk": "refs/remotes/upstream/main", "trunkBranches": ["refs/heads/main", "refs/heads/up"]});
         assert_eq!(known["fork"], fork);
         // Whatever the pin: the commit panel's notice needs it.
@@ -6487,20 +11061,37 @@ mod tests {
 
     #[tokio::test]
     async fn a_video_opens_with_the_default_app_from_a_private_copy_in_the_cache() {
-        use crate::forge::fake::{project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, project};
         use crate::forge::{ForgeImage, ForgeKind, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         const HOST: &str = "gitlab.example.com";
         let clip = "https://gitlab.example.com/group/project/uploads/0123456789abcdef0123456789abcdef/screen.mp4";
         let p = FakeProvider::new(ForgeKind::GitLab, HOST);
-        p.projects.lock().unwrap().insert("group/project".into(), project(HOST, "group/project", None, 1));
-        p.videos.lock().unwrap().insert(clip.into(), ForgeImage::Found { mime: "video/mp4".into(), base64: "AAAAIGZ0eXBpc29t".into() });
-        p.videos.lock().unwrap().insert(format!("{clip}2"), ForgeImage::Missing { reason: "larger than 100 MB".into() });
+        p.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project(HOST, "group/project", None, 1),
+        );
+        p.videos.lock().unwrap().insert(
+            clip.into(),
+            ForgeImage::Found {
+                mime: "video/mp4".into(),
+                base64: "AAAAIGZ0eXBpc29t".into(),
+            },
+        );
+        p.videos.lock().unwrap().insert(
+            format!("{clip}2"),
+            ForgeImage::Missing {
+                reason: "larger than 100 MB".into(),
+            },
+        );
         let cache = tempfile::tempdir().unwrap();
         let opened = Arc::new(Mutex::new(Vec::<String>::new()));
         let seen = opened.clone();
         let api = api()
-            .with_forge(FakeConnector::with(TOKEN, p), MemTokens::new(TokenStorage::Keyring))
+            .with_forge(
+                FakeConnector::with(TOKEN, p),
+                MemTokens::new(TokenStorage::Keyring),
+            )
             .with_open_cache(cache.path().to_path_buf())
             .with_url_opener(Arc::new(move |u: &str| {
                 seen.lock().unwrap().push(u.to_string());
@@ -6509,14 +11100,24 @@ mod tests {
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": HOST, "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("base");
-        r.git(&["remote", "add", "origin", &format!("https://{HOST}/group/project.git")]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://{HOST}/group/project.git"),
+        ]);
         let id = open(&api, &r).await as u32;
-        let open_video = |url: String| api.dispatch(req(serde_json::json!({"method": "forgeOpenVideo", "params": {"repo": id, "url": url, "userAllowed": false}})));
+        let open_video = |url: String| {
+            api.dispatch(req(serde_json::json!({"method": "forgeOpenVideo", "params": {"repo": id, "url": url, "userAllowed": false}})))
+        };
         open_video(clip.into()).await.unwrap();
         let path = std::path::PathBuf::from(opened.lock().unwrap()[0].clone());
         // Canonical: macOS's temp dir is behind a symlink (`/var` is `/private/var`).
         let cache_dir = crate::platform::fs::canonicalize(cache.path()).unwrap();
-        assert!(path.starts_with(&cache_dir) && path.file_name().unwrap() == "screen.mp4", "{path:?}");
+        assert!(
+            path.starts_with(&cache_dir) && path.file_name().unwrap() == "screen.mp4",
+            "{path:?}"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), b"\0\0\0 ftypisom");
         let e = open_video(format!("{clip}2")).await.unwrap_err();
         assert_eq!(e.message, "Couldn't load the video: larger than 100 MB");
@@ -6527,25 +11128,46 @@ mod tests {
     async fn repo_projects_without_a_forge_list_the_remotes_unmapped() {
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/group/project.git",
+        ]);
         let api = api();
         let id = open(&api, &r).await as u32;
         let rp = api.dispatch(req(serde_json::json!({"method": "forgeRepoProjects", "params": {"repo": id, "refresh": false}}))).await.unwrap();
-        assert_eq!(rp, serde_json::json!({"remotes": [{"remote": "origin", "host": "gitlab.example.com", "path": "group/project", "account": null, "accountId": null, "project": null, "error": null}], "target": null, "targetChosen": false}));
+        assert_eq!(
+            rp,
+            serde_json::json!({"remotes": [{"remote": "origin", "host": "gitlab.example.com", "path": "group/project", "account": null, "accountId": null, "project": null, "error": null}], "target": null, "targetChosen": false})
+        );
     }
     #[tokio::test]
     async fn a_repository_uses_the_forge_account_it_chose() {
-        use crate::forge::fake::{project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, project};
         use crate::forge::{ForgeKind, ForgeUser, TokenStorage};
         const TOKEN1: &str = "glpat-FAKE-private-token";
         const TOKEN2: &str = "glpat-FAKE-work-token";
         const HOST: &str = "gitlab.example.com";
         let conn = Arc::new(FakeConnector::default());
         let private = FakeProvider::new(ForgeKind::GitLab, HOST);
-        private.projects.lock().unwrap().insert("group/project".into(), project(HOST, "group/project", None, 1));
+        private.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project(HOST, "group/project", None, 1),
+        );
         // Work's GitLab takes native stacked MRs (19.1); the private account's (18.9) doesn't.
-        let work = FakeProvider { user: ForgeUser { id: 2, ..crate::forge::fake::user("Grace") }, version: Some("19.1.0-ee".into()), ..FakeProvider::new(ForgeKind::GitLab, HOST) };
-        work.projects.lock().unwrap().insert("group/project".into(), project(HOST, "group/project", None, 2));
+        let work = FakeProvider {
+            user: ForgeUser {
+                id: 2,
+                ..crate::forge::fake::user("Grace")
+            },
+            version: Some("19.1.0-ee".into()),
+            ..FakeProvider::new(ForgeKind::GitLab, HOST)
+        };
+        work.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project(HOST, "group/project", None, 2),
+        );
         conn.add(TOKEN1, private);
         conn.add(TOKEN2, work);
         let api = api().with_forge(conn, MemTokens::new(TokenStorage::Keyring));
@@ -6554,33 +11176,87 @@ mod tests {
         let work_id = work["account"]["id"].as_str().unwrap().to_string();
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", &format!("https://{HOST}/group/project.git")]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://{HOST}/group/project.git"),
+        ]);
         let id = open(&api, &r).await as u32;
-        let path = crate::platform::fs::canonicalize(r.path()).unwrap().display().to_string();
+        let path = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
         let mut profile = api.store().active_profile();
-        profile.repos.insert(path, crate::settings::RepoSettings { forge_account: Some(work_id.clone()), ..Default::default() });
+        profile.repos.insert(
+            path,
+            crate::settings::RepoSettings {
+                forge_account: Some(work_id.clone()),
+                ..Default::default()
+            },
+        );
         api.store().save_profile(profile).unwrap();
         let rp = api.dispatch(req(serde_json::json!({"method": "forgeRepoProjects", "params": {"repo": id, "refresh": false}}))).await.unwrap();
-        assert_eq!((rp["remotes"][0]["accountId"].as_str(), rp["remotes"][0]["project"]["id"].as_u64()), (Some(work_id.as_str()), Some(2)), "{rp}");
+        assert_eq!(
+            (
+                rp["remotes"][0]["accountId"].as_str(),
+                rp["remotes"][0]["project"]["id"].as_u64()
+            ),
+            (Some(work_id.as_str()), Some(2)),
+            "{rp}"
+        );
         let list = api.dispatch(req(serde_json::json!({"method": "forgeMrList", "params": {"repo": id, "filter": "all"}}))).await.unwrap();
-        assert_eq!(list["project"]["id"].as_u64(), Some(2), "the chosen account's provider answered");
+        assert_eq!(
+            list["project"]["id"].as_u64(),
+            Some(2),
+            "the chosen account's provider answered"
+        );
         let stack = api.dispatch(req(serde_json::json!({"method": "forgeStack", "params": {"repo": id, "branches": [], "base": "main", "baseRef": "refs/heads/main"}}))).await.unwrap();
-        assert_eq!(stack["mode"], "native", "stacked MRs use the chosen account too: {stack}");
+        assert_eq!(
+            stack["mode"], "native",
+            "stacked MRs use the chosen account too: {stack}"
+        );
     }
 
     // --- end 4A T6 ---
     // --- 4B T1 ---
     #[tokio::test]
     async fn forge_mr_requests_reach_the_repos_target_project() {
-        use crate::forge::fake::{mr, project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, mr, project};
         use crate::forge::{ForgeKind, MrState, TokenStorage};
         const TOKEN: &str = "glpat-FAKE-test-token";
         let mut p = FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com");
-        p.projects.lock().unwrap().insert("group/project".into(), project("gitlab.example.com", "group/project", None, 1));
-        p.mrs.lock().unwrap().push(mr(12, "group/project", "dev", MrState::Open));
+        p.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project("gitlab.example.com", "group/project", None, 1),
+        );
+        p.mrs
+            .lock()
+            .unwrap()
+            .push(mr(12, "group/project", "dev", MrState::Open));
         // --- 4D T4: the merge guard reads the MR and the project's default ---
-        p.settings = Some(crate::forge::ForgeProjectSettings { merge_methods: vec![], squash: crate::forge::SquashOption::DefaultOff, delete_source_branch: false });
-        p.details.lock().unwrap().insert(12, crate::forge::ForgeMrDetail { mr: mr(12, "group/project", "dev", MrState::Open), description: String::new(), reviewers: vec![], assignees: vec![], merge_status: crate::forge::MergeStatus::Mergeable, squash: None, delete_source_branch: None, body_html: None, base_sha: None, subscribed: None, update: None, merged_sha: None });
+        p.settings = Some(crate::forge::ForgeProjectSettings {
+            merge_methods: vec![],
+            squash: crate::forge::SquashOption::DefaultOff,
+            delete_source_branch: false,
+        });
+        p.details.lock().unwrap().insert(
+            12,
+            crate::forge::ForgeMrDetail {
+                mr: mr(12, "group/project", "dev", MrState::Open),
+                description: String::new(),
+                reviewers: vec![],
+                assignees: vec![],
+                merge_status: crate::forge::MergeStatus::Mergeable,
+                squash: None,
+                delete_source_branch: None,
+                body_html: None,
+                base_sha: None,
+                subscribed: None,
+                update: None,
+                merged_sha: None,
+            },
+        );
         // --- end 4D T4 ---
         let conn = Arc::new(FakeConnector::default());
         let fake = conn.add(TOKEN, p);
@@ -6588,10 +11264,22 @@ mod tests {
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/group/project.git",
+        ]);
         let id = open(&api, &r).await as u32;
         let list = api.dispatch(req(serde_json::json!({"method": "forgeMrList", "params": {"repo": id, "filter": "all"}}))).await.unwrap();
-        assert_eq!((list["kind"].as_str(), list["remote"].as_str(), list["mrs"][0]["number"].as_u64()), (Some("gitlab"), Some("origin"), Some(12)));
+        assert_eq!(
+            (
+                list["kind"].as_str(),
+                list["remote"].as_str(),
+                list["mrs"][0]["number"].as_u64()
+            ),
+            (Some("gitlab"), Some("origin"), Some(12))
+        );
         let badges = api.dispatch(req(serde_json::json!({"method": "forgeBranchMrs", "params": {"repo": id, "refs": ["refs/remotes/origin/dev"]}}))).await.unwrap();
         assert_eq!(badges["mrs"][0]["remoteRef"], "refs/remotes/origin/dev");
         let e = api.dispatch(req(serde_json::json!({"method": "forgeReply", "params": {"repo": id, "number": 12, "discussion": null, "body": " "}}))).await.unwrap_err();
@@ -6603,11 +11291,28 @@ mod tests {
         let e = api.dispatch(req(serde_json::json!({"method": "forgeEditNote", "params": {"repo": id, "number": 12, "note": note, "body": "  "}}))).await.unwrap_err();
         assert_eq!(e.message, "A comment can't be empty: delete it instead");
         let reacted = api.dispatch(req(serde_json::json!({"method": "forgeReact", "params": {"repo": id, "number": 12, "note": note, "name": "thumbsup", "on": true}}))).await.unwrap();
-        assert_eq!((reacted[0]["name"].as_str(), reacted[0]["count"].as_u64(), reacted[0]["mine"].as_bool()), (Some("thumbsup"), Some(1), Some(true)));
+        assert_eq!(
+            (
+                reacted[0]["name"].as_str(),
+                reacted[0]["count"].as_u64(),
+                reacted[0]["mine"].as_bool()
+            ),
+            (Some("thumbsup"), Some(1), Some(true))
+        );
         let edited = api.dispatch(req(serde_json::json!({"method": "forgeEditNote", "params": {"repo": id, "number": 12, "note": note, "body": "Better"}}))).await.unwrap();
         assert_eq!(edited["body"], "Better");
         api.dispatch(req(serde_json::json!({"method": "forgeDeleteNote", "params": {"repo": id, "number": 12, "note": note}}))).await.unwrap();
-        assert!(["react 12 101 thumbsup true", "edit_note 12 101 Better", "delete_note 12 101"].iter().all(|c| fake.calls().iter().any(|x| x == c)), "{:?}", fake.calls());
+        assert!(
+            [
+                "react 12 101 thumbsup true",
+                "edit_note 12 101 Better",
+                "delete_note 12 101"
+            ]
+            .iter()
+            .all(|c| fake.calls().iter().any(|x| x == c)),
+            "{:?}",
+            fake.calls()
+        );
         assert!(!fake.calls().iter().any(|c| c.contains("<b>")));
         let state = api.dispatch(req(serde_json::json!({"method": "forgeResolve", "params": {"repo": id, "number": 12, "discussion": "d2", "resolved": true}}))).await.unwrap();
         assert_eq!(state["resolved"], true);
@@ -6621,31 +11326,66 @@ mod tests {
     // --- review comments ---
     #[tokio::test]
     async fn forge_review_requests_reach_the_repos_target_project() {
-        use crate::forge::fake::{fake_refs, project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, fake_refs, project};
         use crate::forge::{ForgeKind, TokenStorage};
         use serde_json::json;
         const TOKEN: &str = "glpat-FAKE-test-token";
         let p = FakeProvider::new(ForgeKind::GitLab, "gitlab.example.com");
-        p.projects.lock().unwrap().insert("group/project".into(), project("gitlab.example.com", "group/project", None, 1));
+        p.projects.lock().unwrap().insert(
+            "group/project".into(),
+            project("gitlab.example.com", "group/project", None, 1),
+        );
         let conn = Arc::new(FakeConnector::default());
         let fake = conn.add(TOKEN, p);
         let api = api().with_forge(conn, MemTokens::new(TokenStorage::Keyring));
         api.dispatch(req(json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": TOKEN}}))).await.unwrap();
         let r = TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/group/project.git",
+        ]);
         let id = open(&api, &r).await as u32;
         let comment = |body: &str| json!({"anchor": {"path": "README.md", "oldPath": "README.md", "start": null, "end": {"kind": "added", "oldLine": 2, "newLine": 2}}, "body": body, "refs": serde_json::to_value(fake_refs()).unwrap()});
         let draft = api.dispatch(req(json!({"method": "forgeAddDraft", "params": {"repo": id, "number": 12, "comment": comment("Why?")}}))).await.unwrap();
         assert_eq!(draft["position"]["line"], 2);
-        let state = api.dispatch(req(json!({"method": "forgeReviewDrafts", "params": {"repo": id, "number": 12}}))).await.unwrap();
-        assert_eq!((state["drafts"].as_array().unwrap().len(), state["canDraft"].as_bool()), (1, Some(true)));
+        let state = api
+            .dispatch(req(
+                json!({"method": "forgeReviewDrafts", "params": {"repo": id, "number": 12}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                state["drafts"].as_array().unwrap().len(),
+                state["canDraft"].as_bool()
+            ),
+            (1, Some(true))
+        );
         let out = api.dispatch(req(json!({"method": "forgeSubmitReview", "params": {"repo": id, "number": 12, "review": {"event": "comment", "body": ""}}}))).await.unwrap();
-        assert_eq!(out, json!({"published": 1, "eventError": null, "bodyPosted": false, "eventSent": false, "fallback": false}));
+        assert_eq!(
+            out,
+            json!({"published": 1, "eventError": null, "bodyPosted": false, "eventSent": false, "fallback": false})
+        );
         let e = api.dispatch(req(json!({"method": "forgeCommentNow", "params": {"repo": id, "number": 12, "comment": comment(" ")}}))).await.unwrap_err();
         assert_eq!(e.message, "Write a comment first");
-        assert_eq!(api.dispatch(req(json!({"method": "forgeDiscardReview", "params": {"repo": id, "number": 12}}))).await.unwrap(), json!(0));
-        assert!(["add_draft 12 README.md:2 Why?", "submit_review 12 Comment "].iter().all(|c| fake.calls().iter().any(|x| x == c)), "{:?}", fake.calls());
+        assert_eq!(
+            api.dispatch(req(
+                json!({"method": "forgeDiscardReview", "params": {"repo": id, "number": 12}})
+            ))
+            .await
+            .unwrap(),
+            json!(0)
+        );
+        assert!(
+            ["add_draft 12 README.md:2 Why?", "submit_review 12 Comment "]
+                .iter()
+                .all(|c| fake.calls().iter().any(|x| x == c)),
+            "{:?}",
+            fake.calls()
+        );
     }
     // --- end review comments ---
 
@@ -6662,30 +11402,60 @@ mod tests {
         let main = r.git(&["rev-parse", "HEAD"]);
         let api = api();
         let id = open(&api, &r).await as u32;
-        let ask = |a: &str, b: &str| api.dispatch(req(serde_json::json!({"method": "mergeBase", "params": {"repo": id, "a": a, "b": b}})));
+        let ask = |a: &str, b: &str| {
+            api.dispatch(req(
+                serde_json::json!({"method": "mergeBase", "params": {"repo": id, "a": a, "b": b}}),
+            ))
+        };
         assert_eq!(ask(&main, &side).await.unwrap(), serde_json::json!(base));
-        assert!(ask(&main, &"0".repeat(40)).await.unwrap().is_null(), "an object the repository doesn't have");
-        assert_eq!(ask("zz", &side).await.unwrap_err().message, "zz isn't a commit id");
-        assert_eq!(ask("-x", &side).await.unwrap_err().kind, GbErrorKind::InvalidInput);
-        assert_eq!(ask("HEAD", &side).await.unwrap_err().kind, GbErrorKind::InvalidInput, "no rev-parse expressions");
+        assert!(
+            ask(&main, &"0".repeat(40)).await.unwrap().is_null(),
+            "an object the repository doesn't have"
+        );
+        assert_eq!(
+            ask("zz", &side).await.unwrap_err().message,
+            "zz isn't a commit id"
+        );
+        assert_eq!(
+            ask("-x", &side).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput
+        );
+        assert_eq!(
+            ask("HEAD", &side).await.unwrap_err().kind,
+            GbErrorKind::InvalidInput,
+            "no rev-parse expressions"
+        );
         let head = r.git(&["symbolic-ref", "HEAD"]);
-        assert_eq!(ask(&main, &head).await.unwrap(), serde_json::json!(main), "a full ref name resolves");
-        assert_eq!(ask(&side, "refs/heads/side").await.unwrap(), serde_json::json!(side));
-        assert_eq!(ask("refs/heads/nope", &side).await.unwrap_err().kind, GbErrorKind::NotFound);
+        assert_eq!(
+            ask(&main, &head).await.unwrap(),
+            serde_json::json!(main),
+            "a full ref name resolves"
+        );
+        assert_eq!(
+            ask(&side, "refs/heads/side").await.unwrap(),
+            serde_json::json!(side)
+        );
+        assert_eq!(
+            ask("refs/heads/nope", &side).await.unwrap_err().kind,
+            GbErrorKind::NotFound
+        );
     }
     // --- end 4B T1 ---
     // --- 4C T5 ---
     mod create_mr {
         use super::*;
-        use crate::forge::fake::{project, FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens, project};
         use crate::forge::*;
-        use serde_json::{json, Value};
+        use serde_json::{Value, json};
 
         const TOKEN: &str = "glpat-FAKE-test-token";
         const HOST: &str = "gitlab.example.com";
 
         async fn ask(api: &Api, method: &str, params: Value) -> Result<Value, GbError> {
-            api.dispatch(serde_json::from_value(json!({ "method": method, "params": params })).unwrap()).await
+            api.dispatch(
+                serde_json::from_value(json!({ "method": method, "params": params })).unwrap(),
+            )
+            .await
         }
 
         /// main (its local copy of origin/main), then feature: "Add login" (with a body), "Fix typo".
@@ -6699,7 +11469,12 @@ mod tests {
             } else {
                 r.commit("one");
             }
-            r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+            r.git(&[
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.example.com/group/project.git",
+            ]);
             r.git(&["update-ref", "refs/remotes/origin/main", "main"]);
             r.switch_new("feature");
             r.commit("Add login\n\nWhy it matters.");
@@ -6709,18 +11484,35 @@ mod tests {
 
         fn provider() -> FakeProvider {
             FakeProvider {
-                settings: Some(ForgeProjectSettings { merge_methods: vec![MergeMethod::Merge], squash: SquashOption::DefaultOn, delete_source_branch: true }),
-                templates: Some(vec![MrTemplate { name: "Default".into(), path: ".gitlab/merge_request_templates/Default.md".into(), body: "## From the forge".into() }]),
+                settings: Some(ForgeProjectSettings {
+                    merge_methods: vec![MergeMethod::Merge],
+                    squash: SquashOption::DefaultOn,
+                    delete_source_branch: true,
+                }),
+                templates: Some(vec![MrTemplate {
+                    name: "Default".into(),
+                    path: ".gitlab/merge_request_templates/Default.md".into(),
+                    body: "## From the forge".into(),
+                }]),
                 ..FakeProvider::new(ForgeKind::GitLab, HOST)
             }
         }
 
         async fn setup(p: FakeProvider, r: &TestRepo) -> (Api, Arc<FakeProvider>, u32) {
-            p.projects.lock().unwrap().insert("group/project".into(), project(HOST, "group/project", None, 200));
+            p.projects.lock().unwrap().insert(
+                "group/project".into(),
+                project(HOST, "group/project", None, 200),
+            );
             let conn = FakeConnector::with(TOKEN, p);
             let fake = conn.by_token.lock().unwrap()[TOKEN].clone();
             let api = api().with_forge(conn, MemTokens::new(TokenStorage::Keyring));
-            ask(&api, "addForgeAccount", json!({"host": HOST, "kind": "gitlab", "token": TOKEN})).await.unwrap();
+            ask(
+                &api,
+                "addForgeAccount",
+                json!({"host": HOST, "kind": "gitlab", "token": TOKEN}),
+            )
+            .await
+            .unwrap();
             let id = open(&api, r).await as u32;
             (api, fake, id)
         }
@@ -6737,18 +11529,44 @@ mod tests {
             assert_eq!(v["project"]["path"], "group/project");
             assert_eq!(v["sourceProject"], "group/project");
             assert_eq!(v["settings"]["squash"], "defaultOn");
-            assert_eq!((v["templates"][0]["body"].as_str(), v["templatesLocal"].as_bool()), (Some("## From the forge"), Some(false)));
-            assert_eq!(v["firstCommit"], json!({"summary": "Add login", "body": "Why it matters.", "count": 2}));
-            assert!(fake.calls().contains(&"templates main".to_string()), "{:?}", fake.calls());
+            assert_eq!(
+                (
+                    v["templates"][0]["body"].as_str(),
+                    v["templatesLocal"].as_bool()
+                ),
+                (Some("## From the forge"), Some(false))
+            );
+            assert_eq!(
+                v["firstCommit"],
+                json!({"summary": "Add login", "body": "Why it matters.", "count": 2})
+            );
+            assert!(
+                fake.calls().contains(&"templates main".to_string()),
+                "{:?}",
+                fake.calls()
+            );
         }
 
         #[tokio::test(flavor = "multi_thread")]
-        async fn templates_fall_back_to_the_local_copy_of_the_target_when_the_forge_cant_be_asked() {
+        async fn templates_fall_back_to_the_local_copy_of_the_target_when_the_forge_cant_be_asked()
+        {
             let r = branched(true);
-            let (api, _, id) = setup(FakeProvider { templates: None, ..provider() }, &r).await;
+            let (api, _, id) = setup(
+                FakeProvider {
+                    templates: None,
+                    ..provider()
+                },
+                &r,
+            )
+            .await;
             let v = ask(&api, "forgeCreateContext", context(id)).await.unwrap();
             assert_eq!(v["templatesLocal"], true);
-            let names: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+            let names: Vec<&str> = v["templates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect();
             assert_eq!(names, ["Default", "Bug"]);
         }
 
@@ -6763,20 +11581,48 @@ mod tests {
         #[tokio::test(flavor = "multi_thread")]
         async fn a_source_remote_on_another_host_is_refused() {
             let r = branched(false);
-            r.git(&["remote", "add", "elsewhere", "https://github.com/someone/project.git"]);
+            r.git(&[
+                "remote",
+                "add",
+                "elsewhere",
+                "https://github.com/someone/project.git",
+            ]);
             let (api, _, id) = setup(provider(), &r).await;
             let e = ask(&api, "forgeCreateContext", json!({"repo": id, "remote": "origin", "sourceRemote": "elsewhere", "branch": "feature", "target": "main"})).await.unwrap_err();
-            assert_eq!(e.message, "elsewhere isn't on gitlab.example.com: choose a remote on the same forge");
+            assert_eq!(
+                e.message,
+                "elsewhere isn't on gitlab.example.com: choose a remote on the same forge"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread")]
         async fn people_and_labels_are_asked_of_the_target_project() {
             let r = branched(false);
-            let p = FakeProvider { people: vec![crate::forge::fake::user("Grace")], label_list: vec![ForgeLabel { name: "bug".into(), color: None, description: None }], ..provider() };
+            let p = FakeProvider {
+                people: vec![crate::forge::fake::user("Grace")],
+                label_list: vec![ForgeLabel {
+                    name: "bug".into(),
+                    color: None,
+                    description: None,
+                }],
+                ..provider()
+            };
             let (api, fake, id) = setup(p, &r).await;
-            let people = ask(&api, "forgeSearchUsers", json!({"repo": id, "remote": "origin", "query": "gra"})).await.unwrap();
+            let people = ask(
+                &api,
+                "forgeSearchUsers",
+                json!({"repo": id, "remote": "origin", "query": "gra"}),
+            )
+            .await
+            .unwrap();
             assert_eq!(people[0]["username"], "grace");
-            let labels = ask(&api, "forgeLabels", json!({"repo": id, "remote": "origin", "query": "b"})).await.unwrap();
+            let labels = ask(
+                &api,
+                "forgeLabels",
+                json!({"repo": id, "remote": "origin", "query": "b"}),
+            )
+            .await
+            .unwrap();
             assert_eq!(labels[0]["name"], "bug");
             assert!(fake.calls().contains(&"users gra".to_string()));
         }
@@ -6785,41 +11631,83 @@ mod tests {
         async fn a_create_reports_failed_parts_and_a_retry_completes_them() {
             let r = branched(false);
             let p = provider();
-            *p.fail_parts.lock().unwrap() = vec![PartFailure { part: CreatePart::Reviewers, message: "not a collaborator".into() }];
+            *p.fail_parts.lock().unwrap() = vec![PartFailure {
+                part: CreatePart::Reviewers,
+                message: "not a collaborator".into(),
+            }];
             let (api, fake, id) = setup(p, &r).await;
             let req = json!({"source": {"project": "group/project", "branch": "feature"}, "targetBranch": "main", "title": "Add login", "description": "Why it matters.", "draft": false, "reviewers": [8], "assignees": [], "labels": ["bug"], "squash": true, "deleteSourceBranch": true});
-            let out = ask(&api, "forgeCreateMr", json!({"repo": id, "remote": "origin", "req": req})).await.unwrap();
-            assert_eq!((out["mr"]["number"].as_u64(), out["mr"]["targetProject"].as_str()), (Some(1), Some("group/project")));
-            assert_eq!(out["failed"], json!([{"part": "reviewers", "message": "not a collaborator"}]));
+            let out = ask(
+                &api,
+                "forgeCreateMr",
+                json!({"repo": id, "remote": "origin", "req": req}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                (
+                    out["mr"]["number"].as_u64(),
+                    out["mr"]["targetProject"].as_str()
+                ),
+                (Some(1), Some("group/project"))
+            );
+            assert_eq!(
+                out["failed"],
+                json!([{"part": "reviewers", "message": "not a collaborator"}])
+            );
             assert_eq!(fake.created.lock().unwrap()[0].labels, ["bug"]);
             let still = ask(&api, "forgeCompleteCreate", json!({"repo": id, "remote": "origin", "number": 1, "req": req, "parts": ["reviewers"]})).await.unwrap();
             assert_eq!(still, json!([]));
-            assert!(fake.calls().contains(&"complete 1 [Reviewers]".to_string()), "{:?}", fake.calls());
+            assert!(
+                fake.calls().contains(&"complete 1 [Reviewers]".to_string()),
+                "{:?}",
+                fake.calls()
+            );
         }
     }
     // --- end 4C T5 ---
     // --- 4D T3 ---
     #[tokio::test]
     async fn the_stack_requests_round_trip_with_prefills_from_the_repository() {
-        use crate::forge::fake::{stack_mr, MemTokens, Solo, StackFake};
+        use crate::forge::fake::{MemTokens, Solo, StackFake, stack_mr};
         use crate::forge::{MrState, TokenStorage};
-        let fake = Arc::new(StackFake::new("18.9.1-ee", vec![(stack_mr(1, "feature/a", "main", MrState::Open, "A"), ""), (stack_mr(2, "feature/b", "main", MrState::Open, "B"), "")]));
-        let api = api().with_forge(Arc::new(Solo(fake.clone())), MemTokens::new(TokenStorage::Keyring));
+        let fake = Arc::new(StackFake::new(
+            "18.9.1-ee",
+            vec![
+                (stack_mr(1, "feature/a", "main", MrState::Open, "A"), ""),
+                (stack_mr(2, "feature/b", "main", MrState::Open, "B"), ""),
+            ],
+        ));
+        let api = api().with_forge(
+            Arc::new(Solo(fake.clone())),
+            MemTokens::new(TokenStorage::Keyring),
+        );
         api.dispatch(req(serde_json::json!({"method": "addForgeAccount", "params": {"host": "gitlab.example.com", "kind": "gitlab", "token": "glpat-FAKE-test-token"}}))).await.unwrap();
         let r = TestRepo::new();
         fixtures::stack(&r);
-        r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example.com/group/project.git",
+        ]);
         let id = open(&api, &r).await;
         let branches = serde_json::json!(["feature/a", "feature/b", "feature/c"]);
         let v = api.dispatch(req(serde_json::json!({"method": "forgeStack", "params": {"repo": id, "branches": branches, "base": "main", "baseRef": "refs/heads/main"}}))).await.unwrap();
-        assert_eq!((v["mode"].as_str(), v["kind"].as_str(), v["remote"].as_str()), (Some("managed"), Some("gitlab"), Some("origin")));
+        assert_eq!(
+            (v["mode"].as_str(), v["kind"].as_str(), v["remote"].as_str()),
+            (Some("managed"), Some("gitlab"), Some("origin"))
+        );
         assert_eq!(v["members"][1]["targetBranch"], "feature/a");
         assert_eq!(v["members"][2]["prefill"]["title"], "Work on feature/c");
         let m = api.dispatch(req(serde_json::json!({"method": "forgeRetarget", "params": {"repo": id, "number": 2, "target": "feature/a"}}))).await.unwrap();
         assert_eq!(m["targetBranch"], "feature/a");
         let s = api.dispatch(req(serde_json::json!({"method": "forgeSyncStack", "params": {"repo": id, "branches": branches, "base": "main"}}))).await.unwrap();
         assert_eq!(s["edited"], serde_json::json!([1, 2]));
-        assert!(fake.description(2).contains("| **2** | **!2** | **B** | **Open** |"));
+        assert!(
+            fake.description(2)
+                .contains("| **2** | **!2** | **B** | **Open** |")
+        );
     }
     // --- end 4D T3 ---
 }

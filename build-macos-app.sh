@@ -44,6 +44,13 @@ done
 [ "$(uname -s)" = Darwin ] || fail "builds on macOS only"
 command -v cargo >/dev/null 2>&1 || fail "cargo not found"
 cargo tauri --version >/dev/null 2>&1 || fail "the Tauri CLI is missing: cargo install tauri-cli --version =3.0.0-alpha.5 --locked"
+if [ "$wkwebview" = 0 ]; then
+  # The cmake crate also accepts host- and target-specific executable overrides.
+  if ! env | grep -E '^(HOST_CMAKE|TARGET_CMAKE|CMAKE_[a-z0-9]+[-_][a-z0-9_-]+)=' >/dev/null; then
+    command -v "${CMAKE:-cmake}" >/dev/null 2>&1 || fail "CMake not found; install CMake and Ninja with: brew install cmake ninja"
+  fi
+  command -v ninja >/dev/null 2>&1 || fail "Ninja not found; install it with: brew install ninja"
+fi
 
 profile=release
 tauri_args=(--bundles app)

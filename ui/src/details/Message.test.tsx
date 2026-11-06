@@ -8,6 +8,7 @@ import { useToast } from '../ui/toastStore';
 import { fakeServices } from '../repo/testServices';
 import { Message, useProjectRemote } from './Message';
 import type { ProjectRemote } from './messageLinks';
+import { EMPTY_PROFILE, useAppState } from '../app/state';
 
 const gitlab: ProjectRemote = { host: 'gitlab.example.com', path: 'group/project', hostKind: 'gitlab' };
 const github: ProjectRemote = { host: 'github.com', path: 'owner/repo', hostKind: 'github' };
@@ -16,6 +17,7 @@ const body = 'Refs !42 and group/sub/project!7, fixes #12.\nSee https://example.
 beforeEach(() => {
   openUrl.mockClear();
   useToast.setState({ message: null });
+  useAppState.setState({ profile: EMPTY_PROFILE });
 });
 
 describe('Message', () => {
@@ -73,6 +75,16 @@ describe('Message', () => {
 });
 
 describe('useProjectRemote', () => {
+  it('updates cached SSH links when an account supplies the installation base later', async () => {
+    const remotes = vi.fn(async () => [{ name: 'origin', host: 'code.example.com:8443', path: 'ORBIT/widget', hostKind: 'generic' as const }]);
+    const services = fakeServices({ remotes });
+    const hook = renderHook(() => useProjectRemote(services));
+    await act(async () => {});
+    expect(hook.result.current?.hostKind).toBe('generic');
+    act(() => useAppState.setState(({ profile }) => ({ profile: { ...profile, bitbucketBases: { 'code.example.com:8443': 'https://code.example.com:8443/bitbucket' } } })));
+    expect(hook.result.current).toEqual({ host: 'code.example.com:8443', path: 'ORBIT/widget', hostKind: 'bitbucket', baseUrl: 'https://code.example.com:8443/bitbucket' });
+    expect(remotes).toHaveBeenCalledTimes(1);
+  });
   it('resolves once per repo: a later mount has the remote in its first render (no relink frame)', async () => {
     const remotes = vi.fn(async () => [{ name: 'origin', host: 'gitlab.example.com', path: 'group/project', hostKind: 'gitlab' as const }]);
     const services = fakeServices({ remotes });

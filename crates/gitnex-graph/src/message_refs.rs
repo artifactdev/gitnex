@@ -9,7 +9,7 @@ pub const MAX_MESSAGE_REFS: usize = 20;
 /// first-occurrence order, deduplicated, capped at [`MAX_MESSAGE_REFS`]. The host kind isn't
 /// known here: the UI decides what each one means (GitLab: `!` MRs, `#` issues; GitHub: `#` PRs,
 /// `!` ignored). Equivalent to the regex
-/// `(?<![\w/.!#-])(?:(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+)?[!#][0-9]+\b` (with Unicode `\w`),
+/// `(?<![\w/.!#-])(?:(?:[A-Za-z0-9_.~-]+/)+[A-Za-z0-9_.~-]+)?[!#][0-9]+\b` (with Unicode `\w`),
 /// applied outside `http://`/`https://` URLs (matched case-insensitively, up to whitespace). The
 /// shared vectors in `testdata/message-refs.json` pin the behaviour for the UI tokenizer too.
 pub fn parse_message_refs(message: &str) -> Vec<String> {
@@ -20,7 +20,9 @@ pub fn parse_message_refs(message: &str) -> Vec<String> {
     while i < bytes.len() && out.len() < MAX_MESSAGE_REFS {
         match bytes[i] {
             b'h' | b'H' if is_url_start(&bytes[i..]) => {
-                i = message[i..].find(char::is_whitespace).map_or(bytes.len(), |n| i + n);
+                i = message[i..]
+                    .find(char::is_whitespace)
+                    .map_or(bytes.len(), |n| i + n);
             }
             b'!' | b'#' => match reference_at(message, i) {
                 Some((start, end)) => {
@@ -39,7 +41,9 @@ pub fn parse_message_refs(message: &str) -> Vec<String> {
 }
 
 fn is_url_start(rest: &[u8]) -> bool {
-    let has = |scheme: &[u8]| rest.len() >= scheme.len() && rest[..scheme.len()].eq_ignore_ascii_case(scheme);
+    let has = |scheme: &[u8]| {
+        rest.len() >= scheme.len() && rest[..scheme.len()].eq_ignore_ascii_case(scheme)
+    };
     has(b"http://") || has(b"https://")
 }
 
@@ -48,9 +52,9 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// A path segment byte (`[A-Za-z0-9_.-]`) or the `/` between segments.
+/// A path segment byte or the `/` between segments.
 fn is_path_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'/')
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'/' | b'~')
 }
 
 /// `segment/…/segment`: at least two non-empty segments.
@@ -69,13 +73,22 @@ fn is_path(p: &[u8]) -> bool {
 fn reference_at(message: &str, sigil: usize) -> Option<(usize, usize)> {
     let bytes = message.as_bytes();
     let digits = sigil + 1;
-    let end = digits + bytes[digits..].iter().take_while(|b| b.is_ascii_digit()).count();
+    let end = digits
+        + bytes[digits..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
     if end == digits || message[end..].chars().next().is_some_and(is_word) {
         return None;
     }
     // Everything glued on the left must form a valid path: a path can't start mid-run (its
     // preceding character would be a glued one), and a bare ref can't follow a run either.
-    let start = sigil - bytes[..sigil].iter().rev().take_while(|&&b| is_path_byte(b)).count();
+    let start = sigil
+        - bytes[..sigil]
+            .iter()
+            .rev()
+            .take_while(|&&b| is_path_byte(b))
+            .count();
     if start < sigil && !is_path(&bytes[start..sigil]) {
         return None;
     }
@@ -98,10 +111,17 @@ mod tests {
 
     #[test]
     fn shared_vectors() {
-        let vectors: Vec<Vector> = serde_json::from_str(include_str!("../../../testdata/message-refs.json")).expect("valid vectors");
+        let vectors: Vec<Vector> =
+            serde_json::from_str(include_str!("../../../testdata/message-refs.json"))
+                .expect("valid vectors");
         assert!(vectors.len() >= 8);
         for v in &vectors {
-            assert_eq!(parse_message_refs(&v.message), v.refs, "message: {:?}", v.message);
+            assert_eq!(
+                parse_message_refs(&v.message),
+                v.refs,
+                "message: {:?}",
+                v.message
+            );
         }
     }
 }

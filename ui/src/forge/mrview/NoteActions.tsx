@@ -49,7 +49,7 @@ function Glyph({ kind, name }: { kind: ForgeKind; name: string }) {
  * toggles theirs. Nothing at all when there are none. */
 export function ReactionPills({ tabId, kind, number, d, n }: { tabId: string; kind: ForgeKind; number: number; d: ForgeDiscussion; n: ForgeNote }) {
   const list: ForgeReaction[] = n.reactions ?? [];
-  if (list.length === 0) return null;
+  if (list.length === 0 || kind === 'bitbucket') return null;
   return (
     <div className="mr-reactions" role="group" aria-label="Reactions">
       {list.map((r) => {
@@ -138,7 +138,7 @@ export function NoteActions({ tabId, kind, number, d, n, link, mine, reactable, 
   ];
   return (
     <span className="mr-note-actions" data-open={picking || menuOpen || undefined}>
-      {reactable && (
+      {reactable && kind !== 'bitbucket' && (
         <span className="mr-react">
           <HoverTooltip content="Add reaction">
             <button type="button" className="icon-button mr-note-btn" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={picking} onClick={() => setPicking((p) => !p)}><SmilePlus size={14} aria-hidden /></button>
