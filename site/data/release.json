@@ -1,66 +1,66 @@
 {
   "schema": 1,
   "release": {
-    "version": "1.5.1",
-    "tag": "v1.5.1",
+    "version": "1.5.2",
+    "tag": "v1.5.2",
     "prerelease": false,
-    "published": "2026-11-06T10:37:55Z",
-    "url": "https://github.com/artifactdev/gitnex/releases/tag/v1.5.1",
-    "sums": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/SHA256SUMS",
+    "published": "2026-11-06T12:07:48Z",
+    "url": "https://github.com/artifactdev/gitnex/releases/tag/v1.5.2",
+    "sums": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/SHA256SUMS",
     "downloads": [
       {
         "os": "linux",
         "kind": "deb",
         "arch": "x86_64",
-        "file": "GitNex_1.5.1_amd64.deb",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex_1.5.1_amd64.deb",
-        "bytes": 170025296,
-        "sha256": "9e2947affcbe2ace1f357086df4ffc693bab68397353065531606bf7fdd2e21d"
+        "file": "GitNex_1.5.2_amd64.deb",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex_1.5.2_amd64.deb",
+        "bytes": 170022700,
+        "sha256": "be9c7360bd83b180b6b89e328cdc123f84019a54886cdb5cb70644a2098f7091"
       },
       {
         "os": "linux",
         "kind": "rpm",
         "arch": "x86_64",
-        "file": "GitNex-1.5.1-1.x86_64.rpm",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex-1.5.1-1.x86_64.rpm",
-        "bytes": 132070953,
-        "sha256": "cc5ba989dc103d50bdd49ae9c349fb86b30e339f5408afded289aa64b3e69ebb"
+        "file": "GitNex-1.5.2-1.x86_64.rpm",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex-1.5.2-1.x86_64.rpm",
+        "bytes": 132226766,
+        "sha256": "e825c382592f9b45e5b36e48ea653442408622eb92ef19bf9a5654b5f7392440"
       },
       {
         "os": "linux",
         "kind": "arch",
         "arch": "x86_64",
-        "file": "GitNex-1.5.1-1-x86_64.pkg.tar.zst",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex-1.5.1-1-x86_64.pkg.tar.zst",
-        "bytes": 131996848,
-        "sha256": "3007a4beae2ac1ddc4eb1ed7f0f377103d7923f8a30116c8786ad4824cbcbb68"
+        "file": "GitNex-1.5.2-1-x86_64.pkg.tar.zst",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex-1.5.2-1-x86_64.pkg.tar.zst",
+        "bytes": 132058394,
+        "sha256": "30af96e03aeeb1ff1dc308ae8ad0948ae168f21a72c1d9d1cec3c5f7eb66def2"
       },
       {
         "os": "macos",
         "kind": "dmg",
         "arch": "aarch64",
-        "file": "GitNex_1.5.1_aarch64.dmg",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex_1.5.1_aarch64.dmg",
-        "bytes": 169771330,
-        "sha256": "5a2a0ed659a07a3d0671bfd6e378c2d104150d01af577fa4e9ffd4414839528e"
+        "file": "GitNex_1.5.2_aarch64.dmg",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex_1.5.2_aarch64.dmg",
+        "bytes": 169774818,
+        "sha256": "85b5dc7afa3cb1e22cf52da7038d55447a289e374dcd0cae26c5b3cbbd29a80c"
       },
       {
         "os": "windows",
         "kind": "nsis",
         "arch": "x86_64",
-        "file": "GitNex_1.5.1_x64-setup.exe",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex_1.5.1_x64-setup.exe",
-        "bytes": 192966833,
-        "sha256": "e09a960d736d21f904cf51aee1a64106b9862491d12e7fe25fed46aff6590d9c"
+        "file": "GitNex_1.5.2_x64-setup.exe",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex_1.5.2_x64-setup.exe",
+        "bytes": 192969473,
+        "sha256": "b8927b59b441591fa0115d2971dce39aee0840165d09d46b9514a7e04e8e2665"
       },
       {
         "os": "windows",
         "kind": "msi",
         "arch": "x86_64",
-        "file": "GitNex_1.5.1_x64.msi",
-        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.1/GitNex_1.5.1_x64.msi",
+        "file": "GitNex_1.5.2_x64.msi",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v1.5.2/GitNex_1.5.2_x64.msi",
         "bytes": 171798528,
-        "sha256": "bd1cd0c7d231bb42df84dc9b4072fce19f454c3f5c4c41a772830341eca110a3"
+        "sha256": "90bf61eea6dab57095c95660a246e72000185114b816a0efe1656ccaabe6348f"
       }
     ]
   }
