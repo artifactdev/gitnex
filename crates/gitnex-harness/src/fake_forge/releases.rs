@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// Where the releases live (core's `RELEASES_REPO`).
-pub const REPO: &str = "artifactdev/gitvolt";
+pub const REPO: &str = gitnex_core::updates::RELEASES_REPO;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -55,7 +55,7 @@ fn content(r: &FakeRelease, a: &FakeAsset) -> Vec<u8> {
     if a.name == "SHA256SUMS" { sums(r) } else { asset_bytes(a) }
 }
 
-/// `GET /repos/artifactdev/gitvolt/releases` (no token needed, as on GitHub).
+/// `GET /repos/artifactdev/gitnex/releases` (no token needed, as on GitHub).
 pub(crate) fn api(st: &ForgeState, r: &FakeRequest) -> Option<Reply> {
     if r.method != "GET" || r.path != format!("/repos/{REPO}/releases") {
         return None;

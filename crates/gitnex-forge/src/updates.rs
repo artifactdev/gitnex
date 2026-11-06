@@ -1,7 +1,7 @@
 //! GitNex's own releases on GitHub (core's `UpdateSource`): the list from the REST API, and the
 //! assets from the release download URLs, through the forge clients' `HttpClient`, with no token.
 //!
-//! A download may start only under `<web>/artifactdev/gitvolt/releases/download/` (owner and repo
+//! A download may start only under `<web>/artifactdev/gitnex/releases/download/` (owner and repo
 //! in any case, as GitHub takes them), and follow redirects only
 //! to GitHub's asset storage hosts (`objects.githubusercontent.com`, and
 //! `release-assets.githubusercontent.com`, where GitHub moved them in 2025); all https.
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!((list[0].tag_name.as_str(), list[0].assets[0].name.as_str()), ("v0.3.0", "SHA256SUMS"));
         let heads = s.heads.lock().unwrap().clone();
         assert_eq!(heads.len(), 1, "{heads:?}");
-        assert!(heads[0].starts_with("get /api/repos/artifactdev/gitvolt/releases?per_page=30 http/1.1"), "{heads:?}");
+        assert!(heads[0].starts_with("get /api/repos/artifactdev/gitnex/releases?per_page=30 http/1.1"), "{heads:?}");
         assert!(!heads[0].contains("authorization"), "{heads:?}");
         assert!(heads[0].contains("user-agent: gitnex/"), "{heads:?}");
     }
@@ -144,7 +144,7 @@ mod tests {
         let dest = dir.path().join("GitNex_0.3.0_amd64.deb.1.part");
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = seen.clone();
-        let url = format!("{}/web/artifactdev/gitvolt/releases/download/v0.3.0/GitNex_0.3.0_amd64.deb", s.base);
+        let url = format!("{}/web/artifactdev/gitnex/releases/download/v0.3.0/GitNex_0.3.0_amd64.deb", s.base);
         let n = r.download(&url, &dest, Arc::new(move |n| log.lock().unwrap().push(n)), Arc::new(AtomicBool::new(false))).await.unwrap();
         assert_eq!(n, body.len() as u64);
         assert_eq!(std::fs::read(&dest).unwrap(), body);
@@ -161,14 +161,14 @@ mod tests {
         let r = releases_at(&s);
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("p.part");
-        let url = format!("{}/web/artifactdev/gitvolt/releases/download/v0.3.0/p.deb", s.base);
+        let url = format!("{}/web/artifactdev/gitnex/releases/download/v0.3.0/p.deb", s.base);
         let e = r.download(&url, &dest, Arc::new(|_| {}), Arc::new(AtomicBool::new(false))).await.unwrap_err();
         assert_eq!(e.message, "The download was sent to 127.0.0.1:9, which GitNex doesn't download updates from");
         // Not even the first request goes to an address outside the releases.
         let e = r.download(&format!("{}/web/someone/else/releases/download/v1/p.deb", s.base), &dest, Arc::new(|_| {}), Arc::new(AtomicBool::new(false))).await.unwrap_err();
         assert!(e.message.contains("doesn't download updates from"), "{}", e.message);
         // Nor anywhere else of the owner, nor outside its release downloads, nor the old repository.
-        for path in ["artifactdev/other/releases/download/v1/p.deb", "artifactdev/gitvolt/archive/refs/tags/v1.tar.gz", "GitBoltApp/gitbolt/releases/download/v0.6.1/p.deb"] {
+        for path in ["artifactdev/other/releases/download/v1/p.deb", "artifactdev/gitnex/archive/refs/tags/v1.tar.gz", "artifactdev/gitvolt/releases/download/v1/p.deb", "GitBoltApp/gitbolt/releases/download/v0.6.1/p.deb"] {
             let e = r.download(&format!("{}/web/{path}", s.base), &dest, Arc::new(|_| {}), Arc::new(AtomicBool::new(false))).await.unwrap_err();
             assert!(e.message.contains("doesn't download updates from"), "{path}: {}", e.message);
             assert!(r.fetch(&format!("{}/web/{path}", s.base)).await.unwrap_err().message.contains("doesn't download updates from"), "{path}");
@@ -182,29 +182,30 @@ mod tests {
     #[test]
     fn github_downloads_stay_on_https_and_githubs_hosts() {
         let r = GitHubReleases::github();
-        assert!(r.allowed("https://github.com/artifactdev/gitvolt/releases/download/v0.7.0/GitNex_0.7.0_amd64.deb"));
+        assert!(r.allowed("https://github.com/artifactdev/gitnex/releases/download/v0.7.0/GitNex_0.7.0_amd64.deb"));
         assert!(r.allowed("https://objects.githubusercontent.com/github-production-release-asset/1/2?X-Amz=1"));
         assert!(r.allowed("https://release-assets.githubusercontent.com/github-production-release-asset/1/2"));
-        assert!(!r.allowed("http://github.com/artifactdev/gitvolt/releases/download/v0.7.0/x.deb"));
+        assert!(!r.allowed("http://github.com/artifactdev/gitnex/releases/download/v0.7.0/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/v0.7.0/x.deb"), "the previous repository's downloads aren't accepted");
         assert!(!r.allowed("https://github.com/GitBoltApp/gitbolt/releases/download/v0.6.1/GitBolt_0.6.1_amd64.deb"), "the old repository's downloads aren't GitNex's");
         assert!(!r.allowed("https://github.com/someone/else/releases/download/v0.3.0/x.deb"));
         assert!(!r.allowed("https://github.com/artifactdev/other/releases/download/v0.7.0/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/archive/refs/tags/v0.7.0.tar.gz"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download-evil/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt-fork/releases/download/v0.7.0/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/archive/refs/tags/v0.7.0.tar.gz"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download-evil/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex-fork/releases/download/v0.7.0/x.deb"));
         assert!(!r.allowed("https://objects.githubusercontent.com.evil.example/x"));
         // GitHub's owner and repo names are case-insensitive; the rest isn't.
         assert!(r.allowed("https://github.com/artifactdev/GitNex/releases/download/v0.7.0/GitNex_0.7.0_amd64.deb"));
-        assert!(r.allowed("https://github.com/artifactdev/gitvolt/releases/download/v0.7.0/SHA256SUMS"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/Releases/Download/v0.7.0/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/../../../artifactdev/other/x"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/v1/../x.deb"));
+        assert!(r.allowed("https://github.com/artifactdev/gitnex/releases/download/v0.7.0/SHA256SUMS"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/Releases/Download/v0.7.0/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/../../../artifactdev/other/x"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/v1/../x.deb"));
         assert!(!r.allowed("https://github.com/artifactdev%2Fgitnex/releases/download/v0.7.0/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/v0.7.0%2f..%2F..%2Fother/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/%2e%2e/x.deb"));
-        assert!(!r.allowed("https://github.com/artifactdev/gitvolt/releases/download/%252e%252e/x.deb"));
-        assert!(!r.allowed("https://evil@github.com/artifactdev/gitvolt/releases/download/v0.7.0/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/v0.7.0%2f..%2F..%2Fother/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/%2e%2e/x.deb"));
+        assert!(!r.allowed("https://github.com/artifactdev/gitnex/releases/download/%252e%252e/x.deb"));
+        assert!(!r.allowed("https://evil@github.com/artifactdev/gitnex/releases/download/v0.7.0/x.deb"));
         // An asset host's signed URL keeps its encoded query.
         assert!(r.allowed("https://release-assets.githubusercontent.com/github-production-release-asset/1/2?X-Amz-Credential=a%2F20261013%2Fus-east-1"));
     }
@@ -235,7 +236,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let (flag, at) = (cancel.clone(), Arc::new(std::sync::atomic::AtomicU64::new(0)));
         let got = at.clone();
-        let url = format!("{base}/web/artifactdev/gitvolt/releases/download/v0.3.0/p.deb");
+        let url = format!("{base}/web/artifactdev/gitnex/releases/download/v0.3.0/p.deb");
         let job = tokio::spawn({
             let dest = dest.clone();
             async move { r.download(&url, &dest, Arc::new(move |n| got.store(n, Ordering::SeqCst)), flag).await }
@@ -264,7 +265,7 @@ mod tests {
         let s = TestServer::start(|_, _| Canned { status: 200, headers: vec![("Content-Type".into(), "application/x-apple-diskimage".into())], body: b"a fictional disk image".to_vec() });
         let dir = tempfile::tempdir().unwrap();
         let part = dir.path().join("GitNex_0.3.0_aarch64.dmg.1.part");
-        let url = format!("{}/web/artifactdev/gitvolt/releases/download/v0.3.0/GitNex_0.3.0_aarch64.dmg", s.base);
+        let url = format!("{}/web/artifactdev/gitnex/releases/download/v0.3.0/GitNex_0.3.0_aarch64.dmg", s.base);
         releases_at(&s).download(&url, &part, Arc::new(|_| {}), Arc::new(AtomicBool::new(false))).await.unwrap();
         // As core keeps a verified download.
         let dmg = dir.path().join("GitNex_0.3.0_aarch64.dmg");

@@ -24,7 +24,7 @@ const { useAppInfo } = await import('../app/appInfo');
 const { useAppState, DEFAULT_SETTINGS } = await import('../app/state');
 const { useWorkingCopy } = await import('../diff/workingCopy');
 
-const release: UpdateRelease = { version: '0.3.0', name: 'GitNex 0.3.0', notes: [{ version: '0.3.0', publishedAt: null, notes: '## Added\n\n- **Updates** from GitHub' }], url: 'https://github.example/artifactdev/gitvolt/releases/tag/v0.3.0', prerelease: false, publishedAt: null, asset: { name: 'GitNex_0.3.0_amd64.deb', size: 98 * 1024 * 1024 } };
+const release: UpdateRelease = { version: '0.3.0', name: 'GitNex 0.3.0', notes: [{ version: '0.3.0', publishedAt: null, notes: '## Added\n\n- **Updates** from GitHub' }], url: 'https://github.example/artifactdev/gitnex/releases/tag/v0.3.0', prerelease: false, publishedAt: null, asset: { name: 'GitNex_0.3.0_amd64.deb', size: 98 * 1024 * 1024 } };
 
 function open(kind: InstallKind, state: UpdateState) {
   useAppInfo.setState({ info: { appVersion: '0.2.0', build: null, gitVersion: '2.47.1', installKind: kind, home: null } });

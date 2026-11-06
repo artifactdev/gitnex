@@ -49,7 +49,7 @@ async fn checks_downloads_verifies_and_records_the_install() {
     let h = Harness::for_tests().await;
     assert_eq!(call(&h.api, "updateCheck").await.unwrap()["state"], "upToDate", "no releases seeded");
     let asked: Vec<String> = h.forge.requests().iter().map(|r| format!("{} {}", r.path, r.status)).collect();
-    assert_eq!(asked, ["/repos/artifactdev/gitvolt/releases 200"]);
+    assert_eq!(asked, ["/repos/artifactdev/gitnex/releases 200"]);
     h.forge.clear_requests();
     seed(&h, false);
     let state = call(&h.api, "updateCheck").await.unwrap();
@@ -61,9 +61,9 @@ async fn checks_downloads_verifies_and_records_the_install() {
     let state = settled(&h.api).await;
     assert_eq!(state["state"], "ready", "{state}");
     let paths: Vec<String> = h.forge.requests().iter().map(|r| format!("{} {}", r.forge, r.path)).collect();
-    assert!(paths.contains(&"github /repos/artifactdev/gitvolt/releases".to_string()), "{paths:?}");
+    assert!(paths.contains(&"github /repos/artifactdev/gitnex/releases".to_string()), "{paths:?}");
     assert!(!paths.iter().any(|p| p.contains("GitBoltApp")), "GitNex never asks the old repository: {paths:?}");
-    assert!(paths.contains(&format!("github-releases /artifactdev/gitvolt/releases/download/v90.0.0/{DEB}")), "{paths:?}");
+    assert!(paths.contains(&format!("github-releases /artifactdev/gitnex/releases/download/v90.0.0/{DEB}")), "{paths:?}");
     assert!(paths.contains(&format!("github-objects /v90.0.0/{DEB}")), "{paths:?}");
     assert!(paths.contains(&"github-objects /v90.0.0/SHA256SUMS".to_string()), "{paths:?}");
     assert!(h.forge.requests().iter().all(|r| !r.authorized && r.user_agent.as_deref().is_some_and(|u| u.starts_with("GitNex/"))));

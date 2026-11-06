@@ -65,7 +65,7 @@ builds the `.deb`, the Arch package, the `.rpm`, the two Windows installers and 
 ## Asset names are an API
 
 Installed GitNexs find their update by these names (`crates/gitnex-core/src/updates/release.rs`),
-in the releases of `artifactdev/gitvolt` only. GitBolt 0.6.1, the app under its old name, also takes
+in the releases of `artifactdev/gitnex` only. GitBolt 0.6.1, the app under its old name, also takes
 these names, from `artifactdev/gitvolt` (or `GitBoltApp/gitbolt` while that one doesn't exist), and
 installs GitNex. So keep the names exactly as they are, and keep `SHA256SUMS` in every release: an update
 whose package `SHA256SUMS` doesn't list is never installed. The website's downloads
@@ -113,7 +113,10 @@ The project was called GitBolt until 0.7.0, and its repository was `GitBoltApp/g
 the old addresses. 0.6.1 bridged the two names (it checks `artifactdev/gitvolt` first, takes
 `GitNex_*` packages and updates into GitNex); 0.6.0 and earlier only know `GitBoltApp/gitbolt`
 and the GitBolt asset names, so they can't follow (the README says so). GitNex itself checks
-`artifactdev/gitvolt` only and takes only `GitNex_*` packages.
+`artifactdev/gitnex` only and takes only `GitNex_*` packages. Older GitNex builds still check
+`artifactdev/gitvolt`; because the updater doesn't follow API redirects or accept downloads
+from another repository name, users may need to install the first build with this change
+manually. Keep the old repository redirects for browser links.
 
 - **Never delete or rename the `GitBoltApp` organization, nor create a `gitbolt` repository in
   it.** It would take over the old address: an install still on 0.6.0 (or on 0.6.1, if
@@ -430,7 +433,7 @@ The release job attests every package with `actions/attest-build-provenance`, so
 check that a file came from this workflow:
 
 ```sh
-gh attestation verify GitNex_0.1.0-alpha.1_amd64.deb --repo artifactdev/gitvolt
+gh attestation verify GitNex_0.1.0-alpha.1_amd64.deb --repo artifactdev/gitnex
 ```
 
 Attestations need a public repository, or GitHub Enterprise Cloud for a private one. While the

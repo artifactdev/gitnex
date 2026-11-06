@@ -21,7 +21,7 @@ fn release(tag: &str, assets: &[&str]) -> GhRelease {
         body: Some("## Added\n- Updates".into()),
         draft: false,
         prerelease: false,
-        html_url: format!("https://github.example/artifactdev/gitvolt/releases/tag/{tag}"),
+        html_url: format!("https://github.example/artifactdev/gitnex/releases/tag/{tag}"),
         published_at: Some("2026-10-07T12:00:00Z".into()),
         assets: assets.iter().map(|a| asset(a)).collect(),
     }
@@ -156,7 +156,7 @@ async fn a_newer_release_is_offered_with_this_installs_package() {
     assert_eq!((release.version.as_str(), release.name.as_str()), ("0.3.0", "GitNex 0.3.0"));
     assert_eq!(release.notes, [VersionNotes { version: "0.3.0".into(), published_at: Some("2026-10-07T12:00:00Z".into()), notes: "## Added\n- Updates".into() }]);
     assert_eq!(release.asset, Some(UpdateAsset { name: DEB.into(), size: PAYLOAD.len() as u64 }));
-    assert_eq!(release.url, "https://github.example/artifactdev/gitvolt/releases/tag/v0.3.0");
+    assert_eq!(release.url, "https://github.example/artifactdev/gitnex/releases/tag/v0.3.0");
     assert!(matches!(s.events.recv().await.unwrap(), AppEvent::UpdateChanged { state: UpdateState::Checking }));
     assert_eq!(s.events.recv().await.unwrap(), AppEvent::UpdateChanged { state: state.clone() });
     // Checked a moment ago: not due again for a day.

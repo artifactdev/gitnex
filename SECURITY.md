@@ -267,8 +267,8 @@ GitNex can download and install its own updates from GitHub Releases
   without `SHA256SUMS` deletes the download and says so; it is never run. Right before the
   install, the digest is checked again, so a file changed in the meantime is deleted too.
 - **Where downloads come from.** The release list comes from `api.github.com` without any
-  token, from `artifactdev/gitvolt` only. A package is fetched only from
-  `github.com/artifactdev/gitvolt/releases/download/` (the owner and repo in any case, as
+  token, from `artifactdev/gitnex` only. A package is fetched only from
+  `github.com/artifactdev/gitnex/releases/download/` (the owner and repo in any case, as
   GitHub takes them; no `.`, `..` or encoded `/`, `\` or `.` in the path), and a
   redirect is followed only to GitHub's asset storage (`objects.githubusercontent.com`,
   `release-assets.githubusercontent.com`), over https, through the same HTTP client (TLS, proxy,
@@ -279,10 +279,10 @@ GitNex can download and install its own updates from GitHub Releases
   packages aren't code-signed yet**, and the macOS app's certificate is self-signed (below). For
   a stronger check, GitHub's build provenance attestations tie each package to the release
   workflow that built it; verify one by hand with the GitHub CLI, giving `--repo` the repository
-  the release came from. That is `artifactdev/gitvolt`:
+  the release came from. That is `artifactdev/gitnex`:
 
   ```sh
-  gh attestation verify GitNex_0.7.0_amd64.deb --repo artifactdev/gitvolt
+  gh attestation verify GitNex_0.7.0_amd64.deb --repo artifactdev/gitnex
   ```
 
   A package built before the move was signed as `GitBoltApp/gitbolt`: verify it with

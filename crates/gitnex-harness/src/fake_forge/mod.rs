@@ -698,7 +698,7 @@ impl FakeForge {
         format!("{}/github-images", self.base)
     }
     // --- end 5A T3 ---
-    /// GitHub's release downloads (`<it>/artifactdev/gitvolt/releases/download/<tag>/<name>`).
+    /// GitHub's release downloads (`<it>/artifactdev/gitnex/releases/download/<tag>/<name>`).
     pub fn github_releases(&self) -> String {
         format!("{}/github-releases", self.base)
     }

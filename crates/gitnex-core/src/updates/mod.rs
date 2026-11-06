@@ -1,7 +1,7 @@
 //! Updates from GitHub Releases: the check, the download and its `SHA256SUMS` check, and the
 //! install.
 //!
-//! - **Check:** `GET /repos/artifactdev/gitvolt/releases`, without a token or anything about the
+//! - **Check:** `GET /repos/artifactdev/gitnex/releases`, without a token or anything about the
 //!   user's repositories, at startup and once a day (Settings › Updates turns that off), and on
 //!   Check for updates. The newest release above this version is offered (`release.rs`).
 //! - **Download:** this install's package (`InstallKind`) into the cache's `updates/` folder,
@@ -32,7 +32,7 @@ use ts_rs::TS;
 use version::Version;
 
 /// Where the releases are.
-pub const RELEASES_REPO: &str = "artifactdev/gitvolt";
+pub const RELEASES_REPO: &str = "artifactdev/gitnex";
 /// The automatic check runs this often.
 pub const CHECK_EVERY_SECS: i64 = 24 * 60 * 60;
 /// How often the automatic check looks at the clock (a laptop that slept catches up within it).
