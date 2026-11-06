@@ -122,49 +122,6 @@ jobs:
           echo "build=$build tag=${tag:-none} sha=$sha"
           { echo "build=$build"; echo "tag=$tag"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
 
-  # Prefer the local Apple Silicon runner. If it is offline or busy, use GitHub-hosted macos-15.
-  select-macos-runner:
-    name: Select macOS runner
-    needs: plan
-    if: needs.plan.outputs.build == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      runs_on: ${{ steps.select.outputs.runs_on }}
-    steps:
-      - name: Check local runner availability
-        id: select
-        env:
-          GH_TOKEN: ${{ secrets.RUNNERS_READ_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Missing repository secret RUNNERS_READ_TOKEN."
-            exit 1
-          fi
-
-          available=$(gh api "repos/$GH_REPO/actions/runners?per_page=100" --jq '
-            any(
-              .runners[];
-              .name == "LMDT002D1F668"
-              and .status == "online"
-              and .busy == false
-              and ([.labels[].name] | index("self-hosted"))
-              and ([.labels[].name] | index("macOS"))
-              and ([.labels[].name] | index("ARM64"))
-            )
-          ')
-
-          if [ "$available" = "true" ]; then
-            echo 'runs_on=["self-hosted","macOS","ARM64"]' >> "$GITHUB_OUTPUT"
-            echo "Local M4 Pro runner is online and available."
-          else
-            echo 'runs_on=["macos-15"]' >> "$GITHUB_OUTPUT"
-            echo "Local M4 Pro runner is offline or busy. Falling back to GitHub macos-15."
-          fi
-
   build:
     name: Build and check the packages
     needs: plan
@@ -198,7 +155,7 @@ jobs:
             v=$conf
           fi
           python3 scripts/version.py check "$v"
-          cef=$(awk '$0 == "name = \"cef\"" { getline; print }' Cargo.lock | sed -n 's/^version = "[^+"]*\+\([^\"]*\)"$/\1/p')
+          cef=$(awk '$0 == "name = \"cef\"" { getline; print }' Cargo.lock | sed -n 's/^version = "[^+"]*+\([^"]*\)"$/\1/p')
           [ -n "$cef" ] || { echo "::error::No CEF version in Cargo.lock's cef entry"; exit 1; }
           {
             echo "version=$v"
@@ -393,7 +350,7 @@ jobs:
           $conf = (Get-Content -Raw crates/gitnex-app/tauri.conf.json | ConvertFrom-Json).version
           $v = if ($env:TAG) { $env:TAG -replace '^v', '' } else { $conf }
           $lock = Get-Content -Raw Cargo.lock
-          if ($lock -notmatch 'name = "cef"\r? \nversion = "[^+"]*\+([^"]+)"') { throw 'No CEF version in Cargo.lock' }
+          if ($lock -notmatch 'name = "cef"\r?\nversion = "[^+"]*\+([^"]+)"') { throw 'No CEF version in Cargo.lock' }
           "version=$v" >> $env:GITHUB_OUTPUT
           "cef=$($Matches[1])" >> $env:GITHUB_OUTPUT
           "Version $v, CEF $($Matches[1])"
@@ -511,15 +468,16 @@ jobs:
 
   macos:
     name: Build the macOS disk image
-    needs: [plan, select-macos-runner]
+    needs: plan
     if: needs.plan.outputs.build == 'true'
-    runs-on: ${{ fromJSON(needs.select-macos-runner.outputs.runs_on) }}
+    runs-on: macos-15 # Apple Silicon: the aarch64 .dmg (no Intel build yet)
     timeout-minutes: 120
     permissions:
       contents: read
     env:
-      # Use runner.temp so the same path works on the self-hosted and GitHub-hosted runners.
-      CEF_PATH: ${{ runner.temp }}/tauri-cef
+      # Where cef-dll-sys downloads the CEF distribution, and where the Tauri CLI finds it (its
+      # own default on macOS).
+      CEF_PATH: /Users/runner/Library/Caches/tauri-cef
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -537,7 +495,7 @@ jobs:
           conf=$(jq -er .version crates/gitnex-app/tauri.conf.json)
           v=${TAG#v}
           [ -n "$v" ] || v=$conf
-          cef=$(awk '$0 == "name = \"cef\"" { getline; print }' Cargo.lock | sed -n 's/^version = "[^+"]*\+\([^\"]*\)"$/\1/p')
+          cef=$(awk '$0 == "name = \"cef\"" { getline; print }' Cargo.lock | sed -n 's/^version = "[^+"]*+\([^"]*\)"$/\1/p')
           [ -n "$cef" ] || { echo "::error::No CEF version in Cargo.lock's cef entry"; exit 1; }
           { echo "version=$v"; echo "cef=$cef"; } >> "$GITHUB_OUTPUT"
           echo "Version $v, CEF $cef"
@@ -665,15 +623,15 @@ jobs:
       id-token: write # attestations: the Sigstore signing certificate
       attestations: write
     steps:
-      - uses: actions/download-artifact@3e5f45e5cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gitnex-${{ needs.build.outputs.version }}
           path: dist
-      - uses: actions/download-artifact@3e5f45e5cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gitnex-${{ needs.build.outputs.version }}-windows
           path: dist-windows
-      - uses: actions/download-artifact@3e5f45e5cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gitnex-${{ needs.build.outputs.version }}-macos
           path: dist-macos
