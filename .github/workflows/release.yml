@@ -27,6 +27,13 @@ on:
         description: 'Release this tag (v1.2.3): build its commit and publish the release. Empty: a dry run.'
         required: false
         default: ''
+      macos_runner:
+        description: 'Hosted macOS runner. Select macos-26 if macos-15 is unavailable.'
+        type: choice
+        default: macos-15
+        options:
+          - macos-15
+          - macos-26
 
 permissions: {}
 
@@ -470,7 +477,7 @@ jobs:
     name: Build the macOS disk image
     needs: plan
     if: needs.plan.outputs.build == 'true'
-    runs-on: macos-15 # Apple Silicon: the aarch64 .dmg (no Intel build yet)
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }} # Apple Silicon; pushes use macos-15
     timeout-minutes: 120
     permissions:
       contents: read
@@ -506,7 +513,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: release-macos
+          key: release-${{ inputs.macos_runner || 'macos-15' }}
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -524,7 +531,7 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-tauri
             ~/.cargo/bin/cargo-about
-          key: cargo-tools-tauri-${{ env.TAURI_CLI_VERSION }}-about-${{ env.CARGO_ABOUT_VERSION }}-macos-15-arm64
+          key: cargo-tools-tauri-${{ env.TAURI_CLI_VERSION }}-about-${{ env.CARGO_ABOUT_VERSION }}-${{ inputs.macos_runner || 'macos-15' }}-arm64
       - name: Install the cargo tools
         if: steps.cargo-tools.outputs.cache-hit != 'true'
         run: |

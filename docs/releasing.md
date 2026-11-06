@@ -207,12 +207,14 @@ side by side, then the release job:
    and Visual Studio's Ninja; runs `just package-windows` with `GITNEX_RELEASE_VERSION` set (see
    [Windows installers](#windows-installers)), and keeps both installers and their checksums as
    a workflow artifact.
-3. **macOS** (`macos-15`, Apple Silicon, read-only): stable Rust, Node 22, `just`, CMake and
+3. **macOS** (`macos-15` by default, or `macos-26` selected in **Run workflow**; both
+   GitHub-hosted Apple Silicon, read-only): stable Rust, Node 22, `just`, CMake and
    Ninja, `tauri-cli` and cargo-about; imports the signing certificate into a throwaway keychain
    (see [macOS signing](#macos-signing)), runs `just package-macos` with `GITNEX_RELEASE_VERSION`
    set (see [macOS disk image](#macos-disk-image)), and keeps the `.dmg` and its checksum as a
    workflow artifact. Its caches (cargo, the two cargo tools, the CEF archive) are saved from main
-   only, as the others are.
+   only, as the others are. Cargo and compiled cargo-tool caches are separate for each macOS
+   image; the CEF archive is shared.
 4. **Release** (`contents: write`): verifies the three jobs' checksums and merges them into one
    `SHA256SUMS`, adds build provenance attestations for every package (see below), then publishes
    the release after uploading all assets. A failed or re-run release updates the draft before
@@ -417,6 +419,12 @@ also warms the caches.
 
 ## Re-running and fixing
 
+- **No free `macos-15` runner:** cancel the queued release run, then use Actions → Release →
+  **Run workflow** on main, enter the same release tag and select **macos-26** in
+  **macos_runner**. This starts a new build of all platforms for that tag. There is no automatic
+  fallback on queue timeouts, and "Re-run jobs" keeps the original runner selection.
+  Run a dry run on `macos-26` first and test its DMG on the oldest supported macOS before
+  using the new build image for a release.
 - **A transient failure** (a download, the Arch mirror in `check-arch-pkg`, Fedora's in
   `check-rpm-pkg`): use "Re-run failed
   jobs". Re-running only the release job reuses the run's build artifact (kept 3 days).

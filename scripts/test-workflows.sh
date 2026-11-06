@@ -30,6 +30,25 @@ for f in "$wf"/*.yml; do
   if grep -qE '[[:space:]]["'"'"']?\+(HEAD|refs/)' "$f"; then fail "$name: pushes a forced refspec (+HEAD: or +refs/)"; fi
 done
 
+macos=$(sed -n '/^  macos:$/,/^  release:$/p' "$wf/release.yml")
+grep -qF "runs-on: \${{ inputs.macos_runner || 'macos-15' }}" <<<"$macos" ||
+  fail "release.yml: macOS doesn't use the selected hosted runner with macos-15 as default"
+grep -qF "key: release-\${{ inputs.macos_runner || 'macos-15' }}" <<<"$macos" ||
+  fail "release.yml: Rust cache isn't separated by macOS image"
+grep -qF -- "-\${{ inputs.macos_runner || 'macos-15' }}-arm64" <<<"$macos" ||
+  fail "release.yml: cargo tools cache isn't separated by macOS image"
+choices=$(sed -n '/^      macos_runner:$/,/^[^ ]/p' "$wf/release.yml")
+grep -qx '        type: choice' <<<"$choices" ||
+  fail "release.yml: macos_runner isn't a choice input"
+grep -qx '        default: macos-15' <<<"$choices" ||
+  fail "release.yml: macos_runner doesn't default to macos-15"
+grep -qx '          - macos-15' <<<"$choices" &&
+  grep -qx '          - macos-26' <<<"$choices" ||
+  fail "release.yml: missing hosted macOS runner choices"
+if grep -qE 'self-hosted|RUNNERS_READ_TOKEN' "$wf/release.yml"; then
+  fail "release.yml: release runner selection isn't hosted-only"
+fi
+
 site=$wf/site.yml
 release=$wf/site-release.yml
 [ -f "$site" ] && [ -f "$release" ] || fail "site.yml or site-release.yml is missing"
