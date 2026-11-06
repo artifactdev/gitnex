@@ -5,6 +5,8 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ## [Unreleased]
 
+- added support for AzureDevOps with PAT authentication
+
 ## [1.5.2] - 2026-11-06
 
 ### Fixed
