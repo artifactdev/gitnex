@@ -7,6 +7,9 @@ builds the `.deb`, the Arch package, the `.rpm`, the two Windows installers and 
 
 ## Before you start
 
+- **Python 3.11 or newer must be available as `python3`.** Check `python3 --version`; on macOS,
+  install it with `brew install python` and put Homebrew's `bin` directory before `/usr/bin`
+  on `PATH`. The version editor uses `tomllib`, which older Python versions don't include.
 - **main must be green.** The release workflow builds and checks the packages, but it doesn't run
   the test suite (there's no CI on main yet). Run `just lint`, `just test` and `just e2e` on the
   commit you're releasing.

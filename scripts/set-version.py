@@ -12,6 +12,13 @@ import json
 import os
 import re
 import sys
+
+if sys.version_info < (3, 11):
+    print("set-version: Python 3.11 or newer is required (tomllib); "
+          "on macOS run 'brew install python' and ensure Homebrew's python3 is on PATH.",
+          file=sys.stderr)
+    sys.exit(2)
+
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

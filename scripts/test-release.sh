@@ -11,6 +11,12 @@ eq() { [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 ver() { python3 "$here/version.py" "$@"; }
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
+# An unsupported Python exits before reading or writing any release files.
+err=$(python3 -c 'import runpy,sys; sys.version_info = (3, 9, 6); runpy.run_path(sys.argv[1], run_name="__main__")' \
+  "$here/set-version.py" 0.1.0 2>&1) && fail "set-version accepted Python 3.9"
+grep -q 'Python 3.11 or newer is required' <<<"$err" || fail "unclear Python-version message: $err"
+grep -q 'brew install python' <<<"$err" || fail "no Python setup instructions: $err"
+
 # --- version.py ---------------------------------------------------------------------------------
 for v in 0.1.0 1.2.3 10.20.30 0.1.0-alpha.1 0.1.0-alpha 0.1.0-beta.2 0.1.0-rc.10 1.0.0-alpha.beta.1; do
   ver check "$v" || fail "check rejected $v"

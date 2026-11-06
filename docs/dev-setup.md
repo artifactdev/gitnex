@@ -78,6 +78,9 @@ land in the repo.
 
 ## Other prerequisites
 
+- Python 3.11 or newer as `python3` on `PATH`: the release tooling uses the standard-library
+  `tomllib` module. On macOS, run `brew install python`; Apple's `/usr/bin/python3` may be too
+  old. Check `python3 --version` and ensure Homebrew's `bin` directory precedes `/usr/bin`.
 - `libgtk-4-dev` and `patchelf` (`sudo apt install libgtk-4-dev patchelf`) — the CEF runtime uses
   GTK 4, not WebKitGTK.
 - The v3-alpha `cargo tauri` CLI, pinned to match the vendored runtime:
