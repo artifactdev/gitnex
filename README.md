@@ -153,6 +153,9 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 - **AI commit messages.** With Settings › AI on, the sparkles beside the commit summary writes one
   from the staged changes, using an OpenAI-compatible endpoint (optional token and model list) or
   a detected local CLI such as `copilot`, `codex`, `claude`, `ollama` or `llm`.
+  GitHub Copilot CLI is separate from AWS Copilot, which also uses the `copilot` command. If both
+  are installed, put GitHub's executable first on your PATH or enter its full path in Settings › AI.
+  See [GitHub's installation instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli).
 - **Themes,** many built in, dark and light, with per-lane graph colours, density presets and
   app zoom.
 

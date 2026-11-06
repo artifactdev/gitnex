@@ -8,6 +8,7 @@ use gitnex_core::redact::{redact, Secret};
 use gitnex_core::shellenv::{EnvVars, ShellEnv};
 use serde_json::{json, Value};
 use std::ffi::OsStr;
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,10 +70,6 @@ impl Ai {
         self.shell_env.as_ref().and_then(|s| s.captured())
     }
 
-    fn path(&self) -> Option<std::ffi::OsString> {
-        path_from(self.env().as_deref().map(|vars| vars.as_slice()))
-    }
-
     fn models_at(&self, agent: &ureq::Agent, endpoint: &str, token: Option<&Secret>) -> Result<Vec<String>, GbError> {
         let url = format!("{}/models", base(endpoint)?);
         let mut request = agent.get(&url);
@@ -102,6 +99,8 @@ impl Ai {
 impl AiProvider for Ai {
     fn detect(&self) -> Vec<AiDetected> {
         let mut found = Vec::new();
+        let env = self.env();
+        let vars = env.as_deref().map(|vars| vars.as_slice());
         for (name, endpoint) in LOCAL_SERVERS {
             let Ok(models) = self.models_at(&self.detect_agent, endpoint, None) else { continue };
             found.push(AiDetected {
@@ -114,7 +113,7 @@ impl AiProvider for Ai {
             });
         }
         for (command, name, template) in CLIS {
-            if !on_path(command, self.path().as_deref()) {
+            if !on_path(command, path_from(vars).as_deref()) || (*command == "copilot" && is_aws_copilot(command, vars)) {
                 continue;
             }
             found.push(AiDetected {
@@ -208,6 +207,10 @@ fn generate_cli(request: &AiRequest<'_>, env: Option<&[(std::ffi::OsString, std:
     let Some((program, rest)) = args.split_first() else {
         return Err(GbError::new(GbErrorKind::InvalidInput, "Enter a command first"));
     };
+    let program_name = std::path::Path::new(program).file_stem().and_then(OsStr::to_str);
+    if program_name == Some("copilot") && is_aws_copilot(program, env) {
+        return Err(GbError::new(GbErrorKind::InvalidInput, "This copilot command is AWS Copilot, not GitHub Copilot CLI. Install GitHub Copilot CLI and set its executable path in Settings > AI."));
+    }
     let mut command = Command::new(program);
     command
         .args(rest)
@@ -223,6 +226,11 @@ fn generate_cli(request: &AiRequest<'_>, env: Option<&[(std::ffi::OsString, std:
         .map_err(|e| GbError::new(GbErrorKind::Network, format!("Couldn't run {program}: {e}")))?;
     if !output.status.success() {
         let stderr = redact(String::from_utf8_lossy(&output.stderr).trim());
+        // Some CLIs print arguments as escaped strings, including the staged diff in the prompt.
+        let prompt_start: String = request.prompt.chars().take(80).collect();
+        if !prompt_start.is_empty() && (stderr.contains(&prompt_start) || stderr.contains(&prompt_start.escape_debug().to_string())) {
+            return Err(GbError::new(GbErrorKind::InvalidInput, format!("{program} exited with {} (error output contained the prompt)", output.status)));
+        }
         let stderr = truncate(&stderr, MAX_ERROR);
         return Err(GbError::new(GbErrorKind::InvalidInput, if stderr.is_empty() { format!("{program} exited with {}", output.status) } else { format!("{program}: {stderr}") }));
     }
@@ -231,6 +239,33 @@ fn generate_cli(request: &AiRequest<'_>, env: Option<&[(std::ffi::OsString, std:
         return Err(GbError::new(GbErrorKind::InvalidInput, format!("{program} returned no message")));
     }
     Ok(text)
+}
+
+/// AWS Copilot uses the same executable name but is unrelated to GitHub Copilot.
+fn is_aws_copilot(program: &str, env: Option<&[(std::ffi::OsString, std::ffi::OsString)]>) -> bool {
+    let mut command = Command::new(program);
+    command.arg("--help").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    if let Some(env) = env {
+        command.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+    }
+    let Ok(mut child) = command.spawn() else { return false };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout.take(64 * 1024).read_to_end(&mut output);
+        let _ = send.send(result.map(|_| output));
+    });
+    let output = receive.recv_timeout(DETECT_TIMEOUT);
+    let _ = child.kill();
+    let _ = child.wait();
+    output.ok().and_then(Result::ok).is_some_and(|output| {
+        String::from_utf8_lossy(&output).contains("Launch and manage containerized applications on AWS")
+    })
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {
@@ -352,8 +387,56 @@ mod tests {
         let settings = AiCommitSettings { enabled: true, provider: AiProviderKind::Cli, endpoint: String::new(), model: String::new(), command: "copilot {prompt}".into() };
         let request = AiRequest { settings: &settings, token: None, prompt: "ignored", worktree: dir.path() };
         let ai = Ai::with_shell_env(Some(ShellEnv::fixed(vars.clone())));
-        assert_eq!(ai.path(), Some(vars[0].1.clone()));
-        assert!(on_path("copilot", ai.path().as_deref()));
+        assert_eq!(path_from(ai.env().as_deref().map(|vars| vars.as_slice())), Some(vars[0].1.clone()));
+        assert!(on_path("copilot", path_from(Some(&vars)).as_deref()));
         assert_eq!(generate_cli(&request, Some(&vars)).unwrap(), "hi");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aws_copilot_is_not_detected_or_given_the_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("copilot");
+        let invoked = dir.path().join("invoked");
+        std::fs::write(&tool, format!("#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'Launch and manage containerized applications on AWS.'; else /usr/bin/touch '{}'; fi\n", invoked.display())).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let vars = vec![(std::ffi::OsString::from("PATH"), dir.path().as_os_str().to_owned())];
+        let ai = Ai::with_shell_env(Some(ShellEnv::fixed(vars.clone())));
+        assert!(!ai.detect().iter().any(|d| d.id == "cli:copilot"));
+        let settings = AiCommitSettings { enabled: true, provider: AiProviderKind::Cli, endpoint: String::new(), model: String::new(), command: "copilot -s -p {prompt}".into() };
+        let request = AiRequest { settings: &settings, token: None, prompt: "private diff", worktree: dir.path() };
+        let error = generate_cli(&request, Some(&vars)).unwrap_err();
+        assert!(error.message.contains("AWS Copilot"));
+        assert!(!error.message.contains("private diff"));
+        assert!(!invoked.exists());
+        let settings = AiCommitSettings { command: format!("{} -s -p {{prompt}}", tool.display()), ..settings };
+        let request = AiRequest { settings: &settings, token: None, prompt: "private diff", worktree: dir.path() };
+        assert!(generate_cli(&request, Some(&vars)).unwrap_err().message.contains("AWS Copilot"));
+        assert!(!invoked.exists());
+        std::fs::write(&tool, "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'GitHub Copilot CLI'; else printf '%s' 'A commit message'; fi\n").unwrap();
+        assert!(ai.detect().iter().any(|d| d.id == "cli:copilot"));
+        assert_eq!(generate_cli(&request, Some(&vars)).unwrap(), "A commit message");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_errors_do_not_echo_the_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("fake-cli");
+        std::fs::write(&tool, "#!/bin/sh\nprintf '%s\\n' \"$1\" >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let settings = AiCommitSettings { enabled: true, provider: AiProviderKind::Cli, endpoint: String::new(), model: String::new(), command: format!("{} {{prompt}}", tool.display()) };
+        let request = AiRequest { settings: &settings, token: None, prompt: "private diff\nsecond line", worktree: dir.path() };
+        let error = generate_cli(&request, None).unwrap_err();
+        assert!(error.message.contains("error output contained the prompt"));
+        assert!(!error.message.contains("private diff"));
+        std::fs::write(&tool, "#!/bin/sh\nprintf '%s\\n' 'unknown command \"private diff\\nsecond line\"' >&2\nexit 1\n").unwrap();
+        let error = generate_cli(&request, None).unwrap_err();
+        assert!(error.message.contains("error output contained the prompt"));
+        assert!(!error.message.contains("private diff"));
+        std::fs::write(&tool, "#!/bin/sh\necho 'not authenticated' >&2\nexit 1\n").unwrap();
+        assert!(generate_cli(&request, None).unwrap_err().message.contains("not authenticated"));
     }
 }

@@ -339,8 +339,7 @@ run-app repo="":
     if [ -e "{{sandbox_helper}}" ]; then export CHROME_DEVEL_SANDBOX="{{sandbox_helper}}"; rm -f target/release/chrome-sandbox; fi
     GITNEX_OPEN="{{repo}}" target/release/gitnex
 
-# The app's icon set (crates/gitnex-app/icons) from icons/source.svg, with the 32-64 px outputs from source-mid.svg and the 16 and 24 px
-# layers from icons/source-small.svg (scripts/icons.py; needs the Tauri CLI and Pillow).
+# The app's platform icon set (crates/gitnex-app/icons) from icons/source.svg (scripts/icons.py; needs the Tauri CLI).
 icons:
     python3 scripts/icons.py
 
