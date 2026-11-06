@@ -60,15 +60,15 @@ The format, `schema` 1 (`release` is `null` while there's no published release):
     "tag": "v0.7.3",
     "prerelease": false,
     "published": "2026-10-13T03:04:03Z",
-    "url": "https://github.com/artifactdev/gitvolt/releases/tag/v0.7.3",
-    "sums": "https://github.com/artifactdev/gitvolt/releases/download/v0.7.3/SHA256SUMS",
+    "url": "https://github.com/artifactdev/gitnex/releases/tag/v0.7.3",
+    "sums": "https://github.com/artifactdev/gitnex/releases/download/v0.7.3/SHA256SUMS",
     "downloads": [
       {
         "os": "linux",
         "kind": "deb",
         "arch": "x86_64",
         "file": "GitNex_0.7.3_amd64.deb",
-        "url": "https://github.com/artifactdev/gitvolt/releases/download/v0.7.3/GitNex_0.7.3_amd64.deb",
+        "url": "https://github.com/artifactdev/gitnex/releases/download/v0.7.3/GitNex_0.7.3_amd64.deb",
         "bytes": 165800042,
         "sha256": "264c81a9…"
       }
@@ -174,7 +174,7 @@ headline in the middle 630 px, since some previews crop to near-square.
 
 ## The domain
 
-The site is at https://gitnex.com/: Settings, Pages, Custom domain, with Enforce HTTPS (a
+The site is at https://artifactdev.github.io/gitnex/: Settings, Pages, Custom domain, with Enforce HTTPS (a
 deploy from Actions needs no `CNAME` file). The organization's Settings, Pages, Verified domains
 holds gitnex.com, so no other account can claim it. DNS at the registrar: `A` records
 185.199.108.153, 185.199.109.153, 185.199.110.153 and 185.199.111.153; `AAAA` records

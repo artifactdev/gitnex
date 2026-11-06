@@ -10,7 +10,7 @@ export interface Download { os: Os; kind: Kind; arch: 'x86_64' | 'aarch64'; file
 export interface Release { version: string; tag: string; prerelease: boolean; published: string; url: string; sums: string; downloads: Download[] }
 export interface ReleaseFile { schema: 1; release: Release | null }
 
-const RELEASES = 'https://github.com/artifactdev/gitvolt/releases';
+const RELEASES = 'https://github.com/artifactdev/gitnex/releases';
 const OSES: Os[] = ['linux', 'macos', 'windows'];
 const KINDS: Kind[] = ['deb', 'rpm', 'arch', 'dmg', 'nsis', 'msi'];
 

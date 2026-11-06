@@ -6,80 +6,80 @@
       "file": "orbital.gbdemo",
       "group": null,
       "open": "active",
-      "digest": "a332450a8d8636da",
-      "bytes": 4026270
+      "digest": "d6ea3db60949a5b0",
+      "bytes": 4026512
     },
     {
       "name": "basic",
       "file": "basic.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "f52bcd9bc140a1be",
-      "bytes": 8324
+      "digest": "c514cc03b520fcc3",
+      "bytes": 8347
     },
     {
       "name": "sync",
       "file": "sync.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "f4bc939a471e2b7c",
-      "bytes": 10763
+      "digest": "5f33266b9f4a5f8b",
+      "bytes": 10785
     },
     {
       "name": "conflicts",
       "file": "conflicts.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "ac0f227beff15ec6",
-      "bytes": 5513
+      "digest": "8ab8faea5c5044cd",
+      "bytes": 5538
     },
     {
       "name": "stack",
       "file": "stack.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "ab35002ce07973f5",
-      "bytes": 6588
+      "digest": "e8b3ba44d2b687b4",
+      "bytes": 6614
     },
     {
       "name": "wip_staging",
       "file": "wip_staging.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "67d1ec04ccd9d590",
-      "bytes": 3742
+      "digest": "457db3bc22715db6",
+      "bytes": 3763
     },
     {
       "name": "rebase_lab",
       "file": "rebase_lab.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "380be71727ffc6e5",
-      "bytes": 5838
+      "digest": "a52b78c0c05ee074",
+      "bytes": 5863
     },
     {
       "name": "previews",
       "file": "previews.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "b81751efa4da5edb",
-      "bytes": 609670
+      "digest": "03dc0b6984899a8a",
+      "bytes": 609677
     },
     {
       "name": "submodules",
       "file": "submodules.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "a3dc05c4cd09ed94",
-      "bytes": 7508
+      "digest": "7d809788833943ed",
+      "bytes": 7533
     },
     {
       "name": "lfs",
       "file": "lfs.gbdemo",
       "group": "Playground",
       "open": "tab",
-      "digest": "19ffc009bb0b94be",
-      "bytes": 45812
+      "digest": "cbd60e493c3edf3a",
+      "bytes": 45837
     }
   ],
   "groups": [

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { checkRelease, renderDownloads, type Download, type ReleaseFile } from './release.ts';
 
-const REL = 'https://github.com/artifactdev/gitvolt/releases';
+const REL = 'https://github.com/artifactdev/gitnex/releases';
 const dl = (os: Download['os'], kind: Download['kind'], arch: Download['arch'], file: string, n: number): Download => ({
   os, kind, arch, file, url: `${REL}/download/v1.2.3/${file}`, bytes: 1000 + n, sha256: String(n).repeat(64),
 });

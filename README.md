@@ -19,7 +19,7 @@ GitVolt, and it builds on that codebase while adding features of its own: severa
 forge, AI-written commit messages, a two-column Open screen with Clone and Create, stash of
 selected files, and profile commit identities. Upgrading from GitVolt is seamless: the first
 start moves its settings, profiles, undo history and tokens over. **On GitBolt?** Install GitNex
-fresh from [artifactdev/gitvolt releases](https://github.com/artifactdev/gitvolt/releases):
+fresh from [artifactdev/gitnex releases](https://github.com/artifactdev/gitnex/releases):
 GitBolt's settings aren't moved over.
 
 It's built with a Rust core (using [gitoxide](https://github.com/GitoxideLabs/gitoxide) for most reads
@@ -43,7 +43,7 @@ For self-hosted Bitbucket, see [setup and compatibility](docs/bitbucket.md).
 ## Installing
 
 Download the package for your system from the
-[latest release](https://github.com/artifactdev/gitvolt/releases/latest):
+[latest release](https://github.com/artifactdev/gitnex/releases/latest):
 
 - **Debian and Ubuntu:** `sudo apt install ./GitNex_<version>_amd64.deb`
 - **Arch Linux:** `sudo pacman -U GitNex-<version>-x86_64.pkg.tar.zst`
@@ -253,7 +253,7 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 | Pull/merge requests: list, view, create, comment, approve, merge | ✅ | ✅ Also auto-merge, and updating a branch that's behind |
 | Inline code review comments | ✅ GitHub | ✅ GitHub, GitLab and Forgejo: lines and ranges, a pending review, suggested changes you can apply |
 | Stacked pull/merge requests | 🟡 GitHub.com only | ✅ GitHub, GitLab and Forgejo |
-| Forges | GitHub, GitLab, Bitbucket, Azure DevOps; self-hosted on paid plans | GitHub.com, GitLab and Forgejo, self-hosted included |
+| Forges | GitHub, GitLab, Bitbucket, Azure DevOps; self-hosted on paid plans | GitHub, GitLab, Forgejo (including Codeberg and Gitea) and Bitbucket Data Center / Server; self-hosted included. Bitbucket Cloud isn't supported |
 | Commit signing | ✅ | ✅ Through your git config |
 | Signature verification | ✅ | ✅ |
 | Command palette and keyboard shortcuts | ✅ | ✅ Every one listed in Help › Keyboard shortcuts (Ctrl+/) |

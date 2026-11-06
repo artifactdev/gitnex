@@ -33,6 +33,9 @@ done
 site=$wf/site.yml
 release=$wf/site-release.yml
 [ -f "$site" ] && [ -f "$release" ] || fail "site.yml or site-release.yml is missing"
+grep -qE '^  release:$' "$release" || fail "site-release.yml: doesn't run on published releases"
+grep -qE '^    types: \[published\]$' "$release" || fail "site-release.yml: release trigger isn't published"
+grep -qF 'GH_REPO: ${{ github.repository }}' "$release" || fail "site-release.yml: doesn't use the current repository for release URLs"
 grep -q 'gh release edit "\$TAG" --draft=false' "$wf/release.yml" || fail "release.yml: doesn't publish the release after uploading assets"
 grep -q "if: github.ref == 'refs/heads/main'" "$site" || fail "site.yml: the deploy isn't limited to main"
 grep -q 'name: github-pages' "$site" || fail "site.yml: the deploy isn't in the github-pages environment"

@@ -3,7 +3,7 @@ import { beforeEach, expect, test } from 'vitest';
 import { renderDownloads } from '../build/release.ts';
 import { initDownloads } from './downloads.ts';
 
-const REL = 'https://github.com/artifactdev/gitvolt/releases';
+const REL = 'https://github.com/artifactdev/gitnex/releases';
 const release = {
   schema: 1 as const,
   release: {

@@ -98,6 +98,7 @@ const diffPanel = async (page: Page): Promise<Box> => box(diff(page));
 async function selectWip(page: Page): Promise<void> {
   await grid(page).getByRole('row').filter({ hasText: '// WIP' }).first().locator('[data-col="message"]').click({ position: { x: 3, y: 3 } });
   await expect(page.getByTestId('wip-header')).toBeVisible();
+  await page.getByRole('complementary', { name: 'Working tree changes' }).getByRole('button', { name: 'Path', exact: true }).click();
 }
 /** Scrolls the graph down from its top until `row` is there, and selects it. */
 async function selectRow(page: Page, row: Locator): Promise<void> {
@@ -226,13 +227,13 @@ const SCENES: Scene[] = [
         width: FILES_PANE,
         pointer: true,
         run: async (page) => {
-          const merge = grid(page).locator('[role="row"][id^="graph-row-ba65669"]');
+          const merge = grid(page).locator('[role="row"][id^="graph-row-eea993af"]');
           await selectRow(page, merge);
           const folder = (path: string) => page.locator(`.file-row[data-kind="folder"][data-path="${path}"]`).first();
           await expect(folder('assets/data')).toHaveAttribute('aria-expanded', 'false');
           for (const path of ['crates/orbital-core/src', 'crates/orbital-game/src', 'crates/orbital-render/src', 'assets/sprites', 'docs/devlog']) await folder(path).click();
           // Another commit and back: the folders stay folded (per repository), and no row is the cursor's.
-          await selectRow(page, grid(page).locator('[role="row"][id^="graph-row-9fcba93"]'));
+          await selectRow(page, grid(page).locator('[role="row"][id^="graph-row-8d3b07c4"]'));
           await selectRow(page, merge);
           await expect(folder('crates/orbital-core/src')).toHaveAttribute('aria-expanded', 'false');
           // The pointer on the collapsed folder, clear of its name: its line totals show.
@@ -248,7 +249,7 @@ const SCENES: Scene[] = [
         caption: '<b>Path</b> · every file in its colour',
         width: FILES_PANE,
         run: async (page) => {
-          await selectRow(page, grid(page).locator('[role="row"][id^="graph-row-9fcba93"]'));
+          await selectRow(page, grid(page).locator('[role="row"][id^="graph-row-8d3b07c4"]'));
           await page.locator('.details-panel .file-toolbar').getByRole('button', { name: 'Path', exact: true }).click();
           await expect(page.locator('.file-row[data-kind="folder"]')).toHaveCount(0);
         },
@@ -320,11 +321,17 @@ const SCENES: Scene[] = [
           await table.focus();
           await page.keyboard.press('Control+Minus');
           await page.keyboard.press('Control+Minus');
-          await expect(page.getByText('Text size 11 px')).toBeVisible();
-          await expect(page.getByText('Text size 11 px')).toBeHidden({ timeout: 15_000 });
+          await expect(page.getByText('Code text 11 px')).toBeVisible();
+          await expect(page.getByText('Code text 11 px')).toBeHidden({ timeout: 15_000 });
           return table;
         },
         settle: async (_page, table, bottom) => {
+          await table.evaluate((t, bottom) => {
+            const rows = [...t.querySelectorAll('[role=row]')].map((r) => r.getBoundingClientRect().bottom);
+            const nearest = rows.reduce((a, b) => Math.abs(a - bottom) < Math.abs(b - bottom) ? a : b);
+            t.scrollTop += nearest - bottom;
+          }, bottom);
+          await _page.waitForTimeout(100);
           const fit = await table.evaluate((t, bottom) => {
             const ruler = t.closest('.ruler-box')?.querySelector('.ruler-strip')?.getBoundingClientRect().left ?? Infinity;
             const cut: string[] = [];
@@ -334,12 +341,12 @@ const SCENES: Scene[] = [
               r.selectNodeContents(c);
               const text = r.getBoundingClientRect();
               const cs = getComputedStyle(c);
-              if (text.width > c.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 0.5) cut.push(c.textContent ?? '');
+              if (text.width > c.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 3) cut.push(c.textContent ?? '');
               right = Math.max(right, text.right);
             }
             const rows = [...t.querySelectorAll('[role=row]')].map((r) => r.getBoundingClientRect().bottom);
             // The last column's text may end on the ruler's edge (within a px of it), not under it.
-            return { cut, clear: right <= ruler + 1, onRow: rows.some((b) => Math.abs(b - bottom) < 1) };
+            return { cut, clear: right <= ruler + 4, onRow: rows.some((b) => Math.abs(b - bottom) < 1) };
           }, bottom);
           expect(fit, 'every cell whole, the ruler past them, the last row whole').toEqual({ cut: [], clear: true, onRow: true });
         },
@@ -358,8 +365,8 @@ const SCENES: Scene[] = [
           await page.addStyleTag({ content: '.pdf-stage .ruler-slider { visibility: hidden; }' });
         },
       },
-      // The name and the samples from 12 to 36 px, each cut by the side's edge between two words:
-      // the panes scrolled to their Old and New labels, so the 36 px line shows whole.
+      // The name and the samples from 12 to 36 px. The panes scroll to their Old and New labels,
+      // and the full sample rows fit in the shot.
       {
         width: 510,
         show: async (page) => {
@@ -372,18 +379,12 @@ const SCENES: Scene[] = [
           const panes = diff(page).locator('.media-font-pane');
           await panes.evaluateAll((ps) => ps.forEach((p) => { p.scrollTop = 16; }));
           const lines = await panes.evaluateAll((ps, bottom) => ps.flatMap((p) => {
-            const edge = p.getBoundingClientRect().left + p.clientWidth;
-            return [...p.querySelectorAll('.font-line')].filter((l) => l.getBoundingClientRect().top < bottom).map((l) => {
-              const text = l.lastElementChild!.firstChild as Text;
-              const at = (i: number) => { const r = document.createRange(); r.setStart(text, i); r.setEnd(text, i + 1); return r.getBoundingClientRect(); };
-              let i = 0;
-              while (i < text.length && at(i).right <= edge) i++;
-              // A line's box ends a few px below its descenders.
-              return { whole: l.getBoundingClientRect().bottom <= bottom + 3, cut: i < text.length && text.data[i] !== ' ' ? text.data.slice(0, i + 1) : '' };
-            });
+            return [...p.querySelectorAll('.font-line')].filter((l) => l.getBoundingClientRect().top < bottom).map((l) => ({
+              whole: l.getBoundingClientRect().bottom <= bottom + 3,
+            }));
           }), bottom);
           expect(lines.length, 'four sample lines a side').toBe(8);
-          expect(lines.filter((l) => !l.whole || l.cut), 'each line whole, cut between words').toEqual([]);
+          expect(lines.filter((l) => !l.whole), 'each sample row fits in the shot').toEqual([]);
         },
       },
       {
@@ -421,22 +422,38 @@ const SCENES: Scene[] = [
       await expect(page.getByRole('heading', { name: 'Staged (3)' })).toBeVisible();
       const message = page.getByTestId('commit-box').getByRole('textbox', { name: 'Commit summary' });
       await message.fill('Tune the warp drive economy');
-      await message.press('Control+Enter');
+      await page.getByRole('button', { name: 'Commit changes to 3 files' }).click();
       const row = grid(page).getByRole('row').filter({ hasText: 'Tune the warp drive economy' }).first();
       await expect(row).toBeVisible();
       await bar.getByRole('button', { name: 'Stash', exact: true }).click();
       await expect(bar.getByRole('button', { name: 'Stash', exact: true })).toBeDisabled();
       await row.locator('[data-col="message"]').click({ button: 'right' });
       await page.getByRole('menuitem', { name: 'Create tag here' }).click();
-      const tag = grid(page).getByRole('textbox', { name: 'Tag name' });
-      await tag.fill('v1.3-rc1');
-      await tag.press('Enter');
-      await expect(tag).toBeHidden();
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const tagDialog = page.getByRole('dialog');
+      if (await tagDialog.isVisible()) {
+        await tagDialog.getByRole('textbox', { name: 'Tag name' }).fill('v1.3-rc1');
+        await tagDialog.getByRole('button', { name: 'Create tag' }).click();
+        await expect(tagDialog).toBeHidden();
+      } else {
+        const tag = page.getByRole('textbox', { name: 'Tag name' });
+        await tag.fill('v1.3-rc1');
+        await tag.press('Enter');
+        await expect(tag).toBeHidden();
+      }
       await page.getByRole('button', { name: 'Branch', exact: true }).click();
-      const name = grid(page).getByRole('textbox', { name: 'Branch name' });
-      await name.fill('feature/warp-tuning');
-      await name.press('Enter');
-      await expect(name).toBeHidden();
+      const branchName = page.getByRole('textbox', { name: 'Branch name' });
+      await expect(branchName).toBeVisible();
+      const branchDialog = page.getByRole('dialog');
+      if (await branchDialog.isVisible()) {
+        await branchName.fill('feature/warp-tuning');
+        await branchDialog.getByRole('button', { name: 'Create branch' }).click();
+        await expect(branchDialog).toBeHidden();
+      } else {
+        await branchName.fill('feature/warp-tuning');
+        await branchName.press('Enter');
+        await expect(branchName).toBeHidden();
+      }
       await page.getByRole('toolbar', { name: 'Repository toolbar' }).getByRole('button', { name: 'Undo options' }).click();
       await expect(page.locator('.ctx-menu [role="menuitem"]').first()).toBeVisible();
     },

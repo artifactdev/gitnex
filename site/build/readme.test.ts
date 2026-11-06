@@ -52,7 +52,7 @@ test("the features' sections and bullets, wrapped lines joined, nothing after ##
 
 test('inline Markdown: code, bold, links into the repository, keys as <kbd>, everything escaped', () => {
   expect(inline('A `git <x>` **bold** & [PRIVACY.md](PRIVACY.md), [Updates](#updates)')).toBe(
-    'A <code>git &lt;x&gt;</code> <b>bold</b> &amp; <a href="https://github.com/artifactdev/gitvolt/blob/main/PRIVACY.md">PRIVACY.md</a>, <a href="https://github.com/artifactdev/gitvolt#updates">Updates</a>',
+    'A <code>git &lt;x&gt;</code> <b>bold</b> &amp; <a href="https://github.com/artifactdev/gitnex/blob/main/PRIVACY.md">PRIVACY.md</a>, <a href="https://github.com/artifactdev/gitnex#updates">Updates</a>',
   );
   expect(inline('Ctrl+F, Ctrl+/, F9 and Shift+F9, not UTF8')).toBe('<kbd>Ctrl</kbd>+<kbd>F</kbd>, <kbd>Ctrl</kbd>+<kbd>/</kbd>, <kbd>F9</kbd> and <kbd>Shift</kbd>+<kbd>F9</kbd>, not UTF8');
 });
@@ -109,7 +109,7 @@ test('a row without three cells fails', () => {
   expect(() => renderCompare(MD.replace('| Git Flow | ✅ | ❌ Not planned |', '| Git Flow | ✅ |'), TG)).toThrow("README.md's comparison table: row 3 has 2 cells, not 3");
 });
 
-test('the real README: every highlight and group found, the whole table, links only into this project', () => {
+test('the real README: every highlight and group found, the whole table, only project and GitHub docs links', () => {
   const md = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
   const highlights = renderHighlights(md, () => false);
   expect(highlights.match(/<article /g)).toHaveLength(HIGHLIGHTS.length);
@@ -119,7 +119,9 @@ test('the real README: every highlight and group found, the whole table, links o
   const rows = md.slice(md.indexOf('### Compared with GitKraken')).split('\n## ')[0].split('\n').filter((l) => l.startsWith('|')).length - 2;
   expect(renderCompare(md).match(/<tr><th scope="row">/g)).toHaveLength(rows);
   expect(COMPARE_GROUPS.flatMap((g) => g.rows)).toHaveLength(rows);
-  for (const m of `${highlights}${groups}${renderCompare(md)}`.matchAll(/href="([^"]+)"/g)) expect(m[1]).toMatch(/^https:\/\/github\.com\/artifactdev\/gitnex[/#]/);
+  for (const m of `${highlights}${groups}${renderCompare(md)}`.matchAll(/href="([^"]+)"/g)) {
+    expect(m[1]).toMatch(/^(?:https:\/\/github\.com\/artifactdev\/gitnex(?:[/#]|$)|https:\/\/docs\.github\.com\/)/);
+  }
 });
 
 test("the page's highlights are README.md's, in its order (but the hero's licence line), each lead once in the features", () => {
