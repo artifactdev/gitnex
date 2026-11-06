@@ -5,6 +5,8 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-06
+
 ### Fixed
 
 - **Updates use the GitNex repository.** Release checks and package downloads now use
