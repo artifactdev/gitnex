@@ -5,6 +5,20 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Updates use the GitNex repository.** Release checks and package downloads now use
+  `artifactdev/gitnex` instead of `artifactdev/gitvolt`. Older builds may need a manual install
+  to move to the new update source.
+- **Website links and forge comparison.** Source and download links point to GitNex. The forge
+  comparison includes Codeberg, Gitea and Bitbucket Data Center / Server, and the site explains
+  that GitNex continues GitVolt while extending its features.
+
+### Changed
+
+- **Refreshed website screenshots and live demo.** Demo fixtures, all feature screenshots and
+  the social preview image now reflect the current GitNex UI.
+
 ## [1.5.1] - 2026-11-06
 
 ### Added
