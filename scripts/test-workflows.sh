@@ -33,6 +33,7 @@ done
 site=$wf/site.yml
 release=$wf/site-release.yml
 [ -f "$site" ] && [ -f "$release" ] || fail "site.yml or site-release.yml is missing"
+grep -q 'gh release edit "\$TAG" --draft=false' "$wf/release.yml" || fail "release.yml: doesn't publish the release after uploading assets"
 grep -q "if: github.ref == 'refs/heads/main'" "$site" || fail "site.yml: the deploy isn't limited to main"
 grep -q 'name: github-pages' "$site" || fail "site.yml: the deploy isn't in the github-pages environment"
 if grep -qE 'pull_request' "$site" "$release"; then fail "the site's workflows run on pull requests"; fi

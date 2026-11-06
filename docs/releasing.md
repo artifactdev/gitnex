@@ -3,8 +3,7 @@
 A release is a tag. `just release <version>` prepares the release commit and tag locally;
 pushing them starts [.github/workflows/release.yml](../.github/workflows/release.yml), which
 builds the `.deb`, the Arch package, the `.rpm`, the two Windows installers and the macOS
-`.dmg`, checks them, and uploads them to a **draft** GitHub release. You review the draft and publish it. Nothing is published
-automatically.
+`.dmg`, checks them, and publishes a GitHub release with the packages and `SHA256SUMS`.
 
 ## Before you start
 
@@ -48,16 +47,13 @@ automatically.
    It fails fast when the tag doesn't match `tauri.conf.json`'s version or CHANGELOG.md has no
    section for it.
 
-4. **Review the draft** under Releases. It's titled "GitNex 0.1.0-alpha.1" and has the
+4. **Review the published release** under Releases. It's titled "GitNex 0.1.0-alpha.1" and has the
    changelog section as its notes, plus the `.deb`, the `.pkg.tar.zst`, the `.rpm`, the Windows
    `-setup.exe` and `.msi`, the macOS `.dmg`, and `SHA256SUMS`. A
-   version with a pre-release part (`-alpha.1`, `-rc.2`) is marked pre-release. Edit the notes
-   if needed, and install the packages from the draft to try them.
+   version with a pre-release part (`-alpha.1`, `-rc.2`) is marked pre-release. Install the
+   packages from the release to try them.
 
-5. **Publish** the draft. GitHub marks a published release as the latest unless it's a
-   pre-release.
-
-6. **The website's downloads update by themselves.** Publishing starts the Site downloads
+5. **The website's downloads update by themselves.** Publishing starts the Site downloads
    workflow: it writes `site/data/release.json` for the release, commits it to main as
    "Site: downloads for 0.1.0" and deploys the website. A pre-release is offered only while
    there's no other release. Pull main (`git pull --rebase`) before you next push
@@ -212,8 +208,9 @@ side by side, then the release job:
    workflow artifact. Its caches (cargo, the two cargo tools, the CEF archive) are saved from main
    only, as the others are.
 4. **Release** (`contents: write`): verifies the three jobs' checksums and merges them into one
-   `SHA256SUMS`, adds build provenance attestations for every package (see below), and creates
-   the draft release, or updates it on a re-run.
+   `SHA256SUMS`, adds build provenance attestations for every package (see below), then publishes
+   the release after uploading all assets. A failed or re-run release updates the draft before
+   publication; an already-published release is left untouched.
 
 The packages' `Depends` come from the build machine's libraries (dpkg-shlibdeps), so packages
 built on the 24.04 runner install on Ubuntu 24.04 and later. The RPM's `Requires` come from the
@@ -231,7 +228,7 @@ per release, decided by the workflow's first job, **Plan**:
   commit carries a `v*` tag, this run releases it. Otherwise it does nothing (a few seconds).
 - **A pushed `v*` tag:** waits for main's run on the same commit. If that one releases the tag,
   this run stops. If not (the tag was pushed after its commit, or main's push didn't run), it
-  builds and drafts the release itself, from cold caches. Nothing is lost either way.
+  builds and publishes the release itself, from cold caches. Nothing is lost either way.
 - **Run workflow** (Actions → Release → Run workflow, on main) with a **tag**: releases that tag
   (its commit, warm). The way to redo or rescue a release by hand.
 
@@ -417,10 +414,10 @@ also warms the caches.
 - **A transient failure** (a download, the Arch mirror in `check-arch-pkg`, Fedora's in
   `check-rpm-pkg`): use "Re-run failed
   jobs". Re-running only the release job reuses the run's build artifact (kept 3 days).
-- **Re-running for the same tag** updates the draft's title, notes and pre-release flag, and
-  replaces its assets (`gh release upload --clobber`). If the release is already published, the
-  job fails and leaves it untouched.
-- **A broken release that needs a code fix:** delete the draft, delete the tag
+- **Re-running before publication** updates the draft's title, notes and pre-release flag, and
+  replaces its assets (`gh release upload --clobber`) before publishing. If the release is already
+  published, the job fails and leaves it untouched.
+- **A broken release that needs a code fix:** delete the draft (if one remains), delete the tag
   (`git push origin :refs/tags/v0.1.0-alpha.1` and `git tag -d v0.1.0-alpha.1`), fix it on
   main, and release again. Once a version is published, don't reuse it: release the next one.
 

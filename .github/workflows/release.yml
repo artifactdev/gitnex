@@ -2,7 +2,7 @@
 # together (git push origin main v<version>, or GitNex's Push with "Push tags with branches")
 # runs one build, on main: it builds the .deb, the Arch package and the RPM on Linux, the two Windows
 # installers (NSIS and MSI, unsigned for now) and the macOS .dmg (Apple Silicon, signed with GitNex's self-signed certificate),
-# checks them, and uploads them with SHA256SUMS to a draft GitHub release for review. Building on main matters for speed: only
+# checks them, and publishes them with SHA256SUMS as a GitHub release. Building on main matters for speed: only
 # main's runs save caches (a tag's run can restore main's but not another tag's), so each release
 # warms the next one, while GitHub keeps the caches (7 days unused).
 #
@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release this tag (v1.2.3): build its commit and draft the release. Empty: a dry run.'
+        description: 'Release this tag (v1.2.3): build its commit and publish the release. Empty: a dry run.'
         required: false
         default: ''
 
@@ -613,13 +613,13 @@ jobs:
           overwrite: true
 
   release:
-    name: Draft the GitHub release
+    name: Publish the GitHub release
     needs: [plan, build, windows, macos]
     if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: write # create the draft release and upload its assets
+      contents: write # create, upload and publish the release
       id-token: write # attestations: the Sigstore signing certificate
       attestations: write
     steps:
@@ -661,8 +661,8 @@ jobs:
             dist/*.msi
             dist/*.dmg
 
-      # Creates the draft, or on a re-run updates it and replaces its assets (--clobber). A
-      # release that's already published is left alone: the run fails instead.
+      # Stage the release as a draft while uploading its verified assets. A re-run updates the
+      # draft and replaces its assets (--clobber); a published release is never replaced.
       - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -683,5 +683,6 @@ jobs:
             gh release create "$TAG" --draft --verify-tag --title "GitNex $VERSION" \
               --notes-file dist/release-notes.md --prerelease="$PRERELEASE" "${assets[@]}"
           fi
+          gh release edit "$TAG" --draft=false
           url=$(gh release view "$TAG" --json url --jq .url)
-          echo "Draft release: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Published release: $url" | tee -a "$GITHUB_STEP_SUMMARY"
