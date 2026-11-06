@@ -86,7 +86,7 @@ pub fn is_template_path(kind: ForgeKind, path: &str) -> bool {
                 || dir.eq_ignore_ascii_case(&format!("{GITHUB_DIR}/{GITHUB_TEMPLATE_DIR}"))
         }
         ForgeKind::Forgejo => FORGEJO_TEMPLATES.contains(&path),
-        ForgeKind::Bitbucket => false,
+        ForgeKind::Bitbucket | ForgeKind::AzureDevOps => false,
     }
 }
 
@@ -244,7 +244,7 @@ pub async fn local_templates(
     kind: ForgeKind,
     revs: &[String],
 ) -> Result<Vec<MrTemplate>, GbError> {
-    if kind == ForgeKind::Bitbucket {
+    if matches!(kind, ForgeKind::Bitbucket | ForgeKind::AzureDevOps) {
         return Ok(Vec::new());
     }
     let Some(rev) = first_existing(cli, root, revs).await? else {
@@ -256,7 +256,7 @@ pub async fn local_templates(
         ForgeKind::GitLab => vec![format!("{GITLAB_TEMPLATE_DIR}/")],
         ForgeKind::GitHub => vec![format!("{GITHUB_DIR}/")],
         ForgeKind::Forgejo => FORGEJO_TEMPLATES.iter().map(|p| p.to_string()).collect(),
-        ForgeKind::Bitbucket => unreachable!(),
+        ForgeKind::Bitbucket | ForgeKind::AzureDevOps => unreachable!(),
     }];
     let mut paths: Vec<String> = Vec::new();
     while let Some(listed) = dirs.pop() {

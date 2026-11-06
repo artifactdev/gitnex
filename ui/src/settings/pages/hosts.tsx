@@ -7,7 +7,7 @@ import { HOST_KIND_NAMES } from '../../forge/hostKind';
 import { Select } from '../../ui/Select';
 import { registerSettings, registerSettingsPage, type SettingsCtx } from '../registry';
 
-const HOST_KINDS: Array<[HostKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo'], ['bitbucket', 'Bitbucket'], ['generic', 'Generic (no forge links)']];
+const HOST_KINDS: Array<[HostKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo'], ['bitbucket', 'Bitbucket'], ['azuredevops', 'Azure DevOps'], ['generic', 'Generic (no forge links)']];
 const NONE: never[] = [];
 
 /** The open repository's remote hosts and the hosts with an override, each with its forge type. */

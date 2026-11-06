@@ -384,6 +384,7 @@ struct Raw {
 }
 
 struct Inner {
+    basic_auth: bool,
     cfg: ClientConfig,
     agent: ureq::Agent,
     /// `agent`'s rules (TLS, proxy, no automatic redirects) without its whole-request timeout:
@@ -438,6 +439,11 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    pub fn with_basic_auth(self) -> Self {
+        let inner = Arc::try_unwrap(self.inner).ok().expect("a fresh client");
+        Self { inner: Arc::new(Inner { basic_auth: true, ..inner }) }
+    }
+
     pub fn new(cfg: ClientConfig) -> Self {
         Self::with_clock(cfg, Arc::new(unix_now))
     }
@@ -447,6 +453,7 @@ impl HttpClient {
         let download_agent = agent_for_downloads();
         Self {
             inner: Arc::new(Inner {
+                basic_auth: false,
                 cfg,
                 agent,
                 download_agent,
@@ -1278,6 +1285,11 @@ impl HttpClient {
                 match serde_json::from_slice::<serde_json::Value>(&raw.body) {
                     Ok(mut value) => {
                         redact_token_from_json(&mut value, token);
+                        if self.inner.basic_auth {
+                            use base64::Engine;
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(format!(":{token}"));
+                            redact_token_from_json(&mut value, &encoded);
+                        }
                         serde_json::to_vec(&value).unwrap_or_default()
                     }
                     Err(_) => Vec::new(),
@@ -1571,7 +1583,13 @@ impl Inner {
             .method(method.as_str())
             .uri(url);
         if auth && let Some(t) = &self.cfg.token {
-            b = b.header("Authorization", format!("Bearer {}", t.expose()));
+            let authorization = if self.basic_auth {
+                use base64::Engine;
+                format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!(":{}", t.expose())))
+            } else {
+                format!("Bearer {}", t.expose())
+            };
+            b = b.header("Authorization", authorization);
         }
         for (k, v) in &self.cfg.headers {
             // A request's own Accept replaces the client's.

@@ -48,7 +48,7 @@ current code; each point names where to look.
 
 ### Forge tokens
 
-- GitHub, GitLab, Forgejo and Bitbucket personal access tokens are kept in the system keyring, through the Secret
+- GitHub, GitLab, Forgejo, Bitbucket and Azure DevOps personal access tokens are kept in the system keyring, through the Secret
   Service D-Bus API (GNOME Keyring, KWallet, KeePassXC…) via the `keyring` crate
   (`crates/gitnex-forge/src/tokens.rs`). Each is an item in the default collection with the
   attributes `service` = `gitnex` and `username` = `<profile id>/<host>` for a host's first
@@ -70,6 +70,18 @@ current code; each point names where to look.
   token query parameters, `Authorization` headers and known GitHub and GitLab token formats.
 - Removing an account (Settings › Accounts) deletes its token from the keyring and from the
   fallback file. It doesn't revoke the token on the forge.
+- Azure DevOps Services accounts are scoped to one `dev.azure.com/<organization>` key.
+  PATs are sent as Basic authentication with an empty username, only to that organization's
+  API; redirects are not followed. Both the raw PAT and its Basic-auth encoding are removed
+  from API errors. User and repository GUIDs are preserved. Repository access does not enable
+  PR writes. For matching HTTPS git remotes, a temporary URL-scoped credential helper reads
+  the PAT over the authenticated askpass socket, only for a live, uncancelled operation and its
+  registered remote URL. The organization and repository's chosen account must match.
+  Credentials are not put in argv, environment variables, URLs or saved git configuration,
+  and the helper ignores git's store/erase requests. Other credential helpers are bypassed only
+  for these URLs, and HTTP redirects are disabled. The PAT and its Basic-auth encodings are
+  registered with the redaction filter for the operation's lifetime. SSH still uses normal
+  SSH credentials.
 - Bitbucket Data Center / Server uses user personal access tokens (also called user HTTP access
   tokens), not browser session cookies. Account setup does not install a git credential helper,
   change git credentials or override merge checks. Merges restricted by token authentication

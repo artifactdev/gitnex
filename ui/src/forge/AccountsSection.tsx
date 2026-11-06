@@ -19,7 +19,7 @@ import { effectiveKind } from './urls';
 import './accounts.css';
 
 export const FILE_WARNING = 'Stored in a file, not the system keyring: install or start a Secret Service (GNOME Keyring, KWallet), then restart GitNex to secure it.';
-const KINDS: Array<[ForgeKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo'], ['bitbucket', 'Bitbucket']];
+const KINDS: Array<[ForgeKind, string]> = [['gitlab', 'GitLab'], ['github', 'GitHub'], ['forgejo', 'Forgejo'], ['bitbucket', 'Bitbucket'], ['azuredevops', 'Azure DevOps']];
 
 /** What an account's last requests said, in plain words; `null` when all is well. */
 export function statusText(v: ForgeAccountView): string | null {
@@ -51,6 +51,7 @@ const TOKEN_HELP: Record<ForgeKind, string> = {
   github: 'Opens GitHub\'s fine-grained token page with the permissions GitNex needs selected. Some organizations cap these tokens\' lifetime (e.g. 90 days); use a classic token for those.',
   forgejo: 'Opens the new-token form in your Applications settings. Generate a token with the read:user, write:repository and write:issue scopes, then paste it here.',
   bitbucket: 'Use a personal access token (user HTTP access token) from Manage account › HTTP access tokens, with repository read/write permissions for the actions you need. Merges open in your browser. Bitbucket Cloud is not supported.',
+  azuredevops: 'Enter https://dev.azure.com/your-organization and use a personal access token with Code (Read) access. Browse projects and repositories in Clone. Pull request workflows and Azure DevOps Server are not supported.',
 };
 /** Untyped, with no suggestion of its kind, the host a forge picked starts with (GitLab: none). */
 const DEFAULT_HOSTS: Partial<Record<ForgeKind, string>> = { github: 'github.com', forgejo: 'codeberg.org' };
@@ -132,7 +133,8 @@ export function AccountsSection() {
   return (
     <div className="accounts-box" id="setting-forgeAccounts" data-setting-id="forgeAccounts">
       <p className="dim accounts-help">
-        Connect GitLab, GitHub, Forgejo or Bitbucket Data Center / Server to see merge requests, pull requests and forks. A host can have
+        Connect GitLab, GitHub, Forgejo or Bitbucket Data Center / Server to see merge requests, pull requests and forks.
+        Connect Azure DevOps Services to browse and clone repositories. A host can have
         several accounts: repositories use its default unless Settings › Repository picks another.
         {accounts?.length === 0 && ' Tokens are kept in the system keyring.'}
       </p>
@@ -351,7 +353,7 @@ function AddAccount({ panel, taken, onAdded, onCancel, onReplace }: { panel: Pan
       </div>
       <div className="field">
         <span className="field-label">Forge</span>
-        <div className="field-row">
+        <div className="field-row account-forge-options">
           <div className="seg" role="group" aria-label="Forge type">
             {KINDS.map(([k, name]) => <button key={k} type="button" aria-pressed={kind === k} className={kind === k ? 'is-on' : undefined} onClick={() => setPicked(k)}>{name}</button>)}
           </div>

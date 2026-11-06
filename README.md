@@ -31,6 +31,8 @@ terminal), a React UI, and [Tauri](https://tauri.app/) with the Chromium (CEF) r
 > **Status:** used day to day on Linux and Windows; newer on macOS.
 
 For self-hosted Bitbucket, see [setup and compatibility](docs/bitbucket.md).
+For Azure DevOps Services account setup and automatic PAT authentication of HTTPS git remotes,
+see [connection setup](docs/azure-devops.md).
 
 ## Platforms
 
@@ -138,7 +140,7 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 - **Tabs and tab groups.** A tab for each repository or worktree. Drop a tab onto another to
   group them; a group's chip collapses it, moves it, or saves and closes it to reopen later.
 - **Clone** into a folder you pick: GitNex makes a folder named after the repository inside it.
-  Or search your own repositories across all configured GitHub, GitLab and Forgejo accounts,
+  Or search your own repositories across configured GitHub, GitLab, Forgejo, Bitbucket and Azure DevOps Services accounts,
   grouped by integration and account, and clone one straight there. The Open screen puts Your
   repositories and Recent side by side, with Open, Clone and Create in its header; Create makes
   a new local repository with `git init`, an optional README.md and an initial commit.
@@ -253,7 +255,7 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 | Pull/merge requests: list, view, create, comment, approve, merge | ✅ | ✅ Also auto-merge, and updating a branch that's behind |
 | Inline code review comments | ✅ GitHub | ✅ GitHub, GitLab and Forgejo: lines and ranges, a pending review, suggested changes you can apply |
 | Stacked pull/merge requests | 🟡 GitHub.com only | ✅ GitHub, GitLab and Forgejo |
-| Forges | GitHub, GitLab, Bitbucket, Azure DevOps; self-hosted on paid plans | GitHub, GitLab, Forgejo (including Codeberg and Gitea) and Bitbucket Data Center / Server; self-hosted included. Bitbucket Cloud isn't supported |
+| Forges | GitHub, GitLab, Bitbucket, Azure DevOps; self-hosted on paid plans | GitHub, GitLab, Forgejo (including Codeberg and Gitea), Bitbucket Data Center / Server and Azure DevOps Services; self-hosted included for supported providers. Azure DevOps supports PAT accounts, repository discovery, clone and HTTPS git authentication, not PR workflows. Bitbucket Cloud and Azure DevOps Server aren't supported |
 | Commit signing | ✅ | ✅ Through your git config |
 | Signature verification | ✅ | ✅ |
 | Command palette and keyboard shortcuts | ✅ | ✅ Every one listed in Help › Keyboard shortcuts (Ctrl+/) |
@@ -275,8 +277,10 @@ checksums. After that, GitNex updates itself (see [Updates](#updates)).
 ### What GitNex doesn't do
 
 - **Not planned:** Intel Macs, an integrated terminal, AI features, issue tracker integrations,
-  cloud workspaces and team features, and Bitbucket, Azure DevOps or GitHub Enterprise Server
+  cloud workspaces and team features, and Bitbucket Cloud, Azure DevOps Server or GitHub Enterprise Server
   support. Use the tools you already have for those.
+- **Azure DevOps Services:** accounts and Git repositories are supported; PR workflows and
+  Microsoft Entra/OAuth sign-in are not included. See [connection setup](docs/azure-devops.md).
 
 ## Updates
 

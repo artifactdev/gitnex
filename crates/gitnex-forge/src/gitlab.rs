@@ -42,7 +42,7 @@ pub struct GitLabProvider {
     /// Project id → path: an MR names its source project by id only.
     paths: Mutex<HashMap<u64, String>>,
     /// Project id → label name → `#rrggbb`, from `/projects/:id/labels` (`fill_label_colors`).
-    label_colors: Mutex<HashMap<u64, HashMap<String, String>>>,
+    label_colors: Mutex<HashMap<ForgeId, HashMap<String, String>>>,
     // --- end 4B T2 ---
     /// The list's pipelines by head commit (`pipelines`): asked only for new or running heads.
     pipelines: crate::pipelines::PipelineCache,
@@ -55,8 +55,8 @@ pub struct GitLabProvider {
     unconditional: Mutex<HashMap<String, KeptList>>,
     /// (project, mark) → when a probe said nothing changed since: the poll's other list asks no
     /// second probe (`HttpClient::still_fresh`).
-    unchanged: Mutex<HashMap<(u64, i64), (u64, u64)>>,
-    marks: Mutex<HashMap<u64, i64>>,
+    unchanged: Mutex<HashMap<(ForgeId, i64), (u64, u64)>>,
+    marks: Mutex<HashMap<ForgeId, i64>>,
     // --- commit-author avatars by name ---
     /// Lowercase email → avatar URL, found for a commit author by name (`avatar_for_name`).
     learned: Mutex<HashMap<String, String>>,
@@ -123,7 +123,7 @@ pub mod json {
         }
         Some(ForgeUser {
             emails,
-            id: v["id"].as_u64()?,
+            id: v["id"].as_u64()?.into(),
             name: text(&v["name"]).unwrap_or_else(|| username.clone()),
             avatar_url: text(&v["avatar_url"]),
             web_url: v["web_url"].as_str().unwrap_or_default().to_string(),
@@ -136,7 +136,7 @@ pub mod json {
         let path = v["path_with_namespace"].as_str()?.to_string();
         Some(ForgeProject {
             kind: ForgeKind::GitLab,
-            id: v["id"].as_u64()?,
+            id: v["id"].as_u64()?.into(),
             host: host.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
             owner: text(&v["namespace"]["full_path"]).unwrap_or_else(|| path.rsplit_once('/').map(|(o, _)| o.to_string()).unwrap_or_default()),
@@ -879,14 +879,14 @@ impl GitLabProvider {
             next = more.next_page.clone();
         }
         let all = next.is_none();
-        self.note_mark(project.id, &list);
+        self.note_mark(project.id.clone(), &list);
         let mark = self.marks.lock().expect("marks poisoned").get(&project.id).copied();
         let mut lists = self.unconditional.lock().expect("lists poisoned");
         match mark.filter(|_| !r.etag) {
             Some(m) => {
                 lists.insert(path.to_string(), (list.clone(), m, all));
                 // Just read: as good as a probe that found nothing since (the poll's other list).
-                self.unchanged.lock().expect("probes poisoned").insert((project.id, m), self.http.fresh_mark());
+                self.unchanged.lock().expect("probes poisoned").insert((project.id.clone(), m), self.http.fresh_mark());
             }
             None => {
                 lists.remove(path);
@@ -896,7 +896,7 @@ impl GitLabProvider {
     }
 
     /// Keeps the newest `updated_at` among `list` as the project's mark.
-    fn note_mark(&self, project: u64, list: &[Value]) {
+    fn note_mark(&self, project: ForgeId, list: &[Value]) {
         let newest = list.iter().filter_map(|v| v["updated_at"].as_str().and_then(parse_rfc3339)).max();
         if let Some(n) = newest {
             let mut marks = self.marks.lock().expect("marks poisoned");
@@ -908,7 +908,7 @@ impl GitLabProvider {
     /// Whether any of the project's MRs (any state, any filter) changed after `mark`: one MR at
     /// most, so the answer is small. A merged, closed, edited or new MR moves its `updated_at`.
     async fn changed_since(&self, project: &ForgeProject, mark: i64) -> Result<bool, GbError> {
-        let seen = self.unchanged.lock().expect("probes poisoned").get(&(project.id, mark)).copied();
+        let seen = self.unchanged.lock().expect("probes poisoned").get(&(project.id.clone(), mark)).copied();
         if seen.is_some_and(|m| self.http.still_fresh(m)) {
             return Ok(false);
         }
@@ -916,11 +916,11 @@ impl GitLabProvider {
         let after = crate::time::format_rfc3339(mark + 1);
         let r = self.http.get(&format!("/projects/{}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=1&updated_after={}", project.id, encode_component(&after))).await?;
         let found: Vec<Value> = r.json(&self.host)?;
-        self.note_mark(project.id, &found);
+        self.note_mark(project.id.clone(), &found);
         let mut unchanged = self.unchanged.lock().expect("probes poisoned");
         unchanged.retain(|(p, _), m| *p != project.id || self.http.still_fresh(*m));
         if found.is_empty() {
-            unchanged.insert((project.id, mark), self.http.fresh_mark());
+            unchanged.insert((project.id.clone(), mark), self.http.fresh_mark());
         }
         Ok(!found.is_empty())
     }
@@ -955,7 +955,7 @@ impl GitLabProvider {
             kept => match self.http.get(&format!("/projects/{}/labels?per_page=100", project.id)).await.and_then(|r| r.json::<Vec<Value>>(&self.host)) {
                 Ok(list) => {
                     let c: HashMap<String, String> = list.iter().filter_map(json::label).filter_map(|l| Some((l.name, label_color(l.color.as_deref()?)?))).collect();
-                    self.label_colors.lock().expect("label colours poisoned").insert(project.id, c.clone());
+                    self.label_colors.lock().expect("label colours poisoned").insert(project.id.clone(), c.clone());
                     c
                 }
                 Err(e) => {
@@ -1015,7 +1015,7 @@ impl GitLabProvider {
         }
         let path = format!("/users?search={}&per_page={NAME_SEARCH_PER_PAGE}", encode_component(key));
         let found: Vec<ForgeUser> = self.http.get(&path).await?.json::<Vec<Value>>(&self.host)?.iter().filter_map(json::user).collect();
-        let exact: HashMap<u64, Option<String>> = found.iter().filter(|u| normalize(&u.name) == key || normalize(&u.username) == key).map(|u| (u.id, u.avatar_url.clone())).collect();
+        let exact: HashMap<ForgeId, Option<String>> = found.iter().filter(|u| normalize(&u.name) == key || normalize(&u.username) == key).map(|u| (u.id.clone(), u.avatar_url.clone())).collect();
         self.names.learn_all(&found);
         if exact.len() == 1 {
             return Ok(NameMatch::One(exact.into_values().next().flatten()));
@@ -1163,7 +1163,7 @@ impl GitLabProvider {
         if !ds.iter().any(|d| d.notes.iter().any(|n| !n.system)) {
             return;
         }
-        let me = self.me().await.ok().map(|u| u.id);
+        let me = self.me().await.ok().and_then(|u| u.id.numeric().ok());
         let mut found: HashMap<String, Vec<ForgeReaction>> = HashMap::new();
         let mut after: Option<String> = None;
         for _ in 0..AWARD_PAGES {
@@ -1465,7 +1465,7 @@ impl ForgeProvider for GitLabProvider {
             let mut d = json::detail(&v, &project.path, &source, approvals.as_ref()).ok_or_else(|| unreadable(&self.host, "merge request"))?;
             // --- branch update: a fork's branch is pushed to by its author (asked only then) ---
             let fork = v["source_project_id"].as_u64() != v["target_project_id"].as_u64();
-            let me = if fork { self.me().await.ok().map(|u| u.id) } else { None };
+            let me = if fork { self.me().await.ok().and_then(|u| u.id.numeric().ok()) } else { None };
             d.update = json::update_offer(&v, me);
             // A single MR's GET has label names only (`with_labels_details` is for the lists).
             self.fill_label_colors(project, &mut d.mr).await;
@@ -1563,7 +1563,8 @@ impl ForgeProvider for GitLabProvider {
             let url = format!("{}/award_emoji", Self::note_url(project, number, note)?);
             let me = self.me().await?;
             let mut list = self.http.get_pages(&format!("{url}?per_page=100"), AWARD_PAGES).await?;
-            let mine = list.iter().position(|a| a["name"].as_str() == Some(name) && a["user"]["id"].as_u64() == Some(me.id));
+            let me_id = me.id.numeric()?;
+            let mine = list.iter().position(|a| a["name"].as_str() == Some(name) && a["user"]["id"].as_u64() == Some(me_id));
             match (on, mine) {
                 (true, None) => {
                     let r = self.http.send_json(Method::Post, &url, &json!({ "name": name })).await?;
@@ -1576,7 +1577,7 @@ impl ForgeProvider for GitLabProvider {
                 }
                 _ => {}
             }
-            Ok(json::awards(&list, Some(me.id)))
+            Ok(json::awards(&list, Some(me_id)))
         })
     }
 
@@ -1856,8 +1857,8 @@ impl ForgeProvider for GitLabProvider {
     fn create_mr<'a>(&'a self, project: &'a ForgeProject, req: &'a CreateMr) -> ForgeFuture<'a, CreateOutcome> {
         Box::pin(async move {
             // GitLab creates in the source project; a fork's MR names its target (ruling 3).
-            let source_id = if req.source.project == project.path { project.id } else { self.project(&req.source.project).await?.value.id };
-            let body = json::create_body(req, source_id, project.id);
+            let source_id = if req.source.project == project.path { project.id.numeric()? } else { self.project(&req.source.project).await?.value.id.numeric()? };
+            let body = json::create_body(req, source_id, project.id.numeric()?);
             let r = self.http.send_json(Method::Post, &format!("/projects/{source_id}/merge_requests"), &body).await?;
             let mr = json::created_mr(&r.json(&self.host)?, &req.source.project, &project.path).ok_or_else(|| unreadable(&self.host, "merge request"))?;
             Ok(CreateOutcome { mr, failed: Vec::new() })
@@ -1962,7 +1963,7 @@ mod tests {
     #[test]
     fn normalizes_a_user_preferring_the_public_email() {
         let u = json::user(&json!({"id": 7, "username": "ada", "name": "", "avatar_url": "https://g/a.png", "web_url": "https://g/ada", "public_email": "", "email": "ada@corp.example"})).unwrap();
-        assert_eq!(u, ForgeUser { id: 7, username: "ada".into(), name: "ada".into(), avatar_url: Some("https://g/a.png".into()), web_url: "https://g/ada".into(), email: Some("ada@corp.example".into()), emails: vec!["ada@corp.example".into()] });
+        assert_eq!(u, ForgeUser { id: 7.into(), username: "ada".into(), name: "ada".into(), avatar_url: Some("https://g/a.png".into()), web_url: "https://g/ada".into(), email: Some("ada@corp.example".into()), emails: vec!["ada@corp.example".into()] });
         assert!(json::user(&json!({"id": 7})).is_none());
     }
 
@@ -1976,7 +1977,7 @@ mod tests {
             "merge_method": "rebase_merge", "squash_option": "always", "remove_source_branch_after_merge": true
         });
         let p = json::project("g", &v).unwrap();
-        assert_eq!((p.kind, p.id, p.owner.as_str(), p.fork_of.as_deref(), p.updated_at), (ForgeKind::GitLab, 77, "alice", Some("group/project"), Some(1_791_115_200)));
+        assert_eq!((p.kind, p.id, p.owner.as_str(), p.fork_of.as_deref(), p.updated_at), (ForgeKind::GitLab, 77.into(), "alice", Some("group/project"), Some(1_791_115_200)));
         assert_eq!(p.owner_avatar_url.as_deref(), Some("https://g/uploads/-/system/user/avatar/7/a.png"));
         let group = json::project("g", &json!({"id": 1, "path_with_namespace": "group/project", "namespace": {"full_path": "group", "kind": "group", "avatar_url": "https://g/uploads/g.png"}})).unwrap();
         assert_eq!(group.owner_avatar_url.as_deref(), Some("https://g/uploads/g.png"), "a group's too");
@@ -2269,7 +2270,7 @@ mod tests {
         });
         let ep = crate::endpoints::HostEndpoints { api: format!("{}/api/v4", s.base), web: s.base.clone(), avatars: None };
         let p = super::GitLabProvider::new("gitlab.example.com", &ep, gitnex_core::redact::Secret::new("glpat-FAKE-test-token"), None);
-        let project = ForgeProject { kind: ForgeKind::GitLab, id: 1, host: "gitlab.example.com".into(), path: "group/project".into(), name: "project".into(), owner: "group".into(), web_url: String::new(), default_branch: None, clone_https: String::new(), clone_ssh: String::new(), fork_of: None, updated_at: None, archived: false, owner_avatar_url: None };
+        let project = ForgeProject { kind: ForgeKind::GitLab, id: 1.into(), host: "gitlab.example.com".into(), path: "group/project".into(), name: "project".into(), owner: "group".into(), web_url: String::new(), default_branch: None, clone_https: String::new(), clone_ssh: String::new(), fork_of: None, updated_at: None, archived: false, owner_avatar_url: None };
         (s, p, project)
     }
 

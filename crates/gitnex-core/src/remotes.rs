@@ -10,6 +10,16 @@ pub struct RemoteUrl {
     pub path: String,
 }
 
+pub(crate) fn encode_path_segment(segment: &str) -> String {
+    segment.bytes().map(|b| {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            (b as char).to_string()
+        } else {
+            format!("%{b:02X}")
+        }
+    }).collect()
+}
+
 /// git for Windows reads `C:…` (a drive) and a path with `\` as local paths, never `host:path`
 /// (`has_dos_drive_prefix`); elsewhere `c:path` is host `c`.
 pub(crate) fn is_local_on_windows(url: &str) -> bool {
@@ -42,7 +52,37 @@ pub fn parse_remote_url(url: &str) -> Option<RemoteUrl> {
     if host_part.is_empty() || path.is_empty() {
         return None;
     }
-    Some(RemoteUrl { host: host_part.to_ascii_lowercase(), path })
+    let host = host_part.to_ascii_lowercase();
+    if host == "dev.azure.com" || host == "ssh.dev.azure.com" || host.ends_with(".visualstudio.com") {
+        let parts: Vec<_> = path.split('/').collect();
+        let (org, project, repo) = if host == "dev.azure.com" {
+            match parts.as_slice() {
+                [org, project, "_git", repo] => (*org, *project, *repo),
+                [org, "_git", repo] => (*org, *repo, *repo),
+                _ => return None,
+            }
+        } else if host == "ssh.dev.azure.com" || host == "vs-ssh.visualstudio.com" {
+            match parts.as_slice() {
+                ["v3", org, project, repo] => (*org, *project, *repo),
+                _ => return None,
+            }
+        } else {
+            let org = host.strip_suffix(".visualstudio.com")?;
+            match parts.as_slice() {
+                [project, "_git", repo] | ["DefaultCollection", project, "_git", repo] => (org, *project, *repo),
+                ["_git", repo] => (org, *repo, *repo),
+                _ => return None,
+            }
+        };
+        let host = crate::forge::accounts::normalize_azure_host(&format!("dev.azure.com/{org}")).ok()?;
+        let project = crate::forge::provider::percent_decode(project)?;
+        let repo = crate::forge::provider::percent_decode(repo)?;
+        if [&project, &repo].iter().any(|s| s.is_empty() || s.contains(['/', '\\']) || s == &"." || s == &".." || s.chars().any(char::is_control)) {
+            return None;
+        }
+        return Some(RemoteUrl { host, path: format!("{project}/{repo}") });
+    }
+    Some(RemoteUrl { host, path })
 }
 
 /// The host a forge account for `url` is named by (spec #4 §3.3): `parse_remote_url`'s, plus an
@@ -84,6 +124,11 @@ pub fn ssh_url_from_https(url: &str) -> Option<String> {
     if !scheme.eq_ignore_ascii_case("https") || rest.contains(['?', '#']) {
         return None;
     }
+    if let Some(r) = parse_remote_url(url)
+        && let Some(org) = r.host.strip_prefix("dev.azure.com/")
+    {
+        return Some(format!("git@ssh.dev.azure.com:v3/{org}/{}", r.path.split('/').map(encode_path_segment).collect::<Vec<_>>().join("/")));
+    }
     let (authority, path) = rest.split_once('/')?;
     let host = authority.rsplit('@').next()?.split(':').next()?;
     let path = path.trim_matches('/');
@@ -115,7 +160,7 @@ pub fn op_remotes(repo: &gix::Repository, names: &[String], direction: Direction
         .filter_map(|name| {
             let url = remote_url(repo, name, direction)?;
             let raw = config.string(format!("remote.{name}.url").as_str()).map(|v| v.to_str_lossy().into_owned());
-            Some(crate::ops::OpRemote { name: name.clone(), settable: raw.as_deref() == Some(url.as_str()), url })
+            Some(crate::ops::OpRemote { name: name.clone(), settable: raw.as_deref() == Some(url.as_str()), url, account: None })
         })
         .collect()
 }
@@ -125,7 +170,9 @@ pub fn op_remotes(repo: &gix::Repository, names: &[String], direction: Direction
 pub fn host_kind(host: &str) -> HostKind {
     let host = host.to_ascii_lowercase();
     let name = host.split(':').next().unwrap_or_default();
-    if host == "github.com" || host.ends_with(".github.com") {
+    if host == "dev.azure.com" || host.starts_with("dev.azure.com/") || host == "ssh.dev.azure.com" || host.ends_with(".visualstudio.com") {
+        HostKind::AzureDevOps
+    } else if host == "github.com" || host.ends_with(".github.com") {
         HostKind::GitHub
     } else if host == "gitlab.com" || host.split('.').any(|label| label.contains("gitlab")) {
         HostKind::GitLab
@@ -139,6 +186,32 @@ pub fn host_kind(host: &str) -> HostKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn azure_remotes_share_an_organization_scoped_identity() {
+        for url in [
+            "https://dev.azure.com/Orbital/Space%20Tools/_git/Orbit%20App",
+            "git@ssh.dev.azure.com:v3/orbital/Space%20Tools/Orbit%20App",
+            "ssh://git@ssh.dev.azure.com:22/v3/orbital/Space%20Tools/Orbit%20App",
+            "https://orbital.visualstudio.com/DefaultCollection/Space%20Tools/_git/Orbit%20App",
+            "git@vs-ssh.visualstudio.com:v3/orbital/Space%20Tools/Orbit%20App",
+        ] {
+            assert_eq!(p(url), Some(("dev.azure.com/orbital".into(), "Space Tools/Orbit App".into())), "{url}");
+            assert_eq!(forge_host(url).as_deref(), Some("dev.azure.com/orbital"));
+        }
+        assert_eq!(p("https://dev.azure.com/orbital/_git/Orbit"), Some(("dev.azure.com/orbital".into(), "Orbit/Orbit".into())));
+        assert_eq!(host_kind("dev.azure.com/orbital"), HostKind::AzureDevOps);
+        for url in [
+            "https://dev.azure.com/orbital/Space%2FTools/_git/Orbit",
+            "https://dev.azure.com/orbital/%2e%2e/_git/Orbit",
+            "https://dev.azure.com/orbital/Space/_git/%zz",
+            "git@ssh.dev.azure.com:v3/orbital/Space",
+        ] {
+            assert!(parse_remote_url(url).is_none(), "{url}");
+        }
+        assert_eq!(ssh_url_from_https("https://dev.azure.com/orbital/Space%20Tools/_git/Orbit%20App").as_deref(),
+            Some("git@ssh.dev.azure.com:v3/orbital/Space%20Tools/Orbit%20App"));
+    }
 
     fn p(url: &str) -> Option<(String, String)> {
         parse_remote_url(url).map(|u| (u.host, u.path))
@@ -191,7 +264,8 @@ mod tests {
         assert_eq!(ssh("https://gitlab.example.com:8443/group/project.git").as_deref(), Some("git@gitlab.example.com:group/project.git"), "the https port goes");
         assert_eq!(ssh("https://gitlab.example.com/group/sub/deeper/project/").as_deref(), Some("git@gitlab.example.com:group/sub/deeper/project.git"), "nested groups stay");
         assert_eq!(ssh("HTTPS://github.com/octo-org/widget").as_deref(), Some("git@github.com:octo-org/widget.git"));
-        for none in ["http://gitlab.example.com/group/project.git", "ssh://git@gitlab.example.com/group/project.git", "git@gitlab.example.com:group/project.git", "/srv/git/project.git", "file:///srv/git/project.git", "https://gitlab.example.com/", "https://gitlab.example.com", "https://gitlab.example.com/a/b?private_token=x", "https://-oProxyCommand=x/a/b"] {
+        for none in ["http://gitlab.example.com/group/project.git", "ssh://git@gitlab.example.com/group/project.git", "git@gitlab.example.com:group/project.git", "/srv/git/project.git", "file:///srv/git/project.git", "https://gitlab.example.com/", "https://gitlab.example.com", "https://gitlab.example.com/a/b?private_token=x", "https://-oProxyCommand=x/a/b",
+        ] {
             assert_eq!(ssh(none), None, "{none}");
         }
     }
@@ -200,15 +274,20 @@ mod tests {
     fn op_remotes_come_in_config_order_and_say_whether_set_url_reaches_them() {
         let r = crate::testing::TestRepo::new();
         r.commit("a");
-        r.git(&["remote", "add", "zed", "https://gitlab.example.com/group/zed.git"]);
-        r.git(&["remote", "add", "alpha", "https://gitlab.example.com/group/alpha.git"]);
-        r.git(&["remote", "set-url", "--push", "alpha", "https://push.example.com/group/alpha.git"]);
+        r.git(&["remote", "add", "zed", "https://gitlab.example.com/group/zed.git",
+        ]);
+        r.git(&["remote", "add", "alpha", "https://gitlab.example.com/group/alpha.git",
+        ]);
+        r.git(&["remote", "set-url", "--push", "alpha", "https://push.example.com/group/alpha.git",
+        ]);
         r.git(&["config", "url.https://gitlab.example.com/.insteadOf", "gl:"]);
         r.git(&["remote", "add", "short", "gl:group/short.git"]);
         let repo = gix::open(r.path()).unwrap();
         let names = remote_names_in_order(&repo);
         assert_eq!(names, ["zed", "alpha", "short"]);
-        let got = |d| op_remotes(&repo, &names, d).into_iter().map(|o| (o.name, o.url, o.settable)).collect::<Vec<_>>();
+        let got = |d| {
+            op_remotes(&repo, &names, d).into_iter().map(|o| (o.name, o.url, o.settable)).collect::<Vec<_>>()
+        };
         assert_eq!(got(Direction::Fetch), [
             ("zed".into(), "https://gitlab.example.com/group/zed.git".into(), true),
             ("alpha".into(), "https://gitlab.example.com/group/alpha.git".into(), true),
@@ -242,8 +321,10 @@ mod tests {
         r.git(&["config", "url.https://github.com/.insteadOf", "gh:"]);
         r.git(&["remote", "add", "origin", "gh:owner/repo.git"]);
         // `pushInsteadOf`: only the push direction is rewritten; fetch is untouched.
-        r.git(&["config", "url.git@internal.example.com:.pushInsteadOf", "https://github.com/"]);
-        r.git(&["remote", "add", "backup", "https://github.com/owner/other.git"]);
+        r.git(&["config", "url.git@internal.example.com:.pushInsteadOf", "https://github.com/",
+        ]);
+        r.git(&["remote", "add", "backup", "https://github.com/owner/other.git",
+        ]);
         let repo = gix::open(r.path()).unwrap();
         assert_eq!(remote_url(&repo, "origin", Direction::Fetch).as_deref(), Some("https://github.com/owner/repo.git"));
         assert_eq!(remote_url(&repo, "origin", Direction::Push).as_deref(), Some("https://github.com/owner/repo.git"), "no pushInsteadOf here: push falls back to the fetch URL");

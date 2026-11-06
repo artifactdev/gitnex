@@ -363,6 +363,7 @@ pub enum HostKind {
     GitHub,
     Forgejo,
     Bitbucket,
+    AzureDevOps,
     Generic,
 }
 

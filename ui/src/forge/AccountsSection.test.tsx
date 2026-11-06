@@ -51,6 +51,26 @@ beforeEach(() => {
 });
 
 describe('Settings › Accounts', () => {
+  it('detects Azure DevOps organizations and submits a PAT without dropping the organization', async () => {
+    const host = 'https://dev.azure.com/orbital';
+    const account = { ...ada('keyring'), account: { ...ada('keyring').account, id: 'dev.azure.com/orbital', host: 'dev.azure.com/orbital', kind: 'azuredevops' as const, version: null, user: { ...ada('keyring').account.user, id: '11111111-2222-3333-4444-555555555555' } } };
+    api.addForgeAccount.mockResolvedValue(account);
+    show();
+    await openAdd();
+    const form = screen.getByRole('form', { name: 'Add a forge account' });
+    fireEvent.change(within(form).getByLabelText('Host'), { target: { value: host } });
+    expect(within(form).getByRole('button', { name: 'Azure DevOps' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(form).getByText(/Code \(Read\)/)).toBeVisible();
+    fireEvent.click(within(form).getByRole('button', { name: /^Create token on/ }));
+    await waitFor(() => expect(api.forgeTokenPage).toHaveBeenCalledWith(host, 'azuredevops', undefined));
+    api.forgeAccounts.mockResolvedValue([account]);
+    fireEvent.change(within(form).getByLabelText('Token'), { target: { value: 'FAKE-azure-pat' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Add account' }));
+    await waitFor(() => expect(api.addForgeAccount).toHaveBeenCalledWith(host, 'azuredevops', 'FAKE-azure-pat'));
+    expect(api.detectForge).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue('FAKE-azure-pat')).toBeNull();
+  });
+
   it('adds Bitbucket using a full installation URL and preserves it when replacing a token', async () => {
     const base = 'https://code.example.com:8443/bitbucket';
     const account = { ...ada('keyring'), account: { ...ada('keyring').account, id: 'code.example.com:8443', host: 'code.example.com:8443', kind: 'bitbucket' as const, baseUrl: base, user: { id: 17, username: 'nova', name: 'Nova Pilot', avatarUrl: null, webUrl: `${base}/users/nova`, email: null, emails: [] } } };

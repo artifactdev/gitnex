@@ -7,7 +7,7 @@ use gitnex_core::events::{AppEvent, OpKind};
 use gitnex_core::git::{GitCli, GitInvocation};
 use gitnex_core::log::CommandLog;
 use gitnex_core::testing::isolated_git_env;
-use gitnex_harness::{serve, Harness, HarnessOptions};
+use gitnex_harness::{Harness, HarnessOptions, serve};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +25,155 @@ fn cli() -> GitCli {
     GitCli::new(Arc::new(CommandLog::new(10))).with_env(isolated_git_env())
 }
 
-async fn ls_remote(addr: SocketAddr, api: &Api, op: &gitnex_core::ops::OpGuard) -> gitnex_core::error::GbError {
+#[tokio::test(flavor = "multi_thread")]
+async fn azure_pat_reaches_real_git_without_a_prompt_or_persistent_helper() {
+    use gitnex_core::askpass::AskpassServer;
+    use gitnex_core::events::EventBus;
+    use gitnex_core::ops::{OpRegistry, OpRemote};
+    use gitnex_core::redact::Secret;
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ops = Arc::new(OpRegistry::default());
+    let bus = EventBus::new();
+    let mut events = bus.subscribe();
+    let server = AskpassServer::start(
+        dir.path(),
+        env!("CARGO_BIN_EXE_gitnex-harness").into(),
+        ops.clone(),
+        bus,
+    )
+    .await
+    .unwrap();
+    let token = Secret::new(format!(
+        "FAKE-azure-{}",
+        gitnex_core::random::random_hex(16)
+    ));
+    let provided = token.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    server.set_forge_git_token(Arc::new(move |remote| {
+        assert_eq!(remote.account.as_deref(), Some("chosen-account"));
+        counted.fetch_add(1, Ordering::SeqCst);
+        let token = provided.clone();
+        Box::pin(async move { Ok(Some(token)) })
+    }));
+    let repo = gitnex_core::testing::TestRepo::new();
+    repo.git(&[
+        "config",
+        "credential.helper",
+        "!echo EXISTING_HELPER_USED >&2; exit 1",
+    ]);
+    let before = std::fs::read(repo.path().join(".git/config")).unwrap();
+
+    for (url, interactive) in [
+        (
+            "https://orbital@dev.azure.com/orbital/Space%20Tools/_git/Orbit",
+            true,
+        ),
+        ("https://dev.azure.com/orbital/Space/_git/O'rbit", false),
+        ("https://dev.azure.com/orbital/Space/_git/Orbit%2520%25", true),
+        ("https://dev.azure.com/orbital/Sp%C3%A4ce/_git/O%27rbit%25", false),
+        (
+            "https://orbital.visualstudio.com/DefaultCollection/Space/_git/Orbit",
+            true,
+        ),
+    ] {
+        let op = ops.begin(OpKind::Fetch, Some(1), interactive);
+        op.set_remotes(vec![OpRemote {
+            name: "origin".into(),
+            url: url.into(),
+            settable: true,
+            account: Some("chosen-account".into()),
+        }]);
+        let scope = gitnex_core::askpass::azure_credential_scope(url).unwrap();
+        let mut env = server.env_for(Some(op.id));
+        env.extend(server.credential_env(&[scope]));
+        assert!(
+            !env.iter()
+                .any(|(_, v)| v.to_string_lossy().contains(token.expose()))
+        );
+        for action in ["fill", "approve", "reject"] {
+            let input = if action == "fill" {
+                format!("url={url}\n\n")
+            } else {
+                format!(
+                    "url={url}\nusername=gitnex\npassword={}\n\n",
+                    token.expose()
+                )
+            };
+            let mut child = tokio::process::Command::new("git")
+                .args(["--no-pager", "credential", action])
+                .current_dir(repo.path())
+                .envs(isolated_git_env())
+                .envs(env.clone())
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .await
+                .unwrap();
+            let out = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git credential {action} failed for {url} ({} token requests): {}",
+                calls.load(Ordering::SeqCst),
+                gitnex_core::redact::redact(&String::from_utf8_lossy(&out.stderr))
+            );
+            assert!(
+                out.stderr.is_empty(),
+                "configured helpers must not run for covered Azure URLs"
+            );
+            if action == "fill" {
+                let output = String::from_utf8(out.stdout).unwrap();
+                assert!(output.lines().any(|line| line == "username=gitnex"));
+                assert!(
+                    output
+                        .lines()
+                        .any(|line| line == format!("password={}", token.expose()))
+                );
+            }
+        }
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        5,
+        "store/erase must neither read nor delete the account token"
+    );
+    assert!(std::fs::read(repo.path().join(".git/config")).unwrap() == before);
+    assert!(
+        events.try_recv().is_err(),
+        "the token must not reach an authentication dialog"
+    );
+    let mut child = tokio::process::Command::new("git")
+        .args(["--no-pager", "credential", "approve"])
+        .current_dir(repo.path())
+        .envs(isolated_git_env())
+        .envs(server.env_for(None))
+        .envs(server.credential_env(&["https://dev.azure.com/orbital/Space/_git/Orbit".into()]))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true)
+        .spawn().unwrap();
+    child.stdin.take().unwrap().write_all(b"url=https://dev.azure.com/lunar/Space/_git/Orbit\nusername=fake\npassword=FAKE-fallback\n\n").await.unwrap();
+    let out = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output()).await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("EXISTING_HELPER_USED"), "uncovered organizations keep the configured helper");
+    server.close();
+}
+
+async fn ls_remote(addr: SocketAddr, api: &Api, op: &gitnex_core::ops::OpGuard,
+) -> gitnex_core::error::GbError {
     let dir = tempfile::tempdir().unwrap();
     let url = format!("http://{addr}/test/auth/x.git");
     cli()
@@ -49,7 +197,8 @@ async fn interactive_prompts_reach_the_ui_and_answers_reach_git() {
         let mut prompts = Vec::new();
         while prompts.len() < 2 {
             if let Ok(AppEvent::AuthWaiting { prompt, text, secret, .. }) = rx.recv().await {
-                server.answer(prompt, Some(if secret { "pw".into() } else { "user".into() })).unwrap();
+                server.answer(prompt, Some(if secret { "pw".into() } else { "user".into() }),
+                    ).unwrap();
                 prompts.push((text, secret));
             }
         }
@@ -99,11 +248,15 @@ async fn cancelling_while_waiting_kills_git() {
     assert!(tokio::time::timeout(Duration::from_secs(5), resolved).await.unwrap().unwrap());
 }
 
-async fn open_repo_with_auth_remote(addr: SocketAddr, api: &Api) -> (gitnex_core::testing::TestRepo, serde_json::Value) {
+async fn open_repo_with_auth_remote(addr: SocketAddr, api: &Api,
+) -> (gitnex_core::testing::TestRepo, serde_json::Value) {
     let r = gitnex_core::testing::TestRepo::new();
     r.commit("a");
-    r.git(&["remote", "add", "origin", &format!("http://{addr}/test/auth/x.git")]);
-    let opened = api.dispatch(serde_json::from_value(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}})).unwrap()).await.unwrap();
+    r.git(&["remote", "add", "origin", &format!("http://{addr}/test/auth/x.git"),
+    ]);
+    let opened = api.dispatch(serde_json::from_value(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ).unwrap(),
+        ).await.unwrap();
     let id = opened["id"].clone();
     (r, id)
 }
@@ -113,7 +266,9 @@ async fn background_fetch_needing_auth_is_skipped() {
     let (addr, api) = start().await;
     let (_r, id) = open_repo_with_auth_remote(addr, &api).await;
     let mut rx = api.subscribe();
-    let out = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": true}})).unwrap()).await.unwrap();
+    let out = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": true}}),
+            ).unwrap(),
+        ).await.unwrap();
     assert_eq!(out, serde_json::json!({"status": "skipped", "reason": "authRequired"}));
     let mut finished = false;
     while let Ok(ev) = rx.try_recv() {
@@ -134,7 +289,9 @@ async fn cancelling_a_user_fetch_at_its_prompt_cancels_it() {
         loop {
             let ev = rx.recv().await.unwrap();
             if let AppEvent::AuthWaiting { op, .. } = &ev {
-                canceller.dispatch(serde_json::from_value(serde_json::json!({"method": "cancelOp", "params": {"op": op}})).unwrap()).await.unwrap();
+                canceller.dispatch(serde_json::from_value(serde_json::json!({"method": "cancelOp", "params": {"op": op}}),
+                        ).unwrap(),
+                    ).await.unwrap();
             }
             let done = matches!(ev, AppEvent::OpFinished { .. });
             seen.push(ev);
@@ -143,7 +300,9 @@ async fn cancelling_a_user_fetch_at_its_prompt_cancels_it() {
             }
         }
     });
-    let err = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": false}})).unwrap()).await.unwrap_err();
+    let err = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": false}}),
+            ).unwrap(),
+        ).await.unwrap_err();
     assert_eq!(err.kind, GbErrorKind::Cancelled, "{err:?}");
     let seen = tokio::time::timeout(Duration::from_secs(5), events).await.unwrap().unwrap();
     assert!(seen.iter().any(|e| matches!(e, AppEvent::AuthResolved { .. })), "the modal closes: {seen:?}");
@@ -162,7 +321,9 @@ async fn a_clone_cancelled_at_its_prompt_leaves_nothing_behind() {
         loop {
             match rx.recv().await.unwrap() {
                 AppEvent::AuthWaiting { op, .. } => {
-                    canceller.dispatch(serde_json::from_value(serde_json::json!({"method": "cancelOp", "params": {"op": op}})).unwrap()).await.unwrap();
+                    canceller.dispatch(serde_json::from_value(serde_json::json!({"method": "cancelOp", "params": {"op": op}}),
+                            ).unwrap(),
+                        ).await.unwrap();
                 }
                 AppEvent::OpFinished { outcome, .. } => return outcome,
                 _ => {}
@@ -186,7 +347,8 @@ async fn an_ssh_passphrase_prompt_reaches_the_modal_without_a_display() {
     let no_display: gitnex_core::git::CommandHook = Arc::new(|c| {
         c.env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY");
     });
-    let api = Arc::new(Api::new(GitCli::new(Arc::new(CommandLog::new(100))).with_env(isolated_git_env()).with_command_hook(no_display), None));
+    let api = Arc::new(Api::new(GitCli::new(Arc::new(CommandLog::new(100))).with_env(isolated_git_env()).with_command_hook(no_display), None,
+    ));
     let runtime = tempfile::tempdir().unwrap();
     api.start_askpass(runtime.path(), env!("CARGO_BIN_EXE_gitnex-harness").into()).await.unwrap();
     let r = gitnex_core::testing::TestRepo::new();
@@ -195,12 +357,16 @@ async fn an_ssh_passphrase_prompt_reaches_the_modal_without_a_display() {
     // `ssh://fake/<path>` with `/` separators (`/C:/…` on Windows), and the script's path as sh reads it.
     let origin_path = gitnex_core::platform::fs::to_git_path(&origin);
     let sep = if origin_path.starts_with('/') { "" } else { "/" };
-    r.git(&["remote", "set-url", "origin", &format!("ssh://fake{sep}{origin_path}")]);
+    r.git(&["remote", "set-url", "origin", &format!("ssh://fake{sep}{origin_path}"),
+    ]);
     let fake_ssh = gitnex_core::platform::fs::to_git_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/fake-ssh"));
-    r.git(&["config", "core.sshCommand", &format!("{fake_ssh} --passphrase testpass")]);
+    r.git(&["config", "core.sshCommand", &format!("{fake_ssh} --passphrase testpass"),
+    ]);
     r.git(&["config", "ssh.variant", "simple"]);
     r.git_in(&origin, &["branch", "over-ssh", "main"]);
-    let opened = api.dispatch(serde_json::from_value(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}})).unwrap()).await.unwrap();
+    let opened = api.dispatch(serde_json::from_value(serde_json::json!({"method": "openRepo", "params": {"path": r.path()}}),
+            ).unwrap(),
+        ).await.unwrap();
     let mut rx = api.subscribe();
     let server = api.askpass().unwrap().clone();
     let asked = tokio::spawn(async move {
@@ -236,7 +402,9 @@ async fn a_fetch_whose_prompt_the_user_cancels_reports_cancelled() {
             }
         }
     });
-    let err = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": false}})).unwrap()).await.unwrap_err();
+    let err = api.dispatch(serde_json::from_value(serde_json::json!({"method": "fetch", "params": {"repo": id, "background": false}}),
+            ).unwrap(),
+        ).await.unwrap_err();
     assert_eq!(err.kind, GbErrorKind::Cancelled, "{err:?}");
     assert_eq!(tokio::time::timeout(Duration::from_secs(5), events).await.unwrap().unwrap(), gitnex_core::events::OpOutcome::Cancelled);
 }

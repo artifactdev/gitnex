@@ -29,7 +29,7 @@ pub enum NameMatch {
 #[derive(Default)]
 pub struct KnownNames {
     /// Normalized display name or username → user id → that user's `avatar_url`.
-    by_name: Mutex<HashMap<String, HashMap<u64, Option<String>>>>,
+    by_name: Mutex<HashMap<String, HashMap<gitnex_core::forge::ForgeId, Option<String>>>>,
 }
 
 impl KnownNames {
@@ -39,7 +39,7 @@ impl KnownNames {
             if key.is_empty() || (map.len() >= MAX_NAMES && !map.contains_key(&key)) {
                 continue;
             }
-            map.entry(key).or_default().insert(u.id, u.avatar_url.clone());
+            map.entry(key).or_default().insert(u.id.clone(), u.avatar_url.clone());
         }
     }
 
@@ -89,7 +89,7 @@ mod tests {
     use super::*;
 
     fn user(id: u64, username: &str, name: &str, avatar: Option<&str>) -> ForgeUser {
-        ForgeUser { id, username: username.into(), name: name.into(), avatar_url: avatar.map(str::to_string), web_url: String::new(), email: None, emails: vec![] }
+        ForgeUser { id: id.into(), username: username.into(), name: name.into(), avatar_url: avatar.map(str::to_string), web_url: String::new(), email: None, emails: vec![] }
     }
 
     #[test]

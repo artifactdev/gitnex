@@ -95,7 +95,7 @@ mod tests {
         let api = api();
         let p = api.store().active_profile().id;
         let user = ForgeUser {
-            id: 1,
+            id: 1.into(),
             username: "robin".into(),
             name: "Robin".into(),
             avatar_url: None,

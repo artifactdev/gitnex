@@ -29,7 +29,7 @@ export function rankPeople(users: readonly ForgeUser[], query: string): ForgeUse
 
 /** `first` (the MR's people) then `more` (search results) without repeats, up to `limit`. */
 export function mergePeople(first: readonly ForgeUser[], more: readonly ForgeUser[], limit = MAX_HITS): ForgeUser[] {
-  const seen = new Set<number>();
+  const seen = new Set<ForgeUser['id']>();
   const out: ForgeUser[] = [];
   for (const u of [...first, ...more]) {
     if (seen.has(u.id)) continue;

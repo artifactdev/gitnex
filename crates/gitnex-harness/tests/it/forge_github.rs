@@ -30,7 +30,7 @@ async fn maps_a_fork_to_its_parent_lists_forks_and_reads_settings() {
     let f = FakeForge::start().await;
     let p = provider(&f, GITHUB_TOKEN);
     let fork = p.project("octocat/widget").await.unwrap().value;
-    assert_eq!((fork.id, fork.fork_of.as_deref(), fork.host.as_str()), (502, Some("octo-org/widget"), "github.com"));
+    assert_eq!((fork.id, fork.fork_of.as_deref(), fork.host.as_str()), (502.into(), Some("octo-org/widget"), "github.com"));
     let upstream = p.project("octo-org/widget").await.unwrap().value;
     let forks = p.forks(&upstream).await.unwrap();
     assert_eq!(forks.iter().map(|x| x.path.as_str()).collect::<Vec<_>>(), ["octocat/widget"]);

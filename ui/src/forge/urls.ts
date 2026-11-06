@@ -43,6 +43,10 @@ function encodeSegments(p: string): string {
 /** `https://{host}/{path}`. `project`, when given, replaces `r.path`. */
 function baseUrl(r: ProjectRemote, project?: string | null): string {
   if (r.hostKind === 'bitbucket') return bitbucketRepoUrl(r.baseUrl ?? `https://${r.host}`, project ?? r.path);
+  if (r.hostKind === 'azuredevops') {
+    const [p, repo] = (project ?? r.path).split('/');
+    return `https://${r.host}/${encodeURIComponent(p)}/_git/${encodeURIComponent(repo ?? p)}`;
+  }
   return `https://${r.host}/${project ?? r.path}`;
 }
 
@@ -60,6 +64,11 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
  * anchors like GitHub, but its path names the ref's type (`ref` is a branch or a full SHA). */
 export function fileUrl(r: ProjectRemote, ref: string, file: string, lines?: { a: number; b: number }): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'azuredevops') {
+    const version = `${FULL_SHA.test(ref) ? 'GC' : 'GB'}${ref}`;
+    const line = lines ? `&line=${lines.a}&lineEnd=${lines.b}&lineStartColumn=1&lineEndColumn=1` : '';
+    return `${baseUrl(r)}?path=${encodeURIComponent(`/${file}`)}&version=${encodeURIComponent(version)}${line}`;
+  }
   const encRef = encodeSegments(ref);
   const encFile = encodeSegments(file);
   if (r.hostKind === 'bitbucket') {
@@ -85,6 +94,7 @@ export function repoUrl(r: ProjectRemote): string | null {
 
 export function branchUrl(r: ProjectRemote, branch: string): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'azuredevops') return `${baseUrl(r)}?version=${encodeURIComponent(`GB${branch}`)}`;
   const enc = encodeSegments(branch);
   if (r.hostKind === 'bitbucket') return `${baseUrl(r)}/browse?at=${encodeURIComponent(`refs/heads/${branch}`)}`;
   if (r.hostKind === 'forgejo') return `${baseUrl(r)}/src/branch/${enc}`;
@@ -93,6 +103,7 @@ export function branchUrl(r: ProjectRemote, branch: string): string | null {
 
 export function commitUrl(r: ProjectRemote, sha: string): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'azuredevops') return `${baseUrl(r)}/commit/${encodeURIComponent(sha)}`;
   if (r.hostKind === 'bitbucket') return `${baseUrl(r)}/commits/${encodeURIComponent(sha)}`;
   return r.hostKind === 'gitlab' ? `${baseUrl(r)}/-/commit/${sha}` : `${baseUrl(r)}/commit/${sha}`;
 }
@@ -102,12 +113,13 @@ export function commitUrl(r: ProjectRemote, sha: string): string | null {
  * `group/sub/project` or `owner/repo` override) replaces `r.path` when it's non-null. */
 export function mergeRequestUrl(r: ProjectRemote, project: string | null, n: number): string | null {
   if (r.hostKind === 'generic') return null;
+  if (r.hostKind === 'azuredevops') return `${baseUrl(r, project)}/pullrequest/${n}`;
   if (r.hostKind === 'bitbucket') return `${baseUrl(r, project)}/pull-requests/${n}`;
   if (r.hostKind === 'forgejo') return `${baseUrl(r, project)}/pulls/${n}`;
   return r.hostKind === 'gitlab' ? `${baseUrl(r, project)}/-/merge_requests/${n}` : `${baseUrl(r, project)}/pull/${n}`;
 }
 
 export function issueUrl(r: ProjectRemote, project: string | null, n: number): string | null {
-  if (r.hostKind === 'generic' || r.hostKind === 'bitbucket') return null;
+  if (r.hostKind === 'generic' || r.hostKind === 'bitbucket' || r.hostKind === 'azuredevops') return null;
   return r.hostKind === 'gitlab' ? `${baseUrl(r, project)}/-/issues/${n}` : `${baseUrl(r, project)}/issues/${n}`;
 }

@@ -7,7 +7,7 @@ import type { MdFlavor, MdReferenceNode } from '../types';
  * exclude `.` and `-`, so a match never starts inside a longer segment. */
 const SEG = '[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}';
 /** GitHub and Forgejo: `owner/repo`; GitLab: `group/sub/project`. */
-const PROJECT: Record<MdFlavor, string> = { github: `${SEG}/${SEG}`, gitlab: `${SEG}(?:/${SEG}){1,20}`, forgejo: `${SEG}/${SEG}`, bitbucket: `~?${SEG}/${SEG}` };
+const PROJECT: Record<MdFlavor, string> = { github: `${SEG}/${SEG}`, gitlab: `${SEG}(?:/${SEG}){1,20}`, forgejo: `${SEG}/${SEG}`, bitbucket: `~?${SEG}/${SEG}`, azuredevops: `${SEG}/${SEG}` };
 
 const node = (refKind: MdReferenceNode['refKind'], value: string, over: Partial<MdReferenceNode>): MdReferenceNode => ({ type: 'reference', refKind, project: null, number: null, sha: null, user: null, value, ...over });
 
@@ -29,6 +29,10 @@ export function remarkReferences({ flavor }: { flavor: MdFlavor }) {
     const issue = new RegExp(`(?<![\\w/#&.-])(?:(${PROJECT[flavor]}))?#(\\d+)(?![\\w#])`, 'g');
     const mr = new RegExp(`(?<![\\w/!.-])(?:(${PROJECT.gitlab}))?!(\\d+)(?![\\w!])`, 'g');
     const shas = /(?<![\w@/.#-])[0-9a-f]{7,40}(?![\w-])/g;
+    if (flavor === 'azuredevops') {
+      findAndReplace(tree, [[shas, sha]], { ignore: ['link', 'linkReference'] });
+      return;
+    }
     const mentions = /(?<![\w`@/.+-])@([A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?)(?![\w@])/g;
     const list: FindAndReplaceList = [[issue, issueOrMr(flavor === 'bitbucket' ? 'mr' : 'issue')], [mentions, mention], [shas, sha]];
     if (flavor === 'gitlab') list.unshift([mr, issueOrMr('mr')]);

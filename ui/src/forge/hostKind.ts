@@ -5,13 +5,15 @@ import type { HostKind } from '../api/gen/HostKind';
 export function bareHost(input: string): string {
   const s = input.trim();
   const rest = s.includes('://') ? s.slice(s.indexOf('://') + 3) : s;
-  return (rest.split(/[/?#]/)[0] ?? '').toLowerCase();
+  const azure = /^(dev\.azure\.com\/[^/?#]+)\/?$/i.exec(rest);
+  return (azure?.[1] ?? rest.split(/[/?#]/)[0] ?? '').toLowerCase();
 }
 
 /** A host's forge type from its name: the Rust `host_kind` (core spec §14.4). The profile's
  * override still wins (`effectiveKind`). */
 export function detectHostKind(host: string): HostKind {
   const h = host.toLowerCase();
+  if (h === 'dev.azure.com' || h.startsWith('dev.azure.com/') || h === 'ssh.dev.azure.com' || h.endsWith('.visualstudio.com')) return 'azuredevops';
   if (h === 'github.com' || h.endsWith('.github.com')) return 'github';
   if (h === 'gitlab.com' || h.split('.').some((label) => label.includes('gitlab'))) return 'gitlab';
   const name = h.split(':')[0];
@@ -20,4 +22,4 @@ export function detectHostKind(host: string): HostKind {
   return 'generic';
 }
 
-export const HOST_KIND_NAMES: Record<HostKind, string> = { gitlab: 'GitLab', github: 'GitHub', forgejo: 'Forgejo', bitbucket: 'Bitbucket', generic: 'Generic' };
+export const HOST_KIND_NAMES: Record<HostKind, string> = { gitlab: 'GitLab', github: 'GitHub', forgejo: 'Forgejo', bitbucket: 'Bitbucket', azuredevops: 'Azure DevOps', generic: 'Generic' };

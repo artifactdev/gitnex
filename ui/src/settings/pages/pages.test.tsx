@@ -341,7 +341,7 @@ describe('settings pages', () => {
     const dialog = show();
     openPage('Hosts');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Forge type for the added host' }));
-    expect(useMenu.getState().rows?.map((r) => (r.kind === 'action' ? r.label : null))).toEqual(['GitLab', 'GitHub', 'Forgejo', 'Bitbucket', 'Generic (no forge links)']);
+    expect(useMenu.getState().rows?.map((r) => (r.kind === 'action' ? r.label : null))).toEqual(['GitLab', 'GitHub', 'Forgejo', 'Bitbucket', 'Azure DevOps', 'Generic (no forge links)']);
     const forgejo = useMenu.getState().rows?.find((r) => r.kind === 'action' && r.label === 'Forgejo');
     act(() => { if (forgejo?.kind === 'action') forgejo.run(); useMenu.getState().close(); });
     fireEvent.change(within(dialog).getByLabelText('Add a host'), { target: { value: 'code.example.org' } });

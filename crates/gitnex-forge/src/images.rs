@@ -254,7 +254,7 @@ mod tests {
 
     fn group_project() -> ForgeProject {
         ForgeProject {
-            kind: ForgeKind::GitLab, id: 42, host: "gitlab.example.com".into(), path: "group/project".into(), name: "project".into(), owner: "group".into(),
+            kind: ForgeKind::GitLab, id: 42.into(), host: "gitlab.example.com".into(), path: "group/project".into(), name: "project".into(), owner: "group".into(),
             web_url: "https://gitlab.example.com/group/project".into(), default_branch: Some("main".into()), clone_https: String::new(), clone_ssh: String::new(),
             fork_of: None, updated_at: None, archived: false, owner_avatar_url: None,
         }

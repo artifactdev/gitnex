@@ -234,11 +234,8 @@ pub(crate) fn display_command(args: &[&str]) -> String {
 }
 
 /// Notes on `op` the remotes it talks to (`names`, else every remote in `fetch --all`'s order),
-/// so a credential prompt can say which one it's about (spec §5.4). Only a user's op prompts.
+/// so credentials can be tied to the operation's URLs. Only a user's op may prompt.
 pub(crate) fn note_op_remotes(op: &OpEntry, root: &Path, names: Option<&[String]>, direction: gix::remote::Direction) {
-    if !op.interactive {
-        return;
-    }
     let Ok(repo) = gix::open(root) else { return };
     let names = names.map_or_else(|| crate::remotes::remote_names_in_order(&repo), <[String]>::to_vec);
     op.set_remotes(crate::remotes::op_remotes(&repo, &names, direction));
@@ -435,6 +432,12 @@ impl Api {
         // absolute ones), so the cwd changes nothing else.
         let cwd = PathBuf::from("/");
         let op = self.ops.begin(OpKind::Clone, None, true);
+        op.set_remotes(vec![crate::ops::OpRemote {
+            name: "origin".into(),
+            url: url.clone(),
+            settable: false,
+            account: None,
+        }]);
         self.bus.emit(AppEvent::OpStarted { op: op.id, kind: OpKind::Clone, repo: None, label: dest.clone(), interactive: op.interactive });
         let (tx, progress) = forward_progress(self.bus.clone(), op.id);
         let args = ["clone", "--progress", "--", url.as_str(), dest.as_str()];
@@ -527,7 +530,7 @@ mod tests {
     /// A user's fetch notes the remotes it reaches, for a prompt's "Use SSH instead"; a
     /// background one, which never prompts, doesn't.
     #[test]
-    fn a_users_op_notes_its_remotes() {
+    fn network_ops_note_their_remotes_even_without_prompts() {
         let r = TestRepo::new();
         r.commit("a");
         r.git(&["remote", "add", "origin", "https://gitlab.example.com/group/project.git"]);
@@ -540,7 +543,7 @@ mod tests {
         assert_eq!(op.remotes().iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["fork"]);
         let bg = api.ops.begin(OpKind::Fetch, None, false);
         note_op_remotes(&bg, r.path(), None, gix::remote::Direction::Fetch);
-        assert!(bg.remotes().is_empty());
+        assert_eq!(bg.remotes().iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["origin", "fork"]);
     }
 
     #[test]

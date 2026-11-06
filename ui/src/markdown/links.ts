@@ -51,11 +51,13 @@ export function webRoot(p: { path: string; webUrl: string; kind?: ForgeKind }, k
   const tail = `/${p.path}`;
   return p.webUrl.toLowerCase().endsWith(tail.toLowerCase()) ? p.webUrl.slice(0, -tail.length) : new URL(p.webUrl).origin;
 }
-const MR_PATH: Record<ForgeKind, string> = { gitlab: '-/merge_requests', github: 'pull', forgejo: 'pulls', bitbucket: 'pull-requests' };
+const MR_PATH: Record<ForgeKind, string> = { gitlab: '-/merge_requests', github: 'pull', forgejo: 'pulls', bitbucket: 'pull-requests', azuredevops: 'pullrequest' };
 export const mrUrl = (kind: ForgeKind, web: string, n: number) => `${web}/${MR_PATH[kind]}/${n}`;
-export const issueUrl = (kind: ForgeKind, web: string, n: number) => kind === 'bitbucket' ? null : `${web}${dash(kind)}/issues/${n}`;
+export const issueUrl = (kind: ForgeKind, web: string, n: number) => kind === 'bitbucket' || kind === 'azuredevops' ? null : `${web}${dash(kind)}/issues/${n}`;
 export const commitUrl = (kind: ForgeKind, web: string, sha: string) => kind === 'bitbucket' ? `${web}/commits/${encodeURIComponent(sha)}` : `${web}${dash(kind)}/commit/${sha}`;
-export const blobUrl = (kind: ForgeKind, web: string, branch: string, path: string) => kind === 'bitbucket'
+export const blobUrl = (kind: ForgeKind, web: string, branch: string, path: string) => kind === 'azuredevops'
+  ? `${web}?path=${encodeURIComponent(`/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '')}`)}&version=${encodeURIComponent(`GB${branch}`)}`
+  : kind === 'bitbucket'
   ? `${web}/browse/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}?at=${encodeURIComponent(branch)}`
   : `${web}${kind === 'forgejo' ? '/src/branch' : `${dash(kind)}/blob`}/${encodeURIComponent(branch)}/${path.replace(/^(\.\/)+/, '').replace(/^\/+/, '')}`;
 
@@ -101,6 +103,7 @@ const PAGES: Record<ForgeKind, { mr: RegExp; commit: RegExp; blob: RegExp }> = {
   // Forgejo's file pages name the ref's type: `src/branch/main/…`, `src/commit/<sha>/…`, `src/tag/v1/…`.
   forgejo: { mr: /^pulls\/(\d+)(?:\/|$)/, commit: /^commit\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /^src\/(?:branch|commit|tag)\/([^/]+\/.+)$/ },
   bitbucket: { mr: /^pull-requests\/(\d+)(?:\/|$)/, commit: /^commits\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /$^/ },
+  azuredevops: { mr: /$^/, commit: /^commit\/([0-9a-f]{7,40})(?:\/|$)/i, blob: /$^/ },
 };
 
 /** The page `rest` is: the path below a project's web URL, with no query or anchor. */

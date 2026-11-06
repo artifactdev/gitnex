@@ -32,6 +32,9 @@
 .account-add .field { display: grid; grid-template-columns: 90px 1fr; gap: 6px 12px; align-items: center; }
 .account-add .field > label, .account-add .field-label { text-align: right; color: var(--text-secondary); }
 .account-add .field-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.account-add .account-forge-options { flex-direction: column; align-items: flex-start; }
+.account-forge-options .seg { flex-wrap: wrap; max-width: 100%; }
+.account-forge-options > .dim { min-height: 1.4em; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .account-add .field-help { grid-column: 2; margin: 0; font-size: 12px; }
 /* One line, kept while empty: the form keeps its height as the host changes. */
 .account-add .account-taken { min-height: 1.4em; line-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

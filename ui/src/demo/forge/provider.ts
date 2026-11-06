@@ -16,6 +16,7 @@ import type { ForgePipeline } from '../../api/gen/ForgePipeline';
 import type { ForgeProject } from '../../api/gen/ForgeProject';
 import type { ForgeProjectSettings } from '../../api/gen/ForgeProjectSettings';
 import type { ForgeUser } from '../../api/gen/ForgeUser';
+import { numericForgeId } from '../../forge/ids';
 import type { ForkPage } from '../../api/gen/ForkPage';
 import type { GbError } from '../../api/gen/GbError';
 import type { MergeOptions } from '../../api/gen/MergeOptions';
@@ -207,7 +208,7 @@ export class DemoGitLab {
   /** `list_open`: the open MRs for `filter`, newest activity first. With pipelines (the list) one
    * page; without (the badges) up to `OPEN_PAGES`. */
   openMrs(p: ForgeProject, filter: MrFilter, withPipelines: boolean): ForgeMr[] {
-    const q: MrQuery = { state: 'opened', ...(filter === 'mine' ? { scope: 'created_by_me' as const } : filter === 'reviewRequested' ? { reviewerId: this.me().id } : {}) };
+    const q: MrQuery = { state: 'opened', ...(filter === 'mine' ? { scope: 'created_by_me' as const } : filter === 'reviewRequested' ? { reviewerId: numericForgeId(this.me().id) } : {}) };
     const list = ask(() => this.fake.listMrs(this.fake.project(p.id).path, q)).slice(0, MR_PER_PAGE * (withPipelines ? 1 : OPEN_PAGES));
     const pipelines = withPipelines && list.some((v) => typeof v.sha === 'string') ? j.pipelinesBySha(this.fake.pipelinesJson(p.path)) : new Map<string, ForgePipeline>();
     return this.mrsOf(p, list, pipelines);
@@ -233,7 +234,7 @@ export class DemoGitLab {
       const d = j.detail(v, p.path, this.sourceOf(p, v), approvals) ?? fail(unreadable('merge request'));
       // A fork's branch is pushed to by its author (asked only then).
       const fork = v.source_project_id !== v.target_project_id;
-      const update = j.updateOffer(v, fork ? this.me().id : null);
+      const update = j.updateOffer(v, fork ? numericForgeId(this.me().id) : null);
       if (update !== null) d.update = update;
       this.fillLabelColors(p, d.mr);
       return d;
@@ -270,7 +271,7 @@ export class DemoGitLab {
    * note in one page (no next cursor), so one read is all the core's loop makes of it. */
   private fillAwards(p: ForgeProject, n: number, ds: ForgeDiscussion[]): void {
     if (!ds.some((d) => d.notes.some((x) => !x.system))) return;
-    const answer = j.noteAwards(this.fake.noteAwardsJson(p.path, n), this.me().id);
+    const answer = j.noteAwards(this.fake.noteAwardsJson(p.path, n), numericForgeId(this.me().id));
     if (answer === null) return;
     const found = new Map(answer.notes);
     for (const note of ds.flatMap((d) => d.notes)) {
@@ -342,7 +343,7 @@ export class DemoGitLab {
   /** `react`: the note's awards read first, then the one asked for added or removed unless it's so already. */
   react(p: ForgeProject, n: number, note: NoteRef, name: string, on: boolean): ForgeReaction[] {
     const id = this.noteId(note);
-    const me = this.me().id;
+    const me = numericForgeId(this.me().id);
     return ask(() => {
       let list = this.fake.noteAwards(p.path, n, id);
       const mine = list.findIndex((a) => a.name === name && (a.user as Json).id === me);
@@ -582,7 +583,7 @@ export class DemoGitLab {
    * source branch's tip, when the caller found it on the origin. */
   createMr(p: ForgeProject, req: CreateMr, headSha: string | null = null): CreateOutcome {
     const sourceId = req.source.project === p.path ? p.id : this.project(req.source.project).id;
-    const body = j.createBody(req, sourceId, p.id);
+    const body = j.createBody(req, numericForgeId(sourceId), numericForgeId(p.id));
     const v = ask(() => this.fake.createMr(req.source.project, body, headSha));
     return { mr: j.createdMr(v, req.source.project, p.path) ?? fail(unreadable('merge request')), failed: [] };
   }

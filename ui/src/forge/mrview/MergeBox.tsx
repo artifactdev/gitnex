@@ -49,6 +49,7 @@ export const UPDATE_LABELS: Record<ForgeKind, Partial<Record<BranchUpdate, { lab
     rebase: { label: (t) => `Rebase onto ${t}`, busy: 'Rebasing…', tip: 'Forgejo rebases this branch onto the target branch' },
   },
   bitbucket: {},
+  azuredevops: {},
 };
 
 /** A row kept in the layout but not shown (visibility, not display: its space stays). */

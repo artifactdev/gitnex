@@ -242,6 +242,7 @@ impl ForgeHub {
             // An organization's own policy (e.g. a fine-grained token lifetime cap) says why: keep its words.
             GbErrorKind::AuthFailed if is_forbidden(&e) && e.message.contains("forbids access via a fine-grained") => e,
             GbErrorKind::AuthFailed if kind == ForgeKind::Bitbucket && is_forbidden(&e) => GbError::new(GbErrorKind::AuthFailed, format!("{host} accepted the token but refused access to your Bitbucket user")),
+            GbErrorKind::AuthFailed if kind == ForgeKind::AzureDevOps && is_forbidden(&e) => GbError::new(GbErrorKind::AuthFailed, format!("{host} refused access: use an organization-scoped token with Code (Read) permission and verify your repository access")),
             GbErrorKind::AuthFailed if is_forbidden(&e) => GbError::new(GbErrorKind::AuthFailed, format!("{host} accepted the token but it can't read your user: give it the api scope (GitLab), read access (GitHub) or read:user (Forgejo)")),
             GbErrorKind::AuthFailed => GbError::new(GbErrorKind::AuthFailed, format!("{host} rejected this token: check that you copied all of it")),
             _ => e,
@@ -256,7 +257,7 @@ impl ForgeHub {
             ForgeKind::GitLab | ForgeKind::Forgejo | ForgeKind::Bitbucket => {
                 provider.version().await.ok().flatten()
             }
-            ForgeKind::GitHub => None,
+            ForgeKind::GitHub | ForgeKind::AzureDevOps => None,
         };
         let profile = store.active_profile();
         let now = self.now();
@@ -290,7 +291,7 @@ impl ForgeHub {
                 crate::forge::accounts::new_account_id(
                     &profile.forge_accounts,
                     &host,
-                    check.user.id,
+                    &check.user.id,
                 )
             },
             |a| a.id.clone(),
@@ -448,18 +449,68 @@ impl ForgeHub {
         {
             return Ok((account, p));
         }
+        let (account, token) = self.account_token(store, &key, account).await?;
+        let provider = self.connector.connect_account(
+            account.kind,
+            &account.host,
+            account.base_url.as_deref(),
+            token,
+        )?;
+        self.providers
+            .lock()
+            .expect("providers poisoned")
+            .insert(key, provider.clone());
+        drop(held);
+        let account = self
+            .refresh_version(store, &profile.id, account, &provider)
+            .await;
+        Ok((account, provider))
+    }
+
+    pub(crate) async fn git_token(
+        &self,
+        store: &Arc<SettingsStore>,
+        url: &str,
+        selected: Option<&str>,
+    ) -> Result<Option<Secret>, GbError> {
+        let Some(scope) = crate::askpass::azure_credential_scope(url) else {
+            return Ok(None);
+        };
+        let Some(remote) = crate::remotes::parse_remote_url(&scope) else {
+            return Ok(None);
+        };
+        let profile = store.active_profile();
+        let Some(account) = account_for_selected(&profile.forge_accounts, &remote.host, selected)
+            .filter(|a| a.kind == ForgeKind::AzureDevOps && a.host == remote.host)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let key = Self::key_for(&profile.id, &account);
+        let lock = self.lock_for(&key);
+        let _held = lock.lock().await;
+        let (_, token) = self.account_token(store, &key, account).await?;
+        Ok(Some(token))
+    }
+
+    async fn account_token(
+        &self,
+        store: &Arc<SettingsStore>,
+        key: &AccountKey,
+        account: ForgeAccount,
+    ) -> Result<(ForgeAccount, Secret), GbError> {
         if let Some(f) = self
             .failed
             .lock()
             .expect("failed poisoned")
-            .get(&key)
+            .get(key)
             .filter(|f| f.added_at == account.added_at && f.storage == account.storage)
         {
             return Err(f.error.clone());
         }
-        let account = self.move_to_keyring(store, &key, account).await;
+        let account = self.move_to_keyring(store, key, account).await;
         let (tokens, k, storage) = (self.tokens.clone(), key.clone(), account.storage);
-        let host = account.host.clone();
+        let host = &account.host;
         let token = match crate::api::blocking(move || tokens.get(&k, storage)).await {
             Ok(Some(token)) => token,
             Ok(None) => {
@@ -468,7 +519,7 @@ impl ForgeHub {
                     .expect("status poisoned")
                     .insert(key.clone(), AccountStatus::TokenMissing);
                 return Err(self.fail(
-                    key,
+                    key.clone(),
                     &account,
                     GbError::new(
                         GbErrorKind::AuthFailed,
@@ -486,24 +537,10 @@ impl ForgeHub {
                         message: e.message.clone(),
                     },
                 );
-                return Err(self.fail(key, &account, e));
+                return Err(self.fail(key.clone(), &account, e));
             }
         };
-        let provider = self.connector.connect_account(
-            account.kind,
-            &host,
-            account.base_url.as_deref(),
-            token,
-        )?;
-        self.providers
-            .lock()
-            .expect("providers poisoned")
-            .insert(key, provider.clone());
-        drop(held);
-        let account = self
-            .refresh_version(store, &profile.id, account, &provider)
-            .await;
-        Ok((account, provider))
+        Ok((account, token))
     }
 
     fn fail(&self, key: AccountKey, account: &ForgeAccount, error: GbError) -> GbError {
@@ -1474,6 +1511,136 @@ mod tests {
         ForgeHub::new(conn, tokens, Arc::new(|| NOW_MS))
     }
 
+    #[tokio::test]
+    async fn azure_accounts_keep_guid_identities_and_tokens_separate_by_organization() {
+        let conn = Arc::new(FakeConnector::default());
+        for (token, host) in [(TOKEN, "dev.azure.com/orbital"), (TOKEN2, "dev.azure.com/lunar"),
+        ] {
+            let mut p = FakeProvider::new(ForgeKind::AzureDevOps, host);
+            p.user.id = crate::forge::ForgeId::Text("11111111-2222-3333-4444-555555555555".into());
+            conn.add(token, p);
+        }
+        let tokens = MemTokens::new(TokenStorage::File);
+        let h = hub(conn, tokens.clone());
+        let store = SettingsStore::in_memory();
+        let a = h.add_account(&store, "https://dev.azure.com/Orbital", ForgeKind::AzureDevOps, Secret::new(TOKEN), None,
+            ).await.unwrap();
+        let b = h.add_account(&store, "https://dev.azure.com/Lunar", ForgeKind::AzureDevOps, Secret::new(TOKEN2), None,
+            ).await.unwrap();
+        assert_eq!(h.accounts(&store).len(), 2);
+        assert_ne!(a.account.id, b.account.id);
+        let serialized = serde_json::to_string(&store.active_profile()).unwrap();
+        assert!(!serialized.contains(TOKEN));
+        assert!(serialized.contains("11111111-2222-3333-4444-555555555555"));
+        h.remove_account(&store, &a.account.host, Some(a.account.id)).await.unwrap();
+        assert!(tokens.token_for("default", "dev.azure.com/orbital", "dev.azure.com/orbital").is_none());
+        assert_eq!(tokens.token_for("default", &b.account.host, &b.account.id).as_deref(), Some(TOKEN2)
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_git_tokens_respect_account_selection_organization_and_removal() {
+        let conn = Arc::new(FakeConnector::default());
+        for (token, host, id) in [
+            (TOKEN, "dev.azure.com/orbital", 1),
+            (TOKEN2, "dev.azure.com/orbital", 2),
+            ("FAKE-lunar-token", "dev.azure.com/lunar", 3),
+        ] {
+            let mut p = FakeProvider::new(ForgeKind::AzureDevOps, host);
+            p.user.id = id.into();
+            conn.add(token, p);
+        }
+        let tokens = MemTokens::new(TokenStorage::File);
+        let h = hub(conn, tokens.clone());
+        let store = SettingsStore::in_memory();
+        let first = h
+            .add_account(
+                &store,
+                "dev.azure.com/orbital",
+                ForgeKind::AzureDevOps,
+                Secret::new(TOKEN),
+                None,
+            )
+            .await
+            .unwrap();
+        let second = h
+            .add_account(
+                &store,
+                "dev.azure.com/orbital",
+                ForgeKind::AzureDevOps,
+                Secret::new(TOKEN2),
+                None,
+            )
+            .await
+            .unwrap();
+        h.add_account(
+            &store,
+            "dev.azure.com/lunar",
+            ForgeKind::AzureDevOps,
+            Secret::new("FAKE-lunar-token"),
+            None,
+        )
+        .await
+        .unwrap();
+        let url = "https://dev.azure.com/orbital/Space/_git/Orbit";
+        assert_eq!(
+            h.git_token(&store, url, None).await.unwrap(),
+            Some(Secret::new(TOKEN))
+        );
+        assert_eq!(
+            h.git_token(&store, url, Some(&second.account.id))
+                .await
+                .unwrap(),
+            Some(Secret::new(TOKEN2))
+        );
+        assert_eq!(
+            h.git_token(
+                &store,
+                "https://orbital.visualstudio.com/Space/_git/Orbit",
+                Some(&second.account.id)
+            )
+            .await
+            .unwrap(),
+            Some(Secret::new(TOKEN2))
+        );
+        assert_eq!(
+            h.git_token(&store, url, Some("dev.azure.com/lunar"))
+                .await
+                .unwrap(),
+            Some(Secret::new(TOKEN))
+        );
+        for other in [
+            "https://dev.azure.com/unknown/Space/_git/Orbit",
+            "https://dev.azure.com:8443/orbital/Space/_git/Orbit",
+            "git@ssh.dev.azure.com:v3/orbital/Space/Orbit",
+            "https://gitlab.example.com/group/project",
+        ] {
+            assert!(h.git_token(&store, other, None).await.unwrap().is_none());
+        }
+        tokens
+            .delete(&ForgeHub::key_for("default", &second.account))
+            .unwrap();
+        let error = h
+            .git_token(&store, url, Some(&second.account.id))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, GbErrorKind::AuthFailed);
+        assert!(error.message.contains("Settings"));
+        assert!(
+            h.accounts(&store)
+                .iter()
+                .any(|a| a.account.id == second.account.id
+                    && a.status == AccountStatus::TokenMissing)
+        );
+        h.remove_account(&store, &first.account.host, Some(first.account.id))
+            .await
+            .unwrap();
+        h.remove_account(&store, &second.account.host, Some(second.account.id))
+            .await
+            .unwrap();
+        assert!(h.git_token(&store, url, None).await.unwrap().is_none());
+    }
+
     fn setup(
         storage: TokenStorage,
     ) -> (
@@ -1662,7 +1829,7 @@ mod tests {
             TOKEN2,
             FakeProvider {
                 user: crate::forge::ForgeUser {
-                    id: 2,
+                    id: 2.into(),
                     ..user("Grace")
                 },
                 ..FakeProvider::new(ForgeKind::GitLab, HOST)
@@ -1735,7 +1902,7 @@ mod tests {
             TOKEN2,
             FakeProvider {
                 user: crate::forge::ForgeUser {
-                    id: 2,
+                    id: 2.into(),
                     ..user("Grace")
                 },
                 ..FakeProvider::new(ForgeKind::GitLab, HOST)
@@ -1839,7 +2006,7 @@ mod tests {
             TOKEN2,
             FakeProvider {
                 user: crate::forge::ForgeUser {
-                    id: 2,
+                    id: 2.into(),
                     ..user("Grace")
                 },
                 ..FakeProvider::new(ForgeKind::GitLab, HOST)
@@ -1850,7 +2017,7 @@ mod tests {
             TOKEN3,
             FakeProvider {
                 user: crate::forge::ForgeUser {
-                    id: 3,
+                    id: 3.into(),
                     ..user("Linus")
                 },
                 ..FakeProvider::new(ForgeKind::GitLab, HOST)

@@ -16,6 +16,7 @@ pub enum ForgeKind {
     /// Forgejo, and Gitea, whose API it shares.
     Forgejo,
     Bitbucket,
+    AzureDevOps,
 }
 
 impl ForgeKind {
@@ -26,6 +27,7 @@ impl ForgeKind {
             HostKind::GitHub => Some(Self::GitHub),
             HostKind::Forgejo => Some(Self::Forgejo),
             HostKind::Bitbucket => Some(Self::Bitbucket),
+            HostKind::AzureDevOps => Some(Self::AzureDevOps),
             HostKind::Generic => None,
         }
     }
@@ -36,6 +38,46 @@ impl ForgeKind {
             Self::GitHub => "GitHub",
             Self::Forgejo => "Forgejo",
             Self::Bitbucket => "Bitbucket",
+            Self::AzureDevOps => "Azure DevOps",
+        }
+    }
+}
+
+/// Preserve native GUIDs as well as the numeric IDs used by other forges.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+#[ts(export)]
+pub enum ForgeId {
+    Number(#[ts(type = "number")] u64),
+    Text(String),
+}
+
+impl From<u64> for ForgeId {
+    fn from(value: u64) -> Self { Self::Number(value) }
+}
+
+impl ForgeId {
+    pub fn numeric(&self) -> Result<u64, crate::error::GbError> {
+        match self {
+            Self::Number(n) => Ok(*n),
+            Self::Text(_) => Err(crate::error::GbError::new(crate::error::GbErrorKind::InvalidInput, "This forge requires a numeric ID")),
+        }
+    }
+}
+
+impl PartialEq<u64> for ForgeId {
+    fn eq(&self, other: &u64) -> bool { matches!(self, Self::Number(n) if n == other) }
+}
+
+impl PartialEq<ForgeId> for u64 {
+    fn eq(&self, other: &ForgeId) -> bool { other == self }
+}
+
+impl std::fmt::Display for ForgeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Number(n) => n.fmt(f),
+            Self::Text(s) => s.fmt(f),
         }
     }
 }
@@ -53,8 +95,7 @@ pub enum TokenStorage {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ForgeUser {
-    #[ts(type = "number")]
-    pub id: u64,
+    pub id: ForgeId,
     pub username: String,
     /// The display name; the username when the forge has none.
     pub name: String,
@@ -77,10 +118,9 @@ pub struct ForgeUser {
 #[ts(export)]
 pub struct ForgeProject {
     pub kind: ForgeKind,
-    #[ts(type = "number")]
-    pub id: u64,
+    pub id: ForgeId,
     pub host: String,
-    /// `group/sub/project` (GitLab) or `owner/repo` (GitHub).
+    /// `group/sub/project` (GitLab), `owner/repo` (GitHub), or `project/repo` (Azure DevOps).
     pub path: String,
     pub name: String,
     /// The namespace (`group/sub`) or the owner's login: what a fork's remote is named after.
@@ -959,6 +999,7 @@ impl MrHead {
             ForgeKind::GitLab => format!("refs/merge-requests/{n}/head"),
             ForgeKind::GitHub | ForgeKind::Forgejo => format!("refs/pull/{n}/head"),
             ForgeKind::Bitbucket => format!("refs/pull-requests/{n}/from"),
+            ForgeKind::AzureDevOps => format!("refs/pull/{n}/merge"),
         };
         format!("+{src}:{}", self.local_ref(remote))
     }
@@ -967,7 +1008,7 @@ impl MrHead {
     pub fn local_ref(&self, remote: &str) -> String {
         let word = match self.kind {
             ForgeKind::GitLab => "mr",
-            ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket => "pr",
+            ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket | ForgeKind::AzureDevOps => "pr",
         };
         format!("{COMPARE_REFS}{remote}/{word}/{}", self.number)
     }
@@ -1143,7 +1184,7 @@ mod tests {
     #[test]
     fn body_html_is_sent_only_when_the_forge_gave_one() {
         let author = ForgeUser {
-            id: 1,
+            id: 1.into(),
             username: "ada".into(),
             name: "Ada".into(),
             avatar_url: None,

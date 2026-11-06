@@ -2985,6 +2985,14 @@ impl Api {
         let server = AskpassServer::start(dir, exe, self.ops.clone(), self.bus.clone()).await?;
         // An HTTPS prompt's "Use SSH instead" asks the forge for the project's SSH URL first.
         if let Some(hub) = self.forge.clone() {
+            let (tokens, token_store) = (hub.clone(), self.store.clone());
+            server.set_forge_git_token(Arc::new(move |remote| {
+                let (hub, store) = (tokens.clone(), token_store.clone());
+                Box::pin(async move {
+                    hub.git_token(&store, &remote.url, remote.account.as_deref())
+                        .await
+                })
+            }));
             let store = self.store.clone();
             server.set_forge_ssh_url(Arc::new(move |url: String| {
                 let (hub, store) = (hub.clone(), store.clone());
@@ -3000,13 +3008,45 @@ impl Api {
     /// Environment for a network command belonging to `op`: askpass's (none if askpass isn't
     /// running: git then fails a prompt at once, `GIT_TERMINAL_PROMPT=0`), and for a GitNex-started
     /// (non-interactive) op, `GCM_INTERACTIVE=never` too, so Git Credential Manager never shows
-    /// its own prompt for a background fetch either.
+    /// its own prompt for a background fetch either. A covered Azure HTTPS remote uses the
+    /// saved PAT through a temporary URL-scoped helper, not the user's credential manager.
     pub(crate) fn net_env(&self, op: OpId) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         let mut env = self
             .askpass
             .get()
             .map(|s| s.env_for(Some(op)))
             .unwrap_or_default();
+        if self.forge.is_some()
+            && let Some(server) = self.askpass.get()
+            && let Some(entry) = self.ops.get(op)
+        {
+            let profile = self.store.active_profile();
+            let selected = entry.repo.and_then(|id| {
+                let repos = self.repos.lock().expect("repos poisoned");
+                let handle = repos.get(&id)?;
+                profile
+                    .repos
+                    .get(handle.workdir.to_string_lossy().as_ref())?
+                    .forge_account
+                    .clone()
+            });
+            let mut remotes = entry.remotes();
+            let mut urls = Vec::new();
+            for remote in &mut remotes {
+                remote.account = selected.clone();
+                if let Some(scope) = crate::askpass::azure_credential_scope(&remote.url)
+                    && let Some(parsed) = crate::remotes::parse_remote_url(&scope)
+                    && profile.forge_accounts.iter().any(|a| {
+                        a.kind == crate::forge::ForgeKind::AzureDevOps && a.host == parsed.host
+                    })
+                    && !urls.contains(&scope)
+                {
+                    urls.push(scope);
+                }
+            }
+            entry.set_remotes(remotes);
+            env.extend(server.credential_env(&urls));
+        }
         if self.ops.get(op).is_some_and(|e| !e.interactive) {
             env.push(("GCM_INTERACTIVE".into(), "never".into()));
         }
@@ -4238,6 +4278,7 @@ impl Api {
                     Some(ForgeKind::GitLab) => HostKind::GitLab,
                     Some(ForgeKind::GitHub) => HostKind::GitHub,
                     Some(ForgeKind::Bitbucket) => HostKind::Bitbucket,
+                    Some(ForgeKind::AzureDevOps) => HostKind::AzureDevOps,
                     None => HostKind::Generic,
                 })
             }
@@ -8184,6 +8225,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn azure_git_auth_environment_is_scoped_and_keeps_the_repository_account_choice() {
+        use crate::forge::fake::{FakeConnector, FakeProvider, MemTokens};
+        use crate::forge::{ForgeKind, TokenStorage};
+        let host = "dev.azure.com/orbital";
+        let conn = Arc::new(FakeConnector::default());
+        for (token, id) in [("FAKE-azure-first", 1), ("FAKE-azure-second", 2)] {
+            let mut p = FakeProvider::new(ForgeKind::AzureDevOps, host);
+            p.user.id = id.into();
+            conn.add(token, p);
+        }
+        let api = api().with_forge(conn, MemTokens::new(TokenStorage::File));
+        let first = api.dispatch(req(serde_json::json!({"method":"addForgeAccount","params":{"host":host,"kind":"azuredevops","token":"FAKE-azure-first"}}))).await.unwrap();
+        let second = api.dispatch(req(serde_json::json!({"method":"addForgeAccount","params":{"host":host,"kind":"azuredevops","token":"FAKE-azure-second"}}))).await.unwrap();
+        let selected = second["account"]["id"].as_str().unwrap().to_string();
+        assert_ne!(first["account"]["id"], second["account"]["id"]);
+        let dir = tempfile::tempdir().unwrap();
+        api.start_askpass(dir.path(), "/bin/false".into())
+            .await
+            .unwrap();
+        let r = TestRepo::new();
+        r.commit("a");
+        r.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://orbital@dev.azure.com/orbital/Space/_git/Orbit",
+        ]);
+        let id = open(&api, &r).await as u32;
+        let path = crate::platform::fs::canonicalize(r.path())
+            .unwrap()
+            .display()
+            .to_string();
+        let mut profile = api.store().active_profile();
+        profile.repos.insert(
+            path,
+            crate::settings::RepoSettings {
+                forge_account: Some(selected.clone()),
+                ..Default::default()
+            },
+        );
+        api.store().save_profile(profile).unwrap();
+        let op = api
+            .ops()
+            .begin(crate::events::OpKind::Fetch, Some(id), true);
+        crate::netops::note_op_remotes(&op, r.path(), None, gix::remote::Direction::Fetch);
+        let env = api.net_env(op.id);
+        assert_eq!(op.remotes()[0].account.as_deref(), Some(selected.as_str()));
+        let params = env
+            .iter()
+            .find(|(k, _)| k == "GIT_CONFIG_PARAMETERS")
+            .unwrap()
+            .1
+            .to_string_lossy();
+        assert!(
+            params.contains("credential.https://dev.azure.com/orbital/Space/_git/Orbit.helper=")
+        );
+        assert!(params.contains("useHttpPath=true"));
+        assert!(params.contains("followRedirects=false"));
+        assert!(!params.contains("FAKE-azure"));
+        let background = api.ops().begin(crate::events::OpKind::Fetch, Some(id), false);
+        crate::netops::note_op_remotes(&background, r.path(), None, gix::remote::Direction::Fetch);
+        let background_env = api.net_env(background.id);
+        assert_eq!(background.remotes()[0].account.as_deref(), Some(selected.as_str()));
+        assert!(background_env.iter().any(|(key, _)| key == "GIT_CONFIG_PARAMETERS"));
+        assert!(background_env.iter().any(|(key, value)| key == "GCM_INTERACTIVE" && value == "never"));
+        for url in [
+            "https://dev.azure.com/lunar/Space/_git/Orbit",
+            "git@ssh.dev.azure.com:v3/orbital/Space/Orbit",
+            "https://gitlab.example.com/group/project",
+        ] {
+            op.set_remotes(vec![crate::ops::OpRemote {
+                name: "origin".into(),
+                url: url.into(),
+                settable: true,
+                account: None,
+            }]);
+            assert!(
+                !api.net_env(op.id)
+                    .iter()
+                    .any(|(key, _)| key == "GIT_CONFIG_PARAMETERS"),
+                "{url}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn commit_message_is_loaded_on_demand() {
         let r = TestRepo::new();
         fixtures::long_labels(&r);
@@ -11158,7 +11285,7 @@ mod tests {
         // Work's GitLab takes native stacked MRs (19.1); the private account's (18.9) doesn't.
         let work = FakeProvider {
             user: ForgeUser {
-                id: 2,
+                id: 2.into(),
                 ..crate::forge::fake::user("Grace")
             },
             version: Some("19.1.0-ee".into()),

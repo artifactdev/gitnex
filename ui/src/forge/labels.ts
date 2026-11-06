@@ -2,7 +2,7 @@ import type { ForgeKind } from '../api/gen/ForgeKind';
 
 /** The only forge-specific words the UI uses (spec #4 §3.1): everything else is normalized.
  * Forgejo has pull requests, `#12` and checks like GitHub; only its name is its own. */
-const FORGE_NAMES = { gitlab: 'GitLab', github: 'GitHub', forgejo: 'Forgejo', bitbucket: 'Bitbucket' } as const satisfies Record<ForgeKind, string>;
+const FORGE_NAMES = { gitlab: 'GitLab', github: 'GitHub', forgejo: 'Forgejo', bitbucket: 'Bitbucket', azuredevops: 'Azure DevOps' } as const satisfies Record<ForgeKind, string>;
 export const forgeName = (k: ForgeKind) => FORGE_NAMES[k];
 export const mrNoun = (k: ForgeKind): 'MR' | 'PR' => (k === 'gitlab' ? 'MR' : 'PR');
 export const mrRef = (k: ForgeKind, n: number): string => `${k === 'gitlab' ? '!' : '#'}${n}`;

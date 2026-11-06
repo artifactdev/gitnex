@@ -72,7 +72,7 @@ pub struct ForgeAccountView {
 
 /// The id a new account on `host` gets: the host itself while the host has no account (its token
 /// then has 1.5.0's keyring name, so a downgrade still finds it), else `<host>#<user id>`.
-pub fn new_account_id(accounts: &[ForgeAccount], host: &str, user_id: u64) -> String {
+pub fn new_account_id(accounts: &[ForgeAccount], host: &str, user_id: impl std::fmt::Display) -> String {
     let taken = |id: &str| accounts.iter().any(|a| a.id == id);
     if !accounts.iter().any(|a| a.host == host) && !taken(host) {
         return host.to_string();
@@ -134,6 +134,10 @@ const HOST_ONLY: &str = "Enter the host only, like gitlab.example.com";
 /// What the Host box holds, as a host: lowercase, without a scheme, a path or a query; a port
 /// stays. Credentials, spaces and an scp-style URL are refused.
 pub fn normalize_host(input: &str) -> Result<String, GbError> {
+    let azure = input.trim().strip_prefix("https://").unwrap_or(input.trim());
+    if azure.to_ascii_lowercase().starts_with("dev.azure.com/") {
+        return normalize_azure_host(input);
+    }
     let bad = || GbError::new(GbErrorKind::InvalidInput, HOST_ONLY);
     let s = input.trim();
     let s = s.split_once("://").map(|(_, rest)| rest).unwrap_or(s);
@@ -153,6 +157,20 @@ pub fn normalize_host(input: &str) -> Result<String, GbError> {
         return Err(bad());
     }
     Ok(host)
+}
+
+/// Azure accounts are scoped to an organization, not the shared dev.azure.com authority.
+pub fn normalize_azure_host(input: &str) -> Result<String, GbError> {
+    let s = input.trim().strip_prefix("https://").unwrap_or(input.trim()).trim_end_matches('/');
+    let (host, org) = s.split_once('/').unwrap_or(("", ""));
+    if !host.eq_ignore_ascii_case("dev.azure.com")
+        || org.is_empty() || org.len() > 50 || org.starts_with('-') || org.ends_with('-')
+        || !org.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err(GbError::new(GbErrorKind::InvalidInput,
+            "Enter your Azure DevOps organization URL, like https://dev.azure.com/orbital"));
+    }
+    Ok(format!("dev.azure.com/{}", org.to_ascii_lowercase()))
 }
 
 /// Validate a Bitbucket installation URL without allowing it to change the account's authority.
@@ -200,6 +218,11 @@ pub fn normalize_bitbucket_base_url(input: &str, host: &str) -> Result<String, G
 /// GitHub accounts are github.com's (GitHub Enterprise Server is out of scope, spec #4 §9); GitLab
 /// and Forgejo accounts are on any host.
 pub fn check_kind_host(kind: ForgeKind, host: &str) -> Result<(), GbError> {
+    if kind == ForgeKind::AzureDevOps {
+        normalize_azure_host(host)?;
+    } else if host.starts_with("dev.azure.com/") {
+        return Err(GbError::new(GbErrorKind::InvalidInput, "Select Azure DevOps for this organization"));
+    }
     if kind == ForgeKind::GitHub && host != "github.com" {
         return Err(GbError::new(
             GbErrorKind::InvalidInput,
@@ -233,12 +256,27 @@ pub fn token_page_url_for(kind: ForgeKind, host: &str, classic: bool) -> String 
         ForgeKind::GitHub => format!("https://github.com/settings/personal-access-tokens/new?{DESCRIPTION}&pull_requests=write&issues=write&checks=read&statuses=read&metadata=read&profile=read"),
         ForgeKind::Forgejo => format!("https://{host}/user/settings/applications/tokens/new"),
         ForgeKind::Bitbucket => format!("https://{host}/plugins/servlet/access-tokens/manage"),
+        ForgeKind::AzureDevOps => format!("https://{host}/_usersSettings/tokens"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn azure_accounts_require_an_organization_and_cannot_be_used_as_another_forge() {
+        assert_eq!(normalize_host("https://dev.azure.com/Orbital/").unwrap(), "dev.azure.com/orbital");
+        assert_eq!(token_page_url(ForgeKind::AzureDevOps, "dev.azure.com/orbital"), "https://dev.azure.com/orbital/_usersSettings/tokens");
+        for input in ["dev.azure.com", "http://dev.azure.com/orbital", "https://dev.azure.com/orbital/project",
+            "https://dev.azure.com/../orbital", "https://dev.azure.com/orbital?token=x", "https://other.example.com/orbital",
+            "https://dev.azure.com@other.example.com/orbital"] {
+            assert!(normalize_azure_host(input).is_err(), "{input}");
+        }
+        assert!(check_kind_host(ForgeKind::AzureDevOps, "dev.azure.com/orbital").is_ok());
+        assert!(check_kind_host(ForgeKind::GitLab, "dev.azure.com/orbital").is_err());
+        assert!(check_kind_host(ForgeKind::AzureDevOps, "azure.example.com").is_err());
+    }
 
     #[test]
     fn bitbucket_installation_url_is_same_host_https_and_has_safe_context() {
@@ -363,7 +401,7 @@ mod tests {
 
     fn on(host: &str, id: &str, user: u64) -> ForgeAccount {
         let user = ForgeUser {
-            id: user,
+            id: user.into(),
             username: format!("user{user}"),
             name: format!("User {user}"),
             avatar_url: None,

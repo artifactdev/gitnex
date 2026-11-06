@@ -208,14 +208,14 @@ pub mod json {
         let mut emails: Vec<String> = text(&v["email"]).into_iter().collect();
         emails.push(format!("{id}+{login}@users.noreply.github.com"));
         emails.push(format!("{login}@users.noreply.github.com"));
-        Some(ForgeUser { id, name: text(&v["name"]).unwrap_or_else(|| login.clone()), avatar_url: text(&v["avatar_url"]), web_url: v["html_url"].as_str().unwrap_or_default().to_string(), email: text(&v["email"]), emails, username: login })
+        Some(ForgeUser { id: id.into(), name: text(&v["name"]).unwrap_or_else(|| login.clone()), avatar_url: text(&v["avatar_url"]), web_url: v["html_url"].as_str().unwrap_or_default().to_string(), email: text(&v["email"]), emails, username: login })
     }
 
     pub fn project(host: &str, v: &Value) -> Option<ForgeProject> {
         let path = v["full_name"].as_str()?.to_string();
         Some(ForgeProject {
             kind: ForgeKind::GitHub,
-            id: v["id"].as_u64()?,
+            id: v["id"].as_u64()?.into(),
             host: host.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
             owner: v["owner"]["login"].as_str().unwrap_or_default().to_string(),
@@ -1108,7 +1108,8 @@ impl ForgeProvider for GitHubProvider {
             let url = format!("{}/reactions", comment_url(&Self::repo_url(&project.path)?, note)?);
             let me = self.me().await?;
             let mut list = self.http.get_pages(&format!("{url}?per_page=100"), REACTION_PAGES).await?;
-            let mine = list.iter().position(|r| r["content"].as_str() == Some(name) && r["user"]["id"].as_u64() == Some(me.id));
+            let me_id = me.id.numeric()?;
+            let mine = list.iter().position(|r| r["content"].as_str() == Some(name) && r["user"]["id"].as_u64() == Some(me_id));
             match (on, mine) {
                 (true, None) => {
                     let r = self.http.send_json(Method::Post, &url, &json!({ "content": name })).await?;
@@ -1121,7 +1122,7 @@ impl ForgeProvider for GitHubProvider {
                 }
                 _ => {}
             }
-            let after = json::reaction_list(&list, Some(me.id));
+            let after = json::reaction_list(&list, Some(me_id));
             self.reaction_lists.lock().expect("reactions poisoned").insert(url, (counts(&after), after.clone()));
             Ok(after)
         })
@@ -1609,7 +1610,7 @@ impl GitHubProvider {
             return None;
         }
         match self.me().await {
-            Ok(u) => Some(u.id),
+            Ok(u) => u.id.numeric().ok(),
             Err(_) => {
                 *self.me_failed.lock().expect("me poisoned") = Some(std::time::Instant::now());
                 None
@@ -1638,7 +1639,7 @@ impl GitHubProvider {
                 }
                 asked += 1;
                 if me.is_none() {
-                    me = Some(self.me().await.ok().map(|u| u.id));
+                    me = Some(self.me().await.ok().and_then(|u| u.id.numeric().ok()));
                 }
                 let Ok(list) = self.http.get_pages(&format!("{url}?per_page=100"), REACTION_PAGES).await else { continue };
                 let l = json::reaction_list(&list, me.flatten());
@@ -1940,7 +1941,7 @@ impl GitHubProvider {
         let repo = Self::repo_url(&project.path)?;
         let me = self.me().await?;
         let reviews = self.http.get_pages(&format!("{repo}/pulls/{number}/reviews?per_page=100"), COMMENT_PAGES).await?;
-        Ok(json::pending_review(&reviews, me.id))
+        Ok(json::pending_review(&reviews, me.id.numeric()?))
     }
 
     /// A new pending review on PR `number`, on `head`: its node id.
@@ -2311,7 +2312,7 @@ mod tests {
     fn contents_decode_across_githubs_line_breaks_labels_get_a_hash_and_people_match_loosely() {
         assert_eq!(json::decode_content(&json!({"content": "SGVs\nbG8=\n", "encoding": "base64"})), b"Hello");
         assert_eq!(json::label(&json!({"name": "bug", "color": "d73a4a", "description": null})).unwrap().color.as_deref(), Some("#d73a4a"));
-        let u = ForgeUser { id: 2, username: "hubot".into(), name: "Hubot".into(), avatar_url: None, web_url: String::new(), email: None, emails: vec![] };
+        let u = ForgeUser { id: 2.into(), username: "hubot".into(), name: "Hubot".into(), avatar_url: None, web_url: String::new(), email: None, emails: vec![] };
         assert!(json::matches(&u, "HUB") && json::matches(&u, " ") && !json::matches(&u, "octo"));
     }
     #[test]
@@ -2431,7 +2432,7 @@ mod tests {
         });
         let ep = crate::endpoints::HostEndpoints { api: s.base.clone(), web: s.base.clone(), avatars: None };
         let p = super::GitHubProvider::new("github.com", &ep, gitnex_core::redact::Secret::new("ghp_FAKE-test-token"), None);
-        let project = ForgeProject { kind: ForgeKind::GitHub, id: 1, host: "github.com".into(), path: "octo-org/widget".into(), name: "widget".into(), owner: "octo-org".into(), web_url: String::new(), default_branch: None, clone_https: String::new(), clone_ssh: String::new(), fork_of: None, updated_at: None, archived: false, owner_avatar_url: None };
+        let project = ForgeProject { kind: ForgeKind::GitHub, id: 1.into(), host: "github.com".into(), path: "octo-org/widget".into(), name: "widget".into(), owner: "octo-org".into(), web_url: String::new(), default_branch: None, clone_https: String::new(), clone_ssh: String::new(), fork_of: None, updated_at: None, archived: false, owner_avatar_url: None };
         (s, p, project)
     }
 

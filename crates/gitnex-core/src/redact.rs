@@ -1,16 +1,60 @@
 //! Removes secrets before anything is logged or shown.
 
 use regex::Regex;
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+static ACTIVE_SECRETS: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Mutex::default);
+
+pub(crate) struct RedactionGuard(Vec<String>);
+
+impl RedactionGuard {
+    pub(crate) fn new(secret: &Secret) -> Self {
+        use base64::Engine;
+        let mut values = vec![secret.expose().to_string()];
+        for user in ["", "gitnex"] {
+            values.push(
+                base64::engine::general_purpose::STANDARD
+                    .encode(format!("{user}:{}", secret.expose())),
+            );
+        }
+        values.retain(|v| !v.is_empty());
+        values.sort();
+        values.dedup();
+        let mut active = ACTIVE_SECRETS.lock().unwrap_or_else(|e| e.into_inner());
+        for value in &values {
+            *active.entry(value.clone()).or_default() += 1;
+        }
+        Self(values)
+    }
+}
+
+impl Drop for RedactionGuard {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_SECRETS.lock().unwrap_or_else(|e| e.into_inner());
+        for value in &self.0 {
+            if let Some(count) = active.get_mut(value) {
+                *count -= 1;
+                if *count == 0 {
+                    active.remove(value);
+                }
+            }
+        }
+    }
+}
 
 /// http(s): any userinfo (a lone user name is often a token: `https://<token>@github.com`).
 static HTTP_USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(https?://)[^/\s@'\x22]+@").unwrap());
 /// Any other scheme (ssh, git, ftp(s), file, `git+ssh`, ...): a `user:password@` userinfo. A user
 /// name alone (`ssh://git@host`) isn't secret there.
-static URL_PASSWORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@:'\x22]*:[^/\s@'\x22]*@").unwrap());
+static URL_PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@:'\x22]*:[^/\s@'\x22]*@").unwrap()
+});
 /// Tokens in a query string (`?private_token=...`).
 static QUERY_TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)([?&](?:access_token|private_token|oauth_token|job_token|token|password|passwd|secret|api_key|apikey|key)=)[^&\s'\x22]+").unwrap());
+    LazyLock::new(|| {
+    Regex::new(r"(?i)([?&](?:access_token|private_token|oauth_token|job_token|token|password|passwd|secret|api_key|apikey|key)=)[^&\s'\x22]+").unwrap()
+});
 /// Forge tokens: GitLab's family (`glpat-`, `gloas-`, `glrt-`, ...), GitHub's, Bitbucket and
 /// Atlassian app passwords and API tokens.
 static TOKENS: LazyLock<Regex> = LazyLock::new(|| {
@@ -21,7 +65,17 @@ static AUTH_HEADER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(authori
 /// Every message, stderr and log line goes through this before it's logged, stored (the activity
 /// log) or shown (toasts): `GitCli::run` redacts stderr before taking the error's message.
 pub fn redact(s: &str) -> String {
-    let s = HTTP_USERINFO.replace_all(s, "${1}***@");
+    // Azure PATs have no reliably unique prefix. Keep every representation used by a live
+    // Git operation out of its streamed stderr and diagnostics, including arbitrary fake PATs.
+    let active = ACTIVE_SECRETS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut values: Vec<_> = active.keys().collect();
+    values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let mut s = s.to_string();
+    for value in values {
+        s = s.replace(value, "***");
+    }
+    drop(active);
+    let s = HTTP_USERINFO.replace_all(&s, "${1}***@");
     let s = URL_PASSWORD.replace_all(&s, "${1}***@");
     let s = QUERY_TOKEN.replace_all(&s, "${1}***");
     let s = TOKENS.replace_all(&s, "***");
@@ -67,6 +121,26 @@ mod tests {
     use super::redact;
 
     #[test]
+    fn active_git_credentials_and_their_basic_encodings_are_redacted_until_last_release() {
+        use base64::Engine;
+        let token = super::Secret::new(format!("FAKE-azure-{}", crate::random::random_hex(16)));
+        let (one, two) = (
+            super::RedactionGuard::new(&token),
+            super::RedactionGuard::new(&token),
+        );
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("gitnex:{}", token.expose()));
+        assert_eq!(
+            redact(&format!("remote: {} {encoded}", token.expose())),
+            "remote: *** ***"
+        );
+        drop(one);
+        assert_eq!(redact(token.expose()), "***");
+        drop(two);
+        assert!(redact(token.expose()) == token.expose());
+    }
+
+    #[test]
     fn removes_url_credentials() {
         assert_eq!(redact(&format!("https://oauth2:glpat-{}@gitlab.example.com/a/b.git", "a".repeat(21))), "https://***@gitlab.example.com/a/b.git");
         assert_eq!(redact("http://user@h/x"), "http://***@h/x");
@@ -76,7 +150,8 @@ mod tests {
     /// alone (`ssh://git@host`) isn't secret there and stays readable.
     #[test]
     fn removes_passwords_from_any_url_scheme() {
-        for scheme in ["ssh", "git", "ftp", "ftps", "file", "git+ssh", "ssh+git", "svn+ssh", "rsync", "SSH"] {
+        for scheme in ["ssh", "git", "ftp", "ftps", "file", "git+ssh", "ssh+git", "svn+ssh", "rsync", "SSH",
+        ] {
             assert_eq!(redact(&format!("{scheme}://ada:hunter2@h.example/x.git")), format!("{scheme}://***@h.example/x.git"), "{scheme}");
         }
         assert_eq!(redact("ssh://git@gitlab.example.com:2222/a/b.git"), "ssh://git@gitlab.example.com:2222/a/b.git", "a user name alone stays");

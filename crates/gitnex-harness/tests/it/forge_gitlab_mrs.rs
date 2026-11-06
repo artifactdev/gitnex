@@ -316,7 +316,7 @@ async fn reviewers_and_assignees_change_through_one_put_of_the_whole_lists() {
     let s = seeded(&f, 12);
     assert_eq!((s.reviewers, s.assignees), (vec!["grace".to_string()], vec![]), "the reviewers kept");
     let d = p.mr_detail(&g, 12).await.unwrap().value;
-    assert_eq!((d.reviewers.iter().map(|u| u.id).collect::<Vec<_>>(), d.assignees.len()), (vec![GRACE], 0));
+    assert_eq!((d.reviewers.iter().map(|u| u.id.clone()).collect::<Vec<_>>(), d.assignees.len()), (vec![GRACE.into()], 0));
 }
 
 #[tokio::test(flavor = "multi_thread")]

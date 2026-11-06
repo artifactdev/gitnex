@@ -7,6 +7,20 @@ const forgejo: ProjectRemote = { host: 'forgejo.example.org', path: 'owner/repo'
 const generic: ProjectRemote = { host: 'code.example.com', path: 'a/b', hostKind: 'generic' };
 const bitbucket: ProjectRemote = { host: 'bitbucket.example.com:8443', path: 'ORBIT/widget', hostKind: 'bitbucket', baseUrl: 'https://bitbucket.example.com:8443/bitbucket' };
 
+describe('Azure DevOps repository links', () => {
+  const remote: ProjectRemote = { host: 'dev.azure.com/orbital', path: 'Space Tools/Orbit App', hostKind: 'azuredevops' };
+  const base = 'https://dev.azure.com/orbital/Space%20Tools/_git/Orbit%20App';
+  it('uses Azure routes and encodes names, branches and file paths', () => {
+    expect(repoUrl(remote)).toBe(base);
+    expect(branchUrl(remote, 'feature/x#1')).toBe(`${base}?version=GBfeature%2Fx%231`);
+    expect(commitUrl(remote, 'abc1234')).toBe(`${base}/commit/abc1234`);
+    expect(fileUrl(remote, 'feature/x', 'src/a file.rs')).toBe(`${base}?path=%2Fsrc%2Fa%20file.rs&version=GBfeature%2Fx`);
+    expect(fileUrl(remote, 'a'.repeat(40), 'src/lib.rs')).toBe(`${base}?path=%2Fsrc%2Flib.rs&version=GC${'a'.repeat(40)}`);
+    expect(mergeRequestUrl(remote, null, 7)).toBe(`${base}/pullrequest/7`);
+    expect(issueUrl(remote, null, 7)).toBeNull();
+  });
+});
+
 describe('Bitbucket Data Center links', () => {
   const base = 'https://bitbucket.example.com:8443/bitbucket/projects/ORBIT/repos/widget';
   it('uses native repository, branch, commit and PR routes, never issue routes', () => {

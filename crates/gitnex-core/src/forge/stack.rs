@@ -97,7 +97,7 @@ pub struct TableRow<'a> {
 pub fn mr_ref(kind: ForgeKind, number: u64) -> String {
     match kind {
         ForgeKind::GitLab => format!("!{number}"),
-        ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket => format!("#{number}"),
+        ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket | ForgeKind::AzureDevOps => format!("#{number}"),
     }
 }
 
@@ -148,7 +148,7 @@ pub fn eol_of(description: &str) -> &'static str {
 pub fn render_block(kind: ForgeKind, rows: &[TableRow<'_>], current: u64, eol: &str) -> String {
     let noun = match kind {
         ForgeKind::GitLab => "MR",
-        ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket => "PR",
+        ForgeKind::GitHub | ForgeKind::Forgejo | ForgeKind::Bitbucket | ForgeKind::AzureDevOps => "PR",
     };
     let mut lines = vec![
         MARK_START.to_string(),

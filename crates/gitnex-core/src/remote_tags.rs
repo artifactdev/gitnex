@@ -153,6 +153,12 @@ impl Api {
             if cancel.is_cancelled() {
                 break;
             }
+            crate::netops::note_op_remotes(
+                &quiet,
+                &h.workdir,
+                Some(std::slice::from_ref(remote)),
+                gix::remote::Direction::Fetch,
+            );
             let args = crate::netops::NO_EXT.into_iter().chain(["ls-remote", "--tags", "--end-of-options", remote.as_str()]);
             let inv = crate::git::GitInvocation::new(&h.workdir, args).timeout(None).cancel(cancel.clone()).detach_terminal().envs(self.net_env(quiet.id));
             match self.cli.run(inv).await {

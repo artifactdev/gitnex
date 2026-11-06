@@ -562,13 +562,13 @@ jobs:
 
       # GitNex's self-signed code-signing certificate, from the repository's secrets, into a
       # throwaway keychain; it sets GITNEX_MACOS_SIGNING_IDENTITY for the build. A run on
-      # artifactdev/gitvolt must have it; a fork's builds ad-hoc. See docs/releasing.md, "macOS
+      # artifactdev/gitnex must have it; a fork's builds ad-hoc. See docs/releasing.md, "macOS
       # signing".
       - name: Signing keychain
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          GITNEX_MACOS_SIGNING_REQUIRED: ${{ github.repository == 'artifactdev/gitvolt' }}
+          GITNEX_MACOS_SIGNING_REQUIRED: ${{ github.repository == 'artifactdev/gitnex' }}
         run: scripts/macos-keychain.sh import
 
       # `just package-macos`: the notices, the release GitNex.app (signed with that identity,

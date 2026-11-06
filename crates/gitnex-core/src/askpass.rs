@@ -27,7 +27,7 @@ use crate::random::random_hex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -45,7 +45,10 @@ const MAX_LINE: u64 = 64 * 1024;
 struct ClientRequest {
     token: String,
     op: u64,
+    #[serde(default)]
     prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -54,6 +57,8 @@ struct ServerReply {
     answer: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     cancel: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 /// "Use SSH for `remote` instead" (spec §5.4): the remote a credential prompt is about, and the
@@ -68,6 +73,87 @@ pub struct SshOffer {
 /// The forge's SSH clone URL for an https remote URL, when an account covers its host
 /// (`ForgeHub::ssh_clone_url`); the app's `Api` supplies it.
 pub type ForgeSshUrl = Arc<dyn Fn(String) -> futures_util::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+
+pub type ForgeGitToken = Arc<dyn Fn(OpRemote) -> futures_util::future::BoxFuture<'static, Result<Option<crate::redact::Secret>, GbError>> + Send + Sync>;
+
+const CREDENTIAL_HELPER: &str = "--gitnex-credential-helper";
+
+/// An Azure HTTPS repository, without userinfo. Credentials never cover another port, path,
+/// transport or redirect; the request must also match a remote of the running operation.
+pub fn azure_credential_scope(url: &str) -> Option<String> {
+    let scope = azure_https_url(url)?;
+    let parsed = crate::remotes::parse_remote_url(&scope)?;
+    parsed.host.starts_with("dev.azure.com/").then_some(scope)
+}
+
+fn azure_https_url(url: &str) -> Option<String> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("https")
+        || rest.contains(['?', '#', '\\'])
+        || rest.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let (authority, path) = rest.split_once('/')?;
+    let host = authority.rsplit('@').next()?.to_ascii_lowercase();
+    let host = host.strip_suffix(":443").unwrap_or(&host);
+    if host.contains(':')
+        || !(host == "dev.azure.com"
+            || (host.ends_with(".visualstudio.com") && host != "vs-ssh.visualstudio.com"))
+    {
+        return None;
+    }
+    let path = path.trim_end_matches('/');
+    let mut encoded = Vec::new();
+    for segment in path.split('/') {
+        let decoded = crate::forge::provider::percent_decode(segment)?;
+        if decoded.is_empty()
+            || matches!(decoded.as_str(), "." | "..")
+            || decoded.contains(['/', '\\'])
+            || decoded.chars().any(char::is_control)
+        {
+            return None;
+        }
+        encoded.push(crate::remotes::encode_path_segment(&decoded));
+    }
+    Some(format!("https://{host}/{}", encoded.join("/")))
+}
+
+fn credential_url(input: impl BufRead) -> std::io::Result<Option<String>> {
+    let (mut protocol, mut host, mut path) = (None, None, None);
+    let mut read = 0;
+    for line in std::io::Read::take(input, MAX_LINE + 1).lines() {
+        let line = line?;
+        read += line.len() + 1;
+        if read > MAX_LINE as usize {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "credential request is too large",
+            ));
+        }
+        if line.is_empty() {
+            break;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            match key {
+                "protocol" => protocol = Some(value.to_string()),
+                "host" => host = Some(value.to_string()),
+                "path" => path = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+    Ok(match (protocol, host, path) {
+        (Some(protocol), Some(host), Some(path))
+            if protocol == "https" && !host.contains(['/', '@']) =>
+        {
+            // Git's credential protocol supplies a decoded path, unlike a remote URL.
+            let path = path.split('/').map(crate::remotes::encode_path_segment).collect::<Vec<_>>().join("/");
+            azure_https_url(&format!("https://{host}/{path}"))
+        }
+        _ => None,
+    })
+}
 
 /// git's HTTPS credential prompt (`Username for 'https://host': `, `Password for
 /// 'https://user@host': `): the host it's for, lowercase, with a non-default port as
@@ -88,7 +174,9 @@ pub fn https_prompt_origin(prompt: &str) -> Option<String> {
 /// The remote of an op that a prompt for `origin` is about: the first on that host over https,
 /// in the order the op reaches them. `None` when that one isn't `set-url`'s to switch.
 pub fn tied_remote<'a>(remotes: &'a [OpRemote], origin: &str) -> Option<&'a OpRemote> {
-    let https = |u: &str| u.trim().get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+    let https = |u: &str| {
+        u.trim().get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    };
     let first = remotes.iter().find(|r| https(&r.url) && crate::remotes::forge_host(&r.url).as_deref() == Some(origin))?;
     first.settable.then_some(first)
 }
@@ -104,21 +192,63 @@ pub fn run_client_from_env() -> Option<i32> {
     let socket = std::env::var_os(ENV_SOCKET)?;
     let token = std::env::var(ENV_TOKEN).unwrap_or_default();
     let op = std::env::var(ENV_OP).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let prompt = std::env::args().nth(1).unwrap_or_default();
+    let mut args = std::env::args().skip(1);
+    let prompt = args.next().unwrap_or_default();
     let mut stdout = std::io::stdout().lock();
+    if prompt == CREDENTIAL_HELPER {
+        return Some(match args.next().as_deref() {
+            Some("get") => match credential_url(std::io::stdin().lock()) {
+                Ok(Some(url)) => client_request(
+                    Path::new(&socket),
+                    ClientRequest {
+                        token,
+                        op,
+                        prompt: String::new(),
+                        credential_url: Some(url),
+                    },
+                    &mut stdout,
+                ),
+                Ok(None) => 0,
+                Err(e) => {
+                    eprintln!("GitNex: {e}");
+                    1
+                }
+            },
+            // Git asks helpers to store/reject credentials too. The account's token store,
+            // not Git's helpers, owns these PATs.
+            Some("store" | "erase") => 0,
+            _ => 1,
+        });
+    }
     Some(client(Path::new(&socket), &token, op, &prompt, &mut stdout))
 }
 
 /// One request: `0` with the answer (and a newline) on `out`, or `1` (denied, cancelled, or the
 /// app isn't there), which git and ssh read as "no credentials".
 fn client(socket: &Path, token: &str, op: u64, prompt: &str, out: &mut dyn Write) -> i32 {
+    client_request(
+        socket,
+        ClientRequest {
+            token: token.into(),
+            op,
+            prompt: prompt.into(),
+            credential_url: None,
+        },
+        out,
+    )
+}
+
+fn client_request(socket: &Path, request: ClientRequest, out: &mut dyn Write) -> i32 {
     let run = || -> std::io::Result<Option<String>> {
         let mut stream = ipc::connect(socket)?;
-        let req = serde_json::to_string(&ClientRequest { token: token.into(), op, prompt: prompt.into() })?;
+        let req = serde_json::to_string(&request)?;
         stream.write_all(req.as_bytes())?;
         stream.write_all(b"\n")?;
         let line = stream.read_line_within(None)?;
         let reply: ServerReply = serde_json::from_str(line.trim()).unwrap_or_default();
+        if let Some(error) = reply.error {
+            eprintln!("GitNex: {}", crate::redact::redact(&error));
+        }
         Ok(reply.answer.filter(|_| !reply.cancel))
     };
     match run() {
@@ -152,15 +282,18 @@ pub struct AskpassServer {
     bus: EventBus,
     accept: Mutex<Option<tokio::task::JoinHandle<()>>>,
     forge_ssh_url: OnceLock<ForgeSshUrl>,
+    forge_git_token: OnceLock<ForgeGitToken>,
 }
 
 impl AskpassServer {
     /// Binds `dir/gitnex-askpass-<pid>-<rand>.sock` (mode `0600`; on Windows the pipe of that
     /// name) and starts answering it. `exe` is the binary git runs as askpass (this one, in
     /// `run_client_from_env` mode).
-    pub async fn start(dir: &Path, exe: PathBuf, ops: Arc<OpRegistry>, bus: EventBus) -> std::io::Result<Arc<Self>> {
+    pub async fn start(dir: &Path, exe: PathBuf, ops: Arc<OpRegistry>, bus: EventBus,
+    ) -> std::io::Result<Arc<Self>> {
         std::fs::create_dir_all(dir)?;
-        let path = ipc::endpoint(dir, &format!("gitnex-askpass-{}-{}.sock", std::process::id(), random_hex(4)));
+        let path = ipc::endpoint(dir, &format!("gitnex-askpass-{}-{}.sock", std::process::id(), random_hex(4)),
+        );
         ipc::remove(&path);
         let mut listener = ipc::Listener::bind(&path)?.into_async()?;
         let server = Arc::new(Self {
@@ -173,6 +306,7 @@ impl AskpassServer {
             bus,
             accept: Mutex::new(None),
             forge_ssh_url: OnceLock::new(),
+            forge_git_token: OnceLock::new(),
         });
         let weak = Arc::downgrade(&server);
         let task = tokio::spawn(async move {
@@ -207,6 +341,35 @@ impl AskpassServer {
         let _ = self.forge_ssh_url.set(f);
     }
 
+    pub fn set_forge_git_token(&self, f: ForgeGitToken) {
+        let _ = self.forge_git_token.set(f);
+    }
+
+    /// Temporary URL-scoped git configuration. Combined with `env_for`, this replaces other
+    /// helpers only for these Azure HTTPS repositories, without putting a PAT in the environment.
+    pub fn credential_env(&self, urls: &[String]) -> Vec<(OsString, OsString)> {
+        if urls.is_empty() {
+            return Vec::new();
+        }
+        let mut parameters = std::env::var_os("GIT_CONFIG_PARAMETERS").unwrap_or_default();
+        for url in urls {
+            for pair in [
+                format!("credential.{url}.helper="),
+                format!("credential.{url}.helper=!\"$GIT_ASKPASS\" {CREDENTIAL_HELPER}"),
+                format!("credential.{url}.useHttpPath=true"),
+                format!("http.{url}.followRedirects=false"),
+            ] {
+                if !parameters.is_empty() {
+                    parameters.push(" ");
+                }
+                parameters.push("'");
+                parameters.push(pair.replace('\'', "'\\''"));
+                parameters.push("'");
+            }
+        }
+        vec![("GIT_CONFIG_PARAMETERS".into(), parameters)]
+    }
+
     pub fn socket_path(&self) -> &Path {
         &self.path
     }
@@ -235,7 +398,8 @@ impl AskpassServer {
                 let _ = p.tx.send(answer);
                 Ok(())
             }
-            None => Err(GbError::new(GbErrorKind::InvalidInput, format!("no pending prompt {prompt}"))),
+            None => Err(GbError::new(GbErrorKind::InvalidInput, format!("no pending prompt {prompt}"),
+            )),
         }
     }
 
@@ -245,8 +409,14 @@ impl AskpassServer {
         let p = {
             let mut pending = self.pending();
             match pending.get(&prompt) {
-                None => return Err(GbError::new(GbErrorKind::InvalidInput, format!("no pending prompt {prompt}"))),
-                Some(p) if p.ssh.is_none() => return Err(GbError::new(GbErrorKind::InvalidInput, "This prompt can't switch to SSH")),
+                None => {
+                    return Err(GbError::new(GbErrorKind::InvalidInput, format!("no pending prompt {prompt}"),
+                    ));
+                }
+                Some(p) if p.ssh.is_none() => {
+                    return Err(GbError::new(GbErrorKind::InvalidInput, "This prompt can't switch to SSH",
+                    ));
+                }
                 Some(_) => pending.remove(&prompt).expect("checked above"),
             }
         };
@@ -265,11 +435,14 @@ impl AskpassServer {
         let origin = https_prompt_origin(text)?;
         let remote = tied_remote(&entry.remotes(), &origin)?.clone();
         let forge = match self.forge_ssh_url.get() {
-            Some(f) => tokio::time::timeout(std::time::Duration::from_secs(2), f(remote.url.clone())).await.ok().flatten(),
+            Some(f) => {
+                tokio::time::timeout(std::time::Duration::from_secs(2), f(remote.url.clone())).await.ok().flatten()
+            }
             None => None,
         };
         let url = forge.or_else(|| crate::remotes::ssh_url_from_https(&remote.url))?;
-        Some(SshOffer { remote: remote.name, url })
+        Some(SshOffer { remote: remote.name, url,
+        })
     }
 
     /// Stops answering and removes the socket (at app exit; also on drop).
@@ -299,19 +472,78 @@ impl AskpassServer {
                     let _ = reader.read(&mut buf).await;
                 };
                 tokio::select! {
-                    a = self.prompt(req.op, req.prompt) => a,
-                    _ = hangup => None,
+                    a = async {
+                        match req.credential_url {
+                            Some(url) => self.credential(req.op, &url).await,
+                            None => Ok(self.prompt(req.op, req.prompt).await),
+                        }
+                    } => a,
+                    _ = hangup => Ok(None),
                 }
             }
-            _ => None,
+            _ => Ok(None),
         };
         let reply = match answer {
-            Some(a) => ServerReply { answer: Some(a), cancel: false },
-            None => ServerReply { answer: None, cancel: true },
+            Ok(Some(a)) => ServerReply { answer: Some(a), cancel: false,
+                error: None,
+            },
+            Ok(None) => ServerReply { answer: None, cancel: true,
+                error: None,
+            },
+            Err(e) => ServerReply {
+                answer: None,
+                cancel: true,
+                error: Some(crate::redact::redact(&e.message)),
+            },
         };
         let mut text = serde_json::to_string(&reply).unwrap_or_else(|_| "{\"cancel\":true}".into());
         text.push('\n');
         let _ = write.write_all(text.as_bytes()).await;
+    }
+
+    async fn credential(&self, op: OpId, url: &str) -> Result<Option<String>, GbError> {
+        let Some(entry) = self.ops.get(op).filter(|e| !e.cancel.is_cancelled()) else {
+            return Ok(None);
+        };
+        let Some(scope) = azure_https_url(url) else {
+            return Ok(None);
+        };
+        let Some(remote) = entry.remotes().into_iter().find(|r| {
+            azure_credential_scope(&r.url).is_some_and(|own| {
+                scope == own
+                    || scope
+                        .strip_prefix(&own)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+        }) else {
+            return Ok(None);
+        };
+        let Some(get) = self.forge_git_token.get() else {
+            return Ok(None);
+        };
+        let token = tokio::select! {
+            result = get(remote) => result?,
+            _ = entry.cancel.cancelled() => return Ok(None),
+        };
+        if self.ops.get(op).is_none() || entry.cancel.is_cancelled() {
+            return Ok(None);
+        }
+        match token {
+            Some(token) if token.is_empty() || token.expose().contains(['\r', '\n', '\0']) => {
+                Err(GbError::new(
+                    GbErrorKind::AuthFailed,
+                    "The Azure DevOps token is not a valid Git credential: replace it in Settings > Accounts.",
+                ))
+            }
+            Some(token) => {
+                entry.protect_secret(&token);
+                Ok(Some(format!(
+                    "username=gitnex\npassword={}\n",
+                    token.expose()
+                )))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn prompt(&self, op: OpId, text: String) -> Option<String> {
@@ -326,8 +558,11 @@ impl AskpassServer {
         let ssh = self.ssh_offer(&entry, &text).await;
         let id = self.next_prompt.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending().insert(id, Pending { tx, op, ssh: ssh.clone() });
-        self.bus.emit(AppEvent::AuthWaiting { prompt: id, op, repo: entry.repo, secret: is_secret(&text), text: crate::redact::redact(&text), ssh });
+        self.pending().insert(id, Pending { tx, op, ssh: ssh.clone(),
+            },
+        );
+        self.bus.emit(AppEvent::AuthWaiting { prompt: id, op, repo: entry.repo, secret: is_secret(&text), text: crate::redact::redact(&text), ssh,
+        });
         // Also runs if this future is dropped (the client hung up): the modal always closes.
         let _resolved = Resolved { server: self, id };
         tokio::select! {
@@ -367,7 +602,8 @@ mod tests {
     use super::*;
     use crate::events::OpKind;
 
-    async fn server() -> (tempfile::TempDir, Arc<AskpassServer>, Arc<OpRegistry>, EventBus) {
+    async fn server() -> (tempfile::TempDir, Arc<AskpassServer>, Arc<OpRegistry>, EventBus,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let ops = Arc::new(OpRegistry::default());
         let bus = EventBus::new();
@@ -376,8 +612,159 @@ mod tests {
     }
 
     async fn ask(s: &AskpassServer, token: &str, op: u64, prompt: &str) -> i32 {
-        let (path, token, prompt) = (s.socket_path().to_path_buf(), token.to_string(), prompt.to_string());
+        let (path, token, prompt) = (s.socket_path().to_path_buf(), token.to_string(), prompt.to_string(),
+        );
         tokio::task::spawn_blocking(move || client(&path, &token, op, &prompt, &mut Vec::new())).await.unwrap()
+    }
+
+    #[test]
+    fn azure_credentials_require_https_and_a_repository_path() {
+        for (url, expected) in [
+            (
+                "https://orbital@DEV.AZURE.COM:443/orbital/Space%20Tools/_git/Orbit/",
+                "https://dev.azure.com/orbital/Space%20Tools/_git/Orbit",
+            ),
+            (
+                "https://orbital.visualstudio.com/DefaultCollection/Space/_git/Orbit",
+                "https://orbital.visualstudio.com/DefaultCollection/Space/_git/Orbit",
+            ),
+        ] {
+            assert_eq!(azure_credential_scope(url).as_deref(), Some(expected));
+        }
+        for url in [
+            "http://dev.azure.com/orbital/Space/_git/Orbit",
+            "https://dev.azure.com:8443/orbital/Space/_git/Orbit",
+            "https://dev.azure.com/orbital",
+            "https://dev.azure.com.evil.example/orbital/Space/_git/Orbit",
+            "https://dev.azure.com/orbital/Space/_git/Orbit?token=x",
+            "https://dev.azure.com/orbital/Space/_git/Orbit#x",
+            "https://dev.azure.com/orbital/Space/_git/%2e%2e",
+            "https://dev.azure.com/orbital/Space/_git/A%2fB",
+            "https://ssh.dev.azure.com/v3/orbital/Space/Orbit",
+            "https://vs-ssh.visualstudio.com/v3/orbital/Space/Orbit",
+            "git@ssh.dev.azure.com:v3/orbital/Space/Orbit",
+        ] {
+            assert!(azure_credential_scope(url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn reads_the_git_credential_protocol_without_using_supplied_passwords() {
+        let input = b"protocol=https\nhost=dev.azure.com\npath=orbital/Space/_git/Orbit\nusername=orbital\npassword=FAKE-ignored\n\n";
+        assert_eq!(
+            credential_url(&input[..]).unwrap().as_deref(),
+            Some("https://dev.azure.com/orbital/Space/_git/Orbit")
+        );
+        for input in [
+            "protocol=https\nhost=dev.azure.com\n\n",
+            "protocol=http\nhost=dev.azure.com\npath=orbital/Space/_git/Orbit\n\n",
+            "protocol=https\nhost=evil@dev.azure.com\npath=orbital/Space/_git/Orbit\n\n",
+        ] {
+            assert!(credential_url(input.as_bytes()).unwrap().is_none());
+        }
+        let long = "x".repeat(MAX_LINE as usize + 1);
+        assert!(credential_url(long.as_bytes()).is_err());
+    }
+
+    #[tokio::test]
+    async fn azure_credentials_are_confined_to_a_live_operations_registered_repository() {
+        use std::sync::atomic::AtomicUsize;
+        let (_dir, s, ops, bus) = server().await;
+        let mut events = bus.subscribe();
+        let token = crate::redact::Secret::new(format!("FAKE-azure-{}", random_hex(16)));
+        let (provided, calls) = (token.clone(), Arc::new(AtomicUsize::new(0)));
+        let counted = calls.clone();
+        s.set_forge_git_token(Arc::new(move |remote| {
+            assert_eq!(remote.account.as_deref(), Some("chosen-account"));
+            counted.fetch_add(1, Ordering::SeqCst);
+            let token = provided.clone();
+            Box::pin(async move { Ok(Some(token)) })
+        }));
+        let url = "https://dev.azure.com/orbital/Space/_git/Orbit";
+        for interactive in [true, false] {
+            let op = ops.begin(OpKind::Fetch, Some(1), interactive);
+            let mut remote = op_remote("origin", url, true);
+            remote.account = Some("chosen-account".into());
+            op.set_remotes(vec![remote]);
+            let answer = s.credential(op.id, url).await.unwrap().unwrap();
+            assert!(answer == format!("username=gitnex\npassword={}\n", token.expose()));
+            assert!(!op.auth_denied());
+            // LFS authentication stays below this repository's URL, not another repository.
+            assert!(
+                s.credential(op.id, &format!("{url}/info/lfs"))
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            let before = calls.load(Ordering::SeqCst);
+            for other in [
+                "https://dev.azure.com/lunar/Space/_git/Orbit",
+                "https://dev.azure.com/orbital/Space/_git/Other",
+                "https://dev.azure.com/orbital/Space/_git/OrbitElse",
+                "https://dev.azure.com/orbital/Space/_git/Orbit/../Other",
+                "https://dev.azure.com/orbital/Space/_git/Orbit/%2e%2e/Other",
+                "https://dev.azure.com:8443/orbital/Space/_git/Orbit",
+                "http://dev.azure.com/orbital/Space/_git/Orbit",
+            ] {
+                assert!(
+                    s.credential(op.id, other).await.unwrap().is_none(),
+                    "{other}"
+                );
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), before);
+            op.cancel.cancel();
+            assert!(s.credential(op.id, url).await.unwrap().is_none());
+            let id = op.id;
+            drop(op);
+            assert!(s.credential(id, url).await.unwrap().is_none());
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "automatic credentials never prompt the UI"
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_requests_also_require_the_session_token() {
+        let (_dir, s, ops, _bus) = server().await;
+        let op = ops.begin(OpKind::Fetch, None, true);
+        let url = "https://dev.azure.com/orbital/Space/_git/Orbit";
+        op.set_remotes(vec![op_remote("origin", url, true)]);
+        s.set_forge_git_token(Arc::new(|_| {
+            Box::pin(async { panic!("must not read credentials") })
+        }));
+        let path = s.socket_path().to_path_buf();
+        let request = ClientRequest {
+            token: "wrong-session".into(),
+            op: op.id,
+            prompt: String::new(),
+            credential_url: Some(url.into()),
+        };
+        let exit =
+            tokio::task::spawn_blocking(move || client_request(&path, request, &mut Vec::new()))
+                .await
+                .unwrap();
+        assert_eq!(exit, 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_credential_lookup_never_returns_the_token() {
+        let (_dir, s, ops, _bus) = server().await;
+        let op = ops.begin(OpKind::Fetch, None, true);
+        let url = "https://dev.azure.com/orbital/Space/_git/Orbit";
+        op.set_remotes(vec![op_remote("origin", url, true)]);
+        s.set_forge_git_token(Arc::new(|_| Box::pin(futures_util::future::pending())));
+        let (server, id) = (s.clone(), op.id);
+        let request = tokio::spawn(async move { server.credential(id, url).await });
+        op.cancel.cancel();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), request)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -409,17 +796,23 @@ mod tests {
     }
 
     fn op_remote(name: &str, url: &str, settable: bool) -> OpRemote {
-        OpRemote { name: name.into(), url: url.into(), settable }
+        OpRemote { name: name.into(), url: url.into(), settable,
+            account: None,
+        }
     }
 
     #[test]
     fn a_prompt_is_tied_to_the_first_https_remote_on_its_host() {
         let remotes = [
             op_remote("mirror", "git@gitlab.example.com:group/project.git", true),
-            op_remote("origin", "https://gitlab.example.com/group/project.git", true),
-            op_remote("upstream", "https://gitlab.example.com/group/upstream.git", true),
-            op_remote("ported", "https://ada@gitlab.example.com:8443/group/project.git", true),
-            op_remote("aliased", "https://code.example.com/group/project.git", false),
+            op_remote("origin", "https://gitlab.example.com/group/project.git", true,
+            ),
+            op_remote("upstream", "https://gitlab.example.com/group/upstream.git", true,
+            ),
+            op_remote("ported", "https://ada@gitlab.example.com:8443/group/project.git", true,
+            ),
+            op_remote("aliased", "https://code.example.com/group/project.git", false,
+            ),
         ];
         let tied = |origin: &str| tied_remote(&remotes, origin).map(|r| r.name.as_str());
         assert_eq!(tied("gitlab.example.com"), Some("origin"), "the first of two on the host; never the SSH one");
@@ -434,7 +827,8 @@ mod tests {
         let (_d, s, ops, bus) = server().await;
         let mut rx = bus.subscribe();
         let op = ops.begin(OpKind::Push, Some(1), true);
-        op.set_remotes(vec![op_remote("origin", "https://gitlab.example.com/group/project.git", true)]);
+        op.set_remotes(vec![op_remote("origin", "https://gitlab.example.com/group/project.git", true,
+        )]);
         let s2 = s.clone();
         let answering = tokio::spawn(async move {
             let AppEvent::AuthWaiting { prompt, ssh, .. } = rx.recv().await.unwrap() else { panic!("expected authWaiting") };
@@ -458,10 +852,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_forges_ssh_url_comes_first() {
         let (_d, s, ops, bus) = server().await;
-        s.set_forge_ssh_url(Arc::new(|url: String| Box::pin(async move { url.contains("group/project").then(|| "ssh://git@gitlab.example.com:2222/group/project.git".to_string()) })));
+        s.set_forge_ssh_url(Arc::new(|url: String| {
+            Box::pin(async move { url.contains("group/project").then(|| "ssh://git@gitlab.example.com:2222/group/project.git".to_string()) })
+        }));
         let mut rx = bus.subscribe();
         let op = ops.begin(OpKind::Fetch, Some(1), true);
-        op.set_remotes(vec![op_remote("origin", "https://gitlab.example.com/group/project.git", true), op_remote("other", "https://gitlab.other.example/x/y", true)]);
+        op.set_remotes(vec![op_remote("origin", "https://gitlab.example.com/group/project.git", true,
+            ), op_remote("other", "https://gitlab.other.example/x/y", true),
+        ]);
         let s2 = s.clone();
         let answering = tokio::spawn(async move {
             let mut offers = Vec::new();
@@ -473,8 +871,10 @@ mod tests {
             }
             offers
         });
-        ask(&s, &s.token, op.id, "Username for 'https://gitlab.example.com': ").await;
-        ask(&s, &s.token, op.id, "Password for 'https://ada@gitlab.other.example': ").await;
+        ask(&s, &s.token, op.id, "Username for 'https://gitlab.example.com': ",
+        ).await;
+        ask(&s, &s.token, op.id, "Password for 'https://ada@gitlab.other.example': ",
+        ).await;
         assert_eq!(answering.await.unwrap(), [Some("ssh://git@gitlab.example.com:2222/group/project.git".into()), Some("git@gitlab.other.example:x/y.git".into())], "the forge's, else derived");
     }
 
@@ -488,7 +888,9 @@ mod tests {
         let name = s.socket_path().file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with(&format!("gitnex-askpass-{}-", std::process::id())) && name.ends_with(".sock"), "{name}");
         let env = s.env_for(Some(7));
-        let get = |k: &str| env.iter().find(|(a, _)| a == k).map(|(_, v)| v.to_string_lossy().into_owned());
+        let get = |k: &str| {
+            env.iter().find(|(a, _)| a == k).map(|(_, v)| v.to_string_lossy().into_owned())
+        };
         assert_eq!(get("GIT_ASKPASS").as_deref(), Some("/bin/false"));
         assert_eq!(get("SSH_ASKPASS").as_deref(), Some("/bin/false"));
         // K96: "force", not "prefer": with "prefer", ssh uses askpass only when DISPLAY (or
@@ -540,7 +942,8 @@ mod tests {
         let (path, token, op_id) = (s.socket_path().to_path_buf(), s.token.clone(), op.id);
         let (code, out) = tokio::task::spawn_blocking(move || {
             let mut out = Vec::new();
-            let code = client(&path, &token, op_id, "Password for 'https://ada@h': ", &mut out);
+            let code = client(&path, &token, op_id, "Password for 'https://ada@h': ", &mut out,
+            );
             (code, out)
         })
         .await

@@ -1,4 +1,4 @@
-import { Cloud } from 'lucide-react';
+import { Cloud, PanelsTopLeft } from 'lucide-react';
 import type { ForgeKind } from '../api/gen/ForgeKind';
 import type { HostKind } from '../api/gen/HostKind';
 import { useAppState } from '../app/state';
@@ -29,6 +29,7 @@ export const BitbucketMark = ({ size = 12, label = 'Bitbucket' }: { size?: numbe
 
 /** A forge's mark by its kind, labelled with its name unless `label` says otherwise. */
 export function ForgeMark({ kind, size, label }: { kind: ForgeKind; size?: number; label?: string }) {
+  if (kind === 'azuredevops') return <PanelsTopLeft size={size ?? 12} aria-label={label ?? 'Azure DevOps'} data-host-kind="azuredevops" />;
   if (kind === 'gitlab') return <GitLabMark size={size} label={label} />;
   if (kind === 'forgejo') return <ForgejoMark size={size} label={label} />;
   if (kind === 'bitbucket') return <BitbucketMark size={size} label={label} />;
@@ -65,6 +66,7 @@ function RemoteMark({ kind: detected, host, remote, size = 12 }: RemoteIconProps
   // The profile's host-type override for this remote's host (Settings > Hosts), else the detected one.
   const kind = useAppState((s) => effectiveKind(host, detected, s.profile.hostOverrides));
   const label = `remote ${remote}`;
+  if (kind === 'azuredevops') return <PanelsTopLeft size={size} aria-label={label} data-host-kind="azuredevops" />;
   if (kind === 'gitlab') return <GitLabMark size={size} label={label} />;
   if (kind === 'github') return <GitHubMark size={size} label={label} />;
   if (kind === 'forgejo') return <ForgejoMark size={size} label={label} />;

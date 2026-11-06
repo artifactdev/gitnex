@@ -42,7 +42,7 @@ async fn maps_a_project_with_its_parent_and_settings_and_rereads_it_with_an_etag
     let f = FakeForge::start().await;
     let p = provider(&f, GITLAB_TOKEN, None);
     let fork = p.project("alice/project").await.unwrap();
-    assert_eq!((fork.value.id, fork.value.fork_of.as_deref(), fork.value.default_branch.as_deref()), (77, Some("group/project"), Some("main")));
+    assert_eq!((fork.value.id.clone(), fork.value.fork_of.as_deref(), fork.value.default_branch.as_deref()), (77.into(), Some("group/project"), Some("main")));
     assert_eq!(fork.value.host, GITLAB_HOST);
     assert!(!fork.not_modified);
     let again = p.project("alice/project").await.unwrap();

@@ -294,6 +294,12 @@ host) also offers that remote's SSH URL, the forge's when an account covers the 
 derived from the HTTPS one. Choosing it cancels the prompt; the operation fails as Cancelled
 with the switch to make, and the UI runs `git remote set-url`, then the same request again. `docs/dev-setup.md` has a walk-through for trying this without real keys.
 
+Matching Azure DevOps HTTPS remotes also use the binary as a temporary, URL-scoped git
+credential helper. It retrieves the selected organization's PAT over the same authenticated
+socket, only for a live operation's registered repository. Background operations can authenticate
+without prompting. The PAT is never put in argv, environment variables or saved git configuration;
+HTTP redirects are disabled for those URLs, and SSH credentials are unchanged.
+
 ## The graph
 
 **Snapshot.** The `graph` request builds a `GraphPayload` (`snapshot.rs`): the refs, a commit walk
@@ -477,6 +483,11 @@ with an Open in browser action. A diff shows the old and new pages side by side.
 
 GitHub, GitLab, Forgejo and Bitbucket Data Center / Server are the providers (`gitnex-forge`),
 all over personal access tokens. Bitbucket Cloud is a different API and is not included.
+Azure DevOps Services (`gitnex-forge/src/azure_devops.rs`) supports PAT-authenticated repository
+discovery and lookup, not PR workflows. Accounts and parsed remotes use organization-scoped
+keys (`dev.azure.com/<organization>`); HTTPS, SSH and legacy Visual Studio URLs map to the same
+project/repository identity. Azure user and repository GUIDs remain strings in `ForgeId`;
+other providers retain their numeric IDs and the existing serialized shape.
 Bitbucket keeps native project-key/repository-slug identities separate from HTTPS clone paths
 (`scm/…`) and web paths (`projects/…/repos/…`, or `users/…/repos/…` for personal repositories).
 Its configured HTTPS installation base preserves custom ports and context paths. Token-restricted
@@ -495,7 +506,8 @@ MRs/PRs and inline review comments (`forge/mrs.rs`, `forge/create.rs`, `forge/st
 drafts and their submit). The UI keeps one review session per tab (`ui/src/forge/review/`), and the
 diff view draws its threads and drafts (`ui/src/diff/review/`).
 
-**HTTP** (`gitnex-forge/src/http.rs`): one client per account with bearer auth, an ETag cache
+**HTTP** (`gitnex-forge/src/http.rs`): one client per account with bearer auth (Azure PATs use
+Basic auth with an empty username), an ETag cache
 (`If-None-Match`, so an unchanged answer is a cheap 304), the forges' poll-interval hints, rate
 limits (once limited, requests fail fast until the reset time), timeouts, and
 `User-Agent: GitNex/<version>`.

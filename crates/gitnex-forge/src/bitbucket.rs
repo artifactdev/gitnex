@@ -68,7 +68,7 @@ fn user(v: &Value) -> Option<ForgeUser> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
     Some(ForgeUser {
-        id: v["id"].as_u64()?,
+        id: v["id"].as_u64()?.into(),
         name: v["displayName"].as_str().unwrap_or(&username).to_owned(),
         username,
         avatar_url: None,
@@ -103,7 +103,7 @@ fn project(host: &str, installation: &str, v: &Value) -> Option<ForgeProject> {
     };
     Some(ForgeProject {
         kind: ForgeKind::Bitbucket,
-        id: v["id"].as_u64()?,
+        id: v["id"].as_u64()?.into(),
         host: host.to_owned(),
         path: format!("{owner}/{slug}"),
         name: v["name"].as_str().unwrap_or(slug).to_owned(),

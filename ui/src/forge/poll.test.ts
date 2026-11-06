@@ -50,6 +50,17 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('pollForge (spec #4 §3.4)', () => {
+  it('recognizes Azure repositories without polling unsupported pull request APIs', async () => {
+    const azure = { ...project, kind: 'azuredevops', host: 'dev.azure.com/orbital', path: 'Space/Orbit', id: '11111111-2222-3333-4444-555555555555' };
+    api.forgeRepoProjects.mockResolvedValue({ target: 'origin', remotes: [{ ...target, account: 'azuredevops', project: azure }] });
+    await pollForge('t', 'timer');
+    expect(forgeOf('t').project).toEqual(azure);
+    expect(forgeOf('t').kind).toBeNull();
+    expect(forgeOf('t').error).toBeNull();
+    expect(api.forgeBranchMrs).not.toHaveBeenCalled();
+    expect(api.forgeMrList).not.toHaveBeenCalled();
+  });
+
   it('a full poll maps the badges, the list and the open MR, and says a pipeline runs', async () => {
     patchForge('t', { openMr: 12 });
     const out = await pollForge('t', 'timer');

@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) fn user(name: &str) -> ForgeUser {
     let login = name.to_lowercase();
-    ForgeUser { id: 1, username: login.clone(), name: name.into(), avatar_url: None, web_url: format!("https://gitlab.example.com/{login}"), email: Some(format!("{login}@example.com")), emails: vec![] }
+    ForgeUser { id: 1.into(), username: login.clone(), name: name.into(), avatar_url: None, web_url: format!("https://gitlab.example.com/{login}"), email: Some(format!("{login}@example.com")), emails: vec![] }
 }
 
 pub(crate) fn project(host: &str, path: &str, fork_of: Option<&str>, updated_at: i64) -> ForgeProject {
     let (owner, name) = path.rsplit_once('/').unwrap_or(("", path));
     ForgeProject {
-        kind: ForgeKind::GitLab, id: updated_at as u64, host: host.into(), path: path.into(), name: name.into(), owner: owner.into(),
+        kind: ForgeKind::GitLab, id: (updated_at as u64).into(), host: host.into(), path: path.into(), name: name.into(), owner: owner.into(),
         web_url: format!("https://{host}/{path}"), default_branch: Some("main".into()), clone_https: format!("https://{host}/{path}.git"),
         clone_ssh: format!("git@{host}:{path}.git"), fork_of: fork_of.map(str::to_string), updated_at: Some(updated_at), archived: false, owner_avatar_url: None,
     }

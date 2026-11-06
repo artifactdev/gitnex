@@ -36,6 +36,11 @@ pub fn default_endpoints(kind: ForgeKind, host: &str) -> HostEndpoints {
             web: format!("https://{host}"),
             avatars: None,
         },
+        ForgeKind::AzureDevOps => HostEndpoints {
+            api: format!("https://{host}"),
+            web: format!("https://{host}"),
+            avatars: None,
+        },
     }
 }
 

@@ -112,7 +112,7 @@ pub mod json {
         // A deleted user is Forgejo's "Ghost", id -1.
         let id = v["id"].as_u64().or_else(|| v["id"].as_i64().map(|_| 0))?;
         let email = text(&v["email"]);
-        Some(ForgeUser { id, name: text(&v["full_name"]).unwrap_or_else(|| login.clone()), avatar_url: text(&v["avatar_url"]), web_url: v["html_url"].as_str().unwrap_or_default().to_string(), emails: email.iter().cloned().collect(), email, username: login })
+        Some(ForgeUser { id: id.into(), name: text(&v["full_name"]).unwrap_or_else(|| login.clone()), avatar_url: text(&v["avatar_url"]), web_url: v["html_url"].as_str().unwrap_or_default().to_string(), emails: email.iter().cloned().collect(), email, username: login })
     }
 
     pub fn users(v: &Value) -> Vec<ForgeUser> {
@@ -122,7 +122,7 @@ pub mod json {
     pub fn project(host: &str, v: &Value) -> Option<ForgeProject> {
         Some(ForgeProject {
             kind: ForgeKind::Forgejo,
-            id: v["id"].as_u64()?,
+            id: v["id"].as_u64()?.into(),
             host: host.to_string(),
             path: v["full_name"].as_str()?.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
@@ -732,7 +732,7 @@ impl ForgejoProvider {
             return None;
         }
         match self.me().await {
-            Ok(u) => Some(u.id),
+            Ok(u) => u.id.numeric().ok(),
             Err(_) => {
                 *self.me_failed.lock().expect("me poisoned") = Some(std::time::Instant::now());
                 None
@@ -848,7 +848,7 @@ impl ForgejoProvider {
         if !ds.iter().any(|d| !d.id.starts_with("review-")) {
             return;
         }
-        let me = self.me().await.ok().map(|u| u.id);
+        let me = self.me().await.ok().and_then(|u| u.id.numeric().ok());
         let mut asked = 0;
         for d in ds.iter_mut().filter(|d| !d.id.starts_with("review-")) {
             for n in d.notes.iter_mut() {
@@ -894,7 +894,7 @@ impl ForgejoProvider {
         self.http.expire_fresh();
         let pr = self.pull_json(project, number).await?;
         let current = json::users(&pr["assignees"]);
-        let ids = change.apply(&current.iter().map(|u| u.id).collect::<Vec<_>>());
+        let ids = change.apply(&current.iter().map(|u| u.id.numeric()).collect::<Result<Vec<_>, _>>()?);
         let mut logins = Vec::with_capacity(ids.len());
         for id in ids {
             match current.iter().find(|u| u.id == id) {
@@ -1288,7 +1288,8 @@ impl ForgeProvider for ForgejoProvider {
             let url = format!("{}/reactions", comment_url(&GitHubProvider::repo_url(&project.path)?, note)?);
             let me = self.me().await?;
             let mut list = self.http.get_pages(&url, 1).await?;
-            let mine = list.iter().position(|r| r["content"].as_str() == Some(name) && r["user"]["id"].as_u64() == Some(me.id));
+            let me_id = me.id.numeric()?;
+            let mine = list.iter().position(|r| r["content"].as_str() == Some(name) && r["user"]["id"].as_u64() == Some(me_id));
             match (on, mine) {
                 (true, None) => {
                     let r = self.http.send_json(Method::Post, &url, &json!({ "content": name })).await?;
@@ -1300,7 +1301,7 @@ impl ForgeProvider for ForgejoProvider {
                 }
                 _ => {}
             }
-            Ok(json::reaction_list(&list, Some(me.id)))
+            Ok(json::reaction_list(&list, Some(me_id)))
         })
     }
 

@@ -1,7 +1,7 @@
 # Privacy
 
 GitNex has no accounts, servers or cloud service of its own. It talks only to your git remotes,
-to the GitHub, GitLab, Forgejo and Bitbucket accounts you add, to Gravatar and GitHub's avatar host, to the
+to the GitHub, GitLab, Forgejo, Bitbucket and Azure DevOps accounts you add, to Gravatar and GitHub's avatar host, to the
 AI endpoint or local tool you configure for commit messages, and to GitHub for its own updates.
 This page lists every network request the app makes, what each one sends, and how to turn it off.
 It also lists what GitNex keeps on your computer and how to delete it.
@@ -28,6 +28,12 @@ core.
 - It never prompts. A fetch that needs credentials is skipped.
 - Sends: what `git fetch` sends to each of the repository's remotes, including any credentials
   that your git configuration, credential helper or ssh agent supplies.
+- Matching Azure DevOps HTTPS remotes also use the organization's saved PAT through a temporary
+  git credential helper. This applies to background fetch and user-started network operations;
+  the repository's selected forge account wins, otherwise its organization's first account.
+  No PAT is sent to another organization, a non-default port or an SSH remote. Redirects are
+  disabled for these authenticated URLs; no credentials are saved in git configuration or by
+  another helper.
 - Turn off: Settings › Fetch and push › **Background fetch interval: Off**. "Prune deleted remote branches
   on fetch" chooses between `--prune` and `--no-prune`.
 
@@ -50,7 +56,7 @@ core.
 - Signature checks run your own `gpg` or `ssh-keygen` through git, with your configuration.
   GitNex doesn't ask them to fetch keys, but a gpg set up to retrieve keys automatically will.
 
-### Forge APIs (GitHub, GitLab, Forgejo and Bitbucket)
+### Forge APIs (GitHub, GitLab, Forgejo, Bitbucket and Azure DevOps)
 
 GitNex only calls a forge API for an account you add in Settings › Accounts. Without one, it
 makes no forge requests (apart from images you choose to load, below).
@@ -62,8 +68,12 @@ makes no forge requests (apart from images you choose to load, below).
   - Bitbucket Data Center / Server: your configured HTTPS installation base, including its
     port and context path, under `/rest/api/1.0` and `/rest/build-status/1.0`. Bitbucket Cloud
     is not contacted by this integration.
+  - Azure DevOps Services: `https://dev.azure.com/<your organization>`, for authenticated
+    identity and accessible Git repositories. No organization enumeration, Azure DevOps Server,
+    Microsoft Entra/OAuth endpoint or separate avatar service is contacted.
 - **Sends:**
   - your token, in the `Authorization` header and only to that account's host;
+    Azure PATs use Basic auth with an empty username, confined to the configured organization;
   - the project paths of your repositories' remotes on that host, and branch names, to find
     their MRs/PRs. With several accounts on a host, a repository's requests go with the account
     Settings › Repository › Forge account picks (the host's first otherwise); "Use SSH instead"
@@ -73,6 +83,11 @@ makes no forge requests (apart from images you choose to load, below).
   - Bitbucket merges open the PR's page in your system browser instead of sending a merge
     request with the token. This sends the PR URL to your browser, not the token; the browser's
     own Bitbucket login is independent of GitNex.
+  - Azure DevOps currently sends repository searches/lookups only, not PR or work-item writes.
+    Searches filter accessible repositories locally by project/repository name. Adding an
+    account validates identity and repository read access; opening a repository resolves its
+    remote. Matching HTTPS git remotes also use the saved PAT, as described above; SSH remotes
+    continue to use your existing SSH credentials.
 - **When:**
   - for the shown tab's repository, when the tab opens and after GitNex writes something to the
     forge;

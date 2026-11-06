@@ -349,7 +349,7 @@ Signing" and the legacy encryption `security import` reads) and `MACOS_CERTIFICA
 macOS job's "Signing keychain" step (`scripts/macos-keychain.sh import`) puts them in a throwaway
 keychain on the runner, unlocked and searched for the build, tries a signature, and sets
 `GITNEX_MACOS_SIGNING_IDENTITY` to the certificate's SHA-1; the job deletes the keychain after
-the build, whatever happens. A run on `artifactdev/gitvolt` without the secrets fails there; a
+the build, whatever happens. A run on `artifactdev/gitnex` without the secrets fails there; a
 fork's run builds ad-hoc. `mac-port.yml`'s package job does the same, minus the requirement.
 
 `just package-macos` signs with `GITNEX_MACOS_SIGNING_IDENTITY` when it's set (an identity in
@@ -382,8 +382,8 @@ openssl req -x509 -newkey rsa:3072 -sha256 -days 7300 -noenc -keyout key.pem -ou
   -addext "extendedKeyUsage=critical,codeSigning"
 openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem \
   -name "GitNex Self-Signed Code Signing" -out gitnex-codesign.p12
-base64 < gitnex-codesign.p12 | gh secret set MACOS_CERTIFICATE_P12 -R artifactdev/gitvolt
-gh secret set MACOS_CERTIFICATE_PASSWORD -R artifactdev/gitvolt   # prompts for it
+base64 < gitnex-codesign.p12 | gh secret set MACOS_CERTIFICATE_P12 -R artifactdev/gitnex
+gh secret set MACOS_CERTIFICATE_PASSWORD -R artifactdev/gitnex   # prompts for it
 ```
 
 Keep the `.p12` and its password in the password manager, delete `key.pem`, and update the SHA-1

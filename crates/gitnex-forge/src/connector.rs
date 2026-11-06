@@ -121,6 +121,9 @@ impl ForgeConnector for Forge {
                 token,
                 self.changes.clone(),
             )),
+            ForgeKind::AzureDevOps => Arc::new(crate::azure_devops::AzureDevOpsProvider::new(
+                host, &endpoints, token, self.changes.clone(),
+            )),
         })
     }
 
@@ -275,7 +278,7 @@ mod tests {
             .unwrap();
         let project = ForgeProject {
             kind: ForgeKind::GitHub,
-            id: 1,
+            id: 1.into(),
             host: "github.com".into(),
             path: "o/r".into(),
             name: "r".into(),
@@ -352,7 +355,7 @@ mod tests {
         let hub = ForgeHub::new(forge, Arc::new(OneToken), Arc::new(move || now_secs * 1000));
         let store = SettingsStore::in_memory();
         let user = ForgeUser {
-            id: 1,
+            id: 1.into(),
             username: "ada".into(),
             name: "Ada".into(),
             avatar_url: None,

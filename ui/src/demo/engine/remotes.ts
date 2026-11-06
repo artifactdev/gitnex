@@ -33,11 +33,38 @@ export function parseRemoteUrl(raw: string): RemoteUrl | null {
   path = path.replace(/^\/+|\/+$/g, '');
   if (path.endsWith('.git')) path = path.slice(0, -4);
   if (!host || !path) return null;
-  return { host: asciiLower(host), path };
+  host = asciiLower(host);
+  if (host === 'dev.azure.com' || host === 'ssh.dev.azure.com' || host.endsWith('.visualstudio.com')) {
+    const parts = path.split('/');
+    let org: string;
+    let project: string;
+    let repo: string;
+    if (host === 'dev.azure.com' && parts.length === 4 && parts[2] === '_git') {
+      [org, project, , repo] = parts;
+    } else if (host === 'dev.azure.com' && parts.length === 3 && parts[1] === '_git') {
+      [org, , repo] = parts;
+      project = repo;
+    } else if ((host === 'ssh.dev.azure.com' || host === 'vs-ssh.visualstudio.com') && parts.length === 4 && parts[0] === 'v3') {
+      [, org, project, repo] = parts;
+    } else if (host.endsWith('.visualstudio.com')) {
+      org = host.slice(0, -'.visualstudio.com'.length);
+      if (parts.length === 4 && parts[0] === 'DefaultCollection' && parts[2] === '_git') [, project, , repo] = parts;
+      else if (parts.length === 3 && parts[1] === '_git') [project, , repo] = parts;
+      else if (parts.length === 2 && parts[0] === '_git') { [, repo] = parts; project = repo; }
+      else return null;
+    } else return null;
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/i.test(org)) return null;
+    try { project = decodeURIComponent(project); repo = decodeURIComponent(repo); }
+    catch { return null; }
+    if ([project, repo].some((s) => !s || s === '.' || s === '..' || /[/\\\u0000-\u001f\u007f]/.test(s))) return null;
+    return { host: `dev.azure.com/${asciiLower(org)}`, path: `${project}/${repo}` };
+  }
+  return { host, path };
 }
 
 export function hostKind(host: string): HostKind {
   const h = asciiLower(host);
+  if (h === 'dev.azure.com' || h.startsWith('dev.azure.com/') || h === 'ssh.dev.azure.com' || h.endsWith('.visualstudio.com')) return 'azuredevops';
   if (h === 'github.com' || h.endsWith('.github.com')) return 'github';
   if (h === 'gitlab.com' || h.split('.').some((label) => label.includes('gitlab'))) return 'gitlab';
   const name = h.split(':')[0];

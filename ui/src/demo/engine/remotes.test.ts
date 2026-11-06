@@ -1,6 +1,21 @@
 import { expect, test } from 'vitest';
 import { hostKind, mismatchedUpstream, parseRemoteUrl, redact, remoteFor, remoteId, trackingRef } from './remotes';
 
+test('Azure HTTPS, SSH and legacy remotes resolve to the same organization and repository', () => {
+  for (const url of [
+    'https://dev.azure.com/Orbital/Space%20Tools/_git/Orbit',
+    'git@ssh.dev.azure.com:v3/orbital/Space%20Tools/Orbit',
+    'https://orbital.visualstudio.com/DefaultCollection/Space%20Tools/_git/Orbit',
+    'git@vs-ssh.visualstudio.com:v3/orbital/Space%20Tools/Orbit',
+  ]) {
+    expect(parseRemoteUrl(url)).toEqual({ host: 'dev.azure.com/orbital', path: 'Space Tools/Orbit' });
+  }
+  expect(parseRemoteUrl('https://dev.azure.com/orbital/_git/Orbit')).toEqual({ host: 'dev.azure.com/orbital', path: 'Orbit/Orbit' });
+  expect(parseRemoteUrl('https://dev.azure.com/orbital/%2e%2e/_git/Orbit')).toBeNull();
+  expect(parseRemoteUrl('https://dev.azure.com/orbital/Space%2fTools/_git/Orbit')).toBeNull();
+  expect(hostKind('dev.azure.com/orbital')).toBe('azuredevops');
+});
+
 test('parseRemoteUrl (remotes::parse_remote_url)', () => {
   const p = (u: string) => { const r = parseRemoteUrl(u); return r && [r.host, r.path]; };
   expect(p('https://gitlab.example.com/Acme/shop.git')).toEqual(['gitlab.example.com', 'Acme/shop']);

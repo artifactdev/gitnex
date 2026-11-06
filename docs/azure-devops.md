@@ -1,0 +1,62 @@
+# Azure DevOps Services
+
+GitNex connects to Azure DevOps Services organizations at `dev.azure.com` using personal
+access tokens (PATs). Azure DevOps Server and Microsoft Entra sign-in are not included.
+
+## Connect and clone
+
+1. In your Azure DevOps organization, open **User settings > Personal access tokens**.
+   Create a token scoped to that organization with **Code (Read)** permission. The token
+   cannot grant repository access your user does not already have.
+2. In GitNex, open **Settings > Accounts > Add account** and select **Azure DevOps**.
+3. Enter your organization URL, for example `https://dev.azure.com/orbital`, not a project
+   URL, clone URL or API endpoint.
+4. Paste the PAT and add the account. It is kept in the existing system keyring/token store,
+   with the normal warning if only file storage is available.
+5. Open **Clone** and search by project or repository name. Choose a repository and a
+   destination folder to clone it through the normal git CLI workflow.
+
+Add each organization separately. Accounts and tokens are isolated by organization; multiple
+users in the same organization can also have separate accounts. An expired, rejected or
+insufficiently scoped PAT produces an error rather than a successful connection.
+
+For matching HTTPS remotes, GitNex also uses the account's PAT for clone, fetch, pull and push,
+including background fetch. Existing repositories use the account selected in **Settings >
+Repository > Forge account**, or the organization's first account otherwise. Push requires
+**Code (Read & write)** permission.
+
+This uses a temporary, repository-URL-scoped credential helper for the running git command.
+The PAT stays in the token store: it is not placed in command arguments, environment variables,
+clone URLs or saved git configuration, or saved by another credential helper. Redirects are
+disabled for these authenticated HTTPS remotes. Other remotes still use your configured
+credentials. SSH remotes use your normal SSH keys or agent, not the PAT.
+
+## Existing repositories
+
+GitNex recognizes current HTTPS and SSH remotes:
+
+- `https://dev.azure.com/orbital/Space%20Tools/_git/Orbit`
+- `git@ssh.dev.azure.com:v3/orbital/Space%20Tools/Orbit`
+
+Legacy `orbital.visualstudio.com` HTTPS remotes (including `DefaultCollection`) and
+`vs-ssh.visualstudio.com:v3/...` SSH remotes resolve to the same organization and repository.
+New clone and browser URLs use `dev.azure.com`; existing git remote URLs are not rewritten.
+The account key is `dev.azure.com/orbital`, including the organization, rather than the shared
+`dev.azure.com` authority. Repository and user GUIDs are preserved, not shortened to numeric IDs.
+
+## Supported workflows and limits
+
+- Search accessible Git repositories across the organization's projects.
+- Clone repositories, recognize existing remotes, and open repository, branch, commit and file
+  pages in the system browser.
+- Disabled repositories are excluded from discovery. TFVC is not a Git repository and is not
+  included.
+- Pull request lists, build status, PR creation, reviews, comments, merges, forks and work-item
+  integration are not included in this first integration. PR controls/polling are not enabled.
+- No organization enumeration or third-party OAuth access is required: you enter the organization.
+- Contract tests use a local fake HTTP server, not a live Azure DevOps organization.
+
+The repository API contract is
+[Azure DevOps REST 7.1](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/repositories/list?view=azure-devops-rest-7.1).
+Removing an account deletes its locally stored token, but does not revoke it in Azure DevOps.
+Revoke unused PATs there too. See [Security](../SECURITY.md) and [Privacy](../PRIVACY.md).

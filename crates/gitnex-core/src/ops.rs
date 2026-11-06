@@ -30,6 +30,7 @@ pub struct OpEntry {
     remotes: Mutex<Vec<OpRemote>>,
     /// The remotes whose credential prompt the user turned into "Use SSH instead".
     ssh_switches: Mutex<Vec<SshOffer>>,
+    secrets: Mutex<Vec<crate::redact::RedactionGuard>>,
 }
 
 /// One remote an op talks to (`remotes::op_remotes`): its URL for the op, and whether that's
@@ -39,9 +40,14 @@ pub struct OpRemote {
     pub name: String,
     pub url: String,
     pub settable: bool,
+    pub account: Option<String>,
 }
 
 impl OpEntry {
+    pub(crate) fn protect_secret(&self, secret: &crate::redact::Secret) {
+        lock(&self.secrets).push(crate::redact::RedactionGuard::new(secret));
+    }
+
     /// Askpass refused a prompt for this (non-interactive) op: its failure means "needs
     /// credentials", not an error to show.
     pub fn deny_auth(&self) {
@@ -111,6 +117,7 @@ impl OpRegistry {
         let entry = Arc::new(OpEntry {
             id, kind, repo, interactive, cancel: CancellationToken::new(), stop_requested: tokio::sync::Notify::new(), auth_denied: AtomicBool::new(false), prompt_cancelled: AtomicBool::new(false),
             remotes: Mutex::default(), ssh_switches: Mutex::default(),
+            secrets: Mutex::default(),
         });
         self.ops().insert(id, entry.clone());
         OpGuard { entry, registry: self.clone() }

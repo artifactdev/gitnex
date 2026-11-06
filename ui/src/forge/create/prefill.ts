@@ -6,6 +6,7 @@ import type { MrTemplate } from '../../api/gen/MrTemplate';
 import type { RemoteBranch } from '../../api/gen/RemoteBranch';
 import type { Stack } from '../../stacks/detect';
 import type { MrDraft } from './draft';
+import { numericForgeId } from '../ids';
 
 /** Where the MR/PR goes from and to. */
 export type Route = Pick<MrDraft, 'sourceRemote' | 'targetRemote' | 'targetBranch'>;
@@ -94,7 +95,7 @@ export function createRequest(d: MrDraft, ctx: CreateContext, sourceBranch: stri
   const gitlab = ctx.project.kind === 'gitlab';
   return {
     source: { project: ctx.sourceProject, branch: sourceBranch }, targetBranch: d.targetBranch, title: d.title.trim(), description: d.description,
-    draft: d.draft, reviewers: d.reviewers.map((u) => u.id), assignees: d.assignees.map((u) => u.id), labels: d.labels,
+    draft: d.draft, reviewers: d.reviewers.map((u) => numericForgeId(u.id)), assignees: d.assignees.map((u) => numericForgeId(u.id)), labels: d.labels,
     squash: gitlab && !squashToggle(ctx.settings).locked ? d.squash : null, deleteSourceBranch: gitlab ? d.deleteSourceBranch : null,
   };
 }
