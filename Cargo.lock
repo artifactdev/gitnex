@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-ai"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "gitnex-core",
  "serde_json",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-app"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "block2",
  "gdk4-x11",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-core"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "base64 0.23.1",
  "block2",
@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-forge"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "base64 0.23.1",
  "gitnex-core",
@@ -2448,7 +2448,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-graph"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2457,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-graph-wasm"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "gitnex-graph",
  "serde_json",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "gitnex-harness"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "axum",
  "base64 0.23.1",
