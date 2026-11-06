@@ -301,11 +301,11 @@ GitNex can download and install its own updates from GitHub Releases
   `--repo GitBoltApp/gitbolt`.
 
 - **macOS code signing.** `GitNex.app` (and its `.dmg`) is signed with GitNex's own
-  self-signed certificate (SHA-1 `A5:88:1F:4C:AA:33:ED:87:6E:1F:79:49:0E:6A:B8:E3:ED:68:C3:9B`),
+  self-signed certificate (SHA-1 `C7:51:CE:94:C4:B3:D5:EA:A9:D2:75:9C:E8:4F:3C:C8:48:26:36:61`),
   not an Apple Developer ID, and isn't notarized, so Gatekeeper still blocks a downloaded copy's
   first launch (README.md). Nothing trusts the certificate, so the signature doesn't prove who
   built the app; what it gives is a designated requirement that stays the same in every release
-  (`identifier "com.gitnex.desktop" and certificate root = H"a5881f4c…"`), so Privacy &
+  (`identifier "com.gitnex.desktop" and certificate root = H"c751ce94…"`), so Privacy &
   Security's folder permissions carry over to updates. Check it with
   `codesign -d -r- /Applications/GitNex.app`. The Keychain still asks after an update: its
   items' partition list names apps without a Team ID by their cdhash (docs/releasing.md, "macOS

@@ -5,6 +5,11 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ## [Unreleased]
 
+### Changed
+
+- **macOS releases are signed with a new certificate.** The first update signed with it asks once
+  more for folder permissions; the ones after it keep them (docs/releasing.md, "macOS signing").
+
 ## [1.5.3] - 2026-11-06
 
 - added support for AzureDevOps with PAT authentication

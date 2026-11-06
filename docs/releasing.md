@@ -308,7 +308,7 @@ macOS recognises each new version as the same app:
 | Subject | CN "GitNex Self-Signed Code Signing", O GitNex |
 | Key | RSA 3072; extended key usage code signing (critical) |
 | Valid until | 2046 |
-| SHA-1 | `A5:88:1F:4C:AA:33:ED:87:6E:1F:79:49:0E:6A:B8:E3:ED:68:C3:9B` |
+| SHA-1 | `C7:51:CE:94:C4:B3:D5:EA:A9:D2:75:9C:E8:4F:3C:C8:48:26:36:61` |
 
 macOS remembers an app's Privacy & Security permissions (folder access such as Downloads) by the
 app's *designated requirement*. For an ad-hoc signature, as up to 1.2.0, that is the build's hash
@@ -316,7 +316,7 @@ app's *designated requirement*. For an ad-hoc signature, as up to 1.2.0, that is
 certificate it is the same in every release:
 
 ```
-identifier "com.gitnex.desktop" and certificate root = H"a5881f4caa33ed876e1f79490e6ab8e3ed68c39b"
+identifier "com.gitnex.desktop" and certificate root = H"c751ce94c4b3d5eaa9d2759ce84f3cc848263661"
 ```
 
 (codesign's default for a certificate outside Apple's: the identifier and the hash of the chain's
@@ -373,9 +373,9 @@ Signing`, `TeamIdentifier=not set`) and the requirement.
 never shows again, and in the maintainer's password manager, the only copy to restore them from.
 Neither belongs in the repository, a log or an issue.
 
-**Rotating it** (only if the key leaks or the certificate nears 2046): every user gets **one more
-round of folder-permission prompts** after the first update signed with the new certificate, as
-with the move from ad-hoc. To make a new one:
+**Rotating it** (if the key leaks or is lost, or the certificate nears 2046): every user gets **one
+more round of folder-permission prompts** after the first update signed with the new certificate, as
+with the move from ad-hoc. Rotated on 2026-11-06, after the first key was lost. To make a new one:
 
 ```sh
 openssl req -x509 -newkey rsa:3072 -sha256 -days 7300 -noenc -keyout key.pem -out cert.pem \
