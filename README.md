@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="crates/gitnex-app/icons/icon.png" alt="GitNex" width="128" height="128">
+  <img src="crates/gitnex-app/icons/source.svg" alt="GitNex" width="128" height="128">
 </p>
 
 <h1 align="center">GitNex</h1>
