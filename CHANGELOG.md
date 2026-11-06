@@ -5,6 +5,8 @@ All notable changes to GitNex (GitVolt before this release, GitBolt before 0.7.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-06
+
 ### Added
 
 - **Bitbucket Data Center / Server integration.** User personal access tokens, custom HTTPS
